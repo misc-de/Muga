@@ -423,20 +423,26 @@ class GalleryWindow(Adw.ApplicationWindow):
     # Rendering
     # ------------------------------------------------------------------
 
-    def refresh(self, scan: bool = False) -> None:
+    def refresh(self, scan: bool = False, scope: str | None = None) -> None:
+        """scope=None scans all local + NC; scope="current" scans only the active category."""
         if scan:
             self._render()
             self.refresh_button.set_sensitive(False)
             nc_folder = self.current_folder if self.category == "nextcloud" else None
-            threading.Thread(target=self._scan_thread, args=(nc_folder,), daemon=True).start()
+            threading.Thread(
+                target=self._scan_thread, args=(nc_folder, scope), daemon=True
+            ).start()
             return
         self.refresh_button.set_sensitive(True)
         self._render()
 
-    def _scan_thread(self, nc_folder: str | None) -> None:
+    def _scan_thread(self, nc_folder: str | None, scope: str | None = None) -> None:
+        only_current = scope == "current"
+        # Only touch NC for full scans or when NC is the active category
+        need_nc = (not only_current) or self.category == "nextcloud"
         try:
             nc_client = None
-            if self.settings.nextcloud_url and self.settings.nextcloud_user:
+            if need_nc and self.settings.nextcloud_url and self.settings.nextcloud_user:
                 pwd = self.settings.load_app_password()
                 if pwd:
                     from .nextcloud import NextcloudClient
@@ -450,9 +456,24 @@ class GalleryWindow(Adw.ApplicationWindow):
                     LOGGER.info("No Nextcloud app password available; skipping scan")
                     GLib.idle_add(self._set_nc_broken, True)
 
-            # Phase 1: local categories only
-            local_cats = [(c, l, p) for c, l, p in self.settings.categories() if c != "nextcloud"]
-            self.scanner.scan(local_cats)
+            # Phase 1: local categories
+            if only_current:
+                if self.category == "nextcloud":
+                    local_cats: list = []
+                else:
+                    local_cats = [
+                        (c, l, p)
+                        for c, l, p in self.settings.categories()
+                        if c == self.category
+                    ]
+            else:
+                local_cats = [
+                    (c, l, p)
+                    for c, l, p in self.settings.categories()
+                    if c != "nextcloud"
+                ]
+            if local_cats:
+                self.scanner.scan(local_cats)
 
             # Phase 2: NC structure scan (no thumbnails)
             if nc_client is not None:
@@ -1094,9 +1115,9 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _trigger_pull_refresh(self) -> None:
         if not self.refresh_button.get_sensitive():
             return
-        LOGGER.info("Pull refresh triggered")
+        LOGGER.info("Pull refresh triggered for category %s", self.category)
         self.gallery_grid.pull_revealer.set_reveal_child(True)
-        self.refresh(scan=True)
+        self.refresh(scan=True, scope="current")
         GLib.timeout_add(1200, lambda: self.gallery_grid.pull_revealer.set_reveal_child(False) or False)
 
     def _update_tile_size(self, scroller_width: int) -> None:
@@ -1144,6 +1165,12 @@ class GalleryWindow(Adw.ApplicationWindow):
                 background: rgba(0,0,0,0.45);
                 color: white;
                 font-weight: 700;
+            }
+            .folder-label {
+                background: rgba(0,0,0,0.55);
+                color: white;
+                padding: 4px 8px;
+                font-weight: 600;
             }
             .view-switcher {
                 border-top: 1px solid @borders;

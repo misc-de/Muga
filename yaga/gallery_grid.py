@@ -289,10 +289,11 @@ class GalleryGrid(Gtk.Overlay):
         badge.set_valign(Gtk.Align.CENTER)
         badge.set_visible(False)
 
-        folder_label = Gtk.Label(ellipsize=Pango.EllipsizeMode.END, max_width_chars=20)
-        folder_label.add_css_class("osd")
+        folder_label = Gtk.Label(ellipsize=Pango.EllipsizeMode.END)
+        folder_label.add_css_class("folder-label")
         folder_label.set_halign(Gtk.Align.FILL)
         folder_label.set_valign(Gtk.Align.END)
+        folder_label.set_hexpand(True)
         folder_label.set_visible(False)
 
         check = Gtk.Image.new_from_icon_name("checkbox-symbolic")
@@ -354,16 +355,39 @@ class GalleryGrid(Gtk.Overlay):
 
         stack.set_visible_child_name("tiles")
         icon_theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+        # Keep exactly self._cols slots visible so every tile stays at 1/cols width;
+        # empty trailing slots are bound as invisible placeholders (not hidden).
         for i, btn in enumerate(stack._tile_buttons):
-            if i < len(gallery_row.tiles):
-                btn.set_visible(True)
-                self._bind_tile(btn, gallery_row.tiles[i], icon_theme)
-            else:
+            if i >= self._cols:
                 btn.set_visible(False)
                 btn._current_item = None
+                continue
+            btn.set_visible(True)
+            if i < len(gallery_row.tiles):
+                self._bind_tile(btn, gallery_row.tiles[i], icon_theme)
+            else:
+                self._bind_empty_tile(btn)
+
+    def _bind_empty_tile(self, button: Gtk.Button) -> None:
+        """Bind a placeholder cell that holds its 1/cols slot but renders nothing."""
+        button._current_item = None
+        button._single_pic.set_paintable(None)
+        button._single_pic.set_visible(False)
+        button._pic_grid.set_visible(False)
+        for picture in button._preview_pics:
+            picture.set_paintable(None)
+            picture.set_visible(False)
+        button._badge.set_visible(False)
+        button._folder_label.set_visible(False)
+        button._check.set_visible(False)
+        button.set_sensitive(False)
+        button.set_can_target(False)
+        button.add_css_class("empty")
 
     def _bind_tile(self, button: Gtk.Button, row: MediaRow, icon_theme) -> None:
         button._current_item = row
+        button.set_can_target(True)
+        button.remove_css_class("empty")
         single_pic: Gtk.Picture = button._single_pic
         preview_pics: list[Gtk.Picture] = button._preview_pics
         pic_grid: Gtk.Widget = button._pic_grid
