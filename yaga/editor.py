@@ -607,6 +607,8 @@ class EditorView(Gtk.Box):
         self._nav_box.add_css_class("toolbar")
 
         self._nav_btns: dict[str, Gtk.ToggleButton] = {}
+        # Labels we hide on landscape (icon-only, ~50px strip).
+        self._nav_labels: list[Gtk.Label] = []
         for key, icon, label in [
             ("filter",   "image-filter-symbolic",       "Filter"),
             ("adjust",   "display-brightness-symbolic", "Anpassen"),
@@ -619,13 +621,17 @@ class EditorView(Gtk.Box):
             inner.set_margin_bottom(6)
             inner.set_margin_start(6)
             inner.set_margin_end(6)
-            inner.append(Gtk.Image.new_from_icon_name(icon))
+            img = Gtk.Image.new_from_icon_name(icon)
+            img.set_pixel_size(24)
+            inner.append(img)
             lbl = Gtk.Label(label=label)
             lbl.add_css_class("caption")
             inner.append(lbl)
+            self._nav_labels.append(lbl)
             btn = Gtk.ToggleButton()
             btn.add_css_class("flat")
             btn.set_child(inner)
+            btn.set_tooltip_text(label)
             hid = btn.connect("toggled", self._on_nav_toggled, key)
             self._nav_handler_ids[key] = hid
             self._nav_box.append(btn)
@@ -670,17 +676,25 @@ class EditorView(Gtk.Box):
             for btn in self._nav_btns.values():
                 btn.set_hexpand(False)
                 btn.set_vexpand(False)
+            # Icon-only narrow strip (~50 px). Tooltips already carry the label.
+            for lbl in self._nav_labels:
+                lbl.set_visible(False)
             self._panel_revealer.set_transition_type(
                 Gtk.RevealerTransitionType.SLIDE_RIGHT
             )
-            # Cap panel width so the image keeps the majority of the space.
-            self._panel_scroller.set_size_request(280, -1)
-            # Submenu rows stack vertically; the inner ScrolledWindow now scrolls
-            # vertically (the outer panel scroller is suppressed by these).
+            # Submenu strip stays around 50 px wide so the image keeps the
+            # majority of the space.
+            self._panel_scroller.set_size_request(50, -1)
+            self._panel_scroller.set_propagate_natural_width(True)
+            # Submenu rows stack vertically; the inner ScrolledWindow scrolls
+            # vertically.
             for scroll, row in self._panel_swap_pairs:
                 row.set_orientation(Gtk.Orientation.VERTICAL)
                 scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
                 scroll.set_vexpand(True)
+            # Sticker category buttons become a vertical sub-menu strip too.
+            if hasattr(self, "_sticker_cat_box"):
+                self._sticker_cat_box.set_orientation(Gtk.Orientation.VERTICAL)
             self.append(self._nav_box)
             self.append(self._panel_revealer)
             self.append(self._image_overlay)
@@ -693,14 +707,19 @@ class EditorView(Gtk.Box):
             for btn in self._nav_btns.values():
                 btn.set_hexpand(True)
                 btn.set_vexpand(False)
+            for lbl in self._nav_labels:
+                lbl.set_visible(True)
             self._panel_revealer.set_transition_type(
                 Gtk.RevealerTransitionType.SLIDE_UP
             )
             self._panel_scroller.set_size_request(-1, -1)
+            self._panel_scroller.set_propagate_natural_width(False)
             for scroll, row in self._panel_swap_pairs:
                 row.set_orientation(Gtk.Orientation.HORIZONTAL)
                 scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
                 scroll.set_vexpand(False)
+            if hasattr(self, "_sticker_cat_box"):
+                self._sticker_cat_box.set_orientation(Gtk.Orientation.HORIZONTAL)
             self.append(self._image_overlay)
             self.append(self._panel_revealer)
             self.append(self._nav_box)
@@ -936,11 +955,12 @@ class EditorView(Gtk.Box):
         self._sticker_sub_revealer.set_child(self._sticker_sub_stack)
         outer.append(self._sticker_sub_revealer)
 
-        # ── Category nav (5 buttons) ──
-        cat_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        cat_box.set_hexpand(True)
-        cat_box.set_margin_top(4)
-        cat_box.set_margin_bottom(4)
+        # ── Category nav (5 sub-menu buttons) ──
+        # Treated as a sub-menu strip; flips to vertical/narrow in landscape.
+        self._sticker_cat_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self._sticker_cat_box.set_hexpand(True)
+        self._sticker_cat_box.set_margin_top(4)
+        self._sticker_cat_box.set_margin_bottom(4)
 
         self._sticker_cat_btns: dict[str, Gtk.ToggleButton] = {}
         self._sticker_cat_hids: dict[str, int] = {}
@@ -949,12 +969,13 @@ class EditorView(Gtk.Box):
             btn = Gtk.ToggleButton(label=label)
             btn.add_css_class("flat")
             btn.set_hexpand(True)
+            btn.set_tooltip_text(label)
             hid = btn.connect("toggled", self._on_sticker_cat_toggled, key)
             self._sticker_cat_hids[key] = hid
-            cat_box.append(btn)
+            self._sticker_cat_box.append(btn)
             self._sticker_cat_btns[key] = btn
 
-        outer.append(cat_box)
+        outer.append(self._sticker_cat_box)
         return outer
 
     def _on_sticker_cat_toggled(self, btn: Gtk.ToggleButton, key: str) -> None:

@@ -235,8 +235,37 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.stack.add_controller(self.click_gesture)
         self._set_view_gestures_enabled(True)
         self.connect("close-request", self._on_close_request)
+        # Track viewer orientation so the date overlay can move out of the
+        # image's way on landscape screens.
+        self._date_landscape: bool | None = None
+        self.add_tick_callback(self._on_date_orientation_tick)
         self.fullscreen()
         self.show_item()
+
+    def _on_date_orientation_tick(self, _widget, _clock) -> bool:
+        w = self.get_width()
+        h = self.get_height()
+        if w > 0 and h > 0:
+            # Hysteresis to avoid flapping near the threshold.
+            if self._date_landscape:
+                landscape = w > h * 1.05
+            else:
+                landscape = w > h * 1.25
+            if landscape != self._date_landscape:
+                self._date_landscape = landscape
+                self._apply_date_alignment(landscape)
+        return True  # GLib.SOURCE_CONTINUE
+
+    def _apply_date_alignment(self, landscape: bool) -> None:
+        if landscape:
+            # Top-right with a 30 px breathing space to the screen edge.
+            self.date_revealer.set_halign(Gtk.Align.END)
+            self.date_revealer.set_margin_end(30)
+            self.date_revealer.set_margin_start(0)
+        else:
+            self.date_revealer.set_halign(Gtk.Align.CENTER)
+            self.date_revealer.set_margin_end(0)
+            self.date_revealer.set_margin_start(0)
 
     def show_item(self) -> None:
         self._set_view_gestures_enabled(True)
@@ -794,6 +823,14 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.save_edit_button.set_visible(True)
         self.undo_edit_button.set_visible(True)
         self.redo_edit_button.set_visible(True)
+        # Move date next to filename in the title bar; the floating pill is
+        # redundant (and would steal screen real-estate from the editor).
+        try:
+            dt = datetime.fromtimestamp(item.mtime)
+            self.set_title(f"{item.name}  ·  {dt.strftime('%-d %B %Y')}")
+        except (OverflowError, OSError, ValueError):
+            self.set_title(item.name)
+        self.date_revealer.set_reveal_child(False)
         child = self.stack.get_first_child()
         while child:
             nxt = child.get_next_sibling()
@@ -827,6 +864,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.save_edit_button.set_visible(False)
         self.undo_edit_button.set_visible(False)
         self.redo_edit_button.set_visible(False)
+        # Title + date overlay are restored by show_item() below.
         self.show_item()
 
     def _save_edit(self, _button: Gtk.Button) -> None:
