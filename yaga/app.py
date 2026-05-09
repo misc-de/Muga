@@ -620,8 +620,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         for folder, count, thumbs in folders:
             self.gallery_grid.append_folder(folder, count, thumbs)
         direct_folder = self.current_folder or "/"
+        # NC items are merged in only at the root view of Pictures (NC has its
+        # own folder layout that doesn't map onto local Pictures subfolders).
+        include_nc = self._should_merge_nc() and self.current_folder in (None, "/")
         self.current_items = self.database.list_media(
-            self.category, sort_mode, direct_folder
+            self.category, sort_mode, direct_folder, include_nc=include_nc,
         )
         for item in self.current_items:
             self.gallery_grid.append_media(item, item.path in self._selected_paths)

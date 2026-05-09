@@ -327,9 +327,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.settings.nextcloud_show_in_pictures = value
         self.parent_window.settings.nextcloud_show_in_pictures = value
         self.parent_window.settings.save()
-        # Re-render the gallery so the merge takes effect right away.
+        # When enabling, kick off a NC scan so its index is fresh; the soft refresh
+        # below would otherwise show nothing if NC was never scanned in this session.
         if self.parent_window.category == "pictures":
-            self.parent_window.refresh(scan=False)
+            self.parent_window.refresh(scan=value)
 
     def _folder_row(self, attr: str, title: str) -> Adw.ActionRow:
         row = Adw.ActionRow(title=self._(title), subtitle=getattr(self.settings, attr))
