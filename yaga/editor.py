@@ -673,6 +673,7 @@ class EditorView(Gtk.Box):
             self._nav_box.set_orientation(Gtk.Orientation.VERTICAL)
             self._nav_box.set_hexpand(False)
             self._nav_box.set_vexpand(True)
+            self._nav_box.set_homogeneous(False)
             for btn in self._nav_btns.values():
                 btn.set_hexpand(False)
                 btn.set_vexpand(False)
@@ -682,16 +683,20 @@ class EditorView(Gtk.Box):
             self._panel_revealer.set_transition_type(
                 Gtk.RevealerTransitionType.SLIDE_RIGHT
             )
+            self._panel_revealer.set_hexpand(False)
+            self._panel_revealer.set_vexpand(True)
             # Submenu strip stays around 50 px wide so the image keeps the
             # majority of the space.
             self._panel_scroller.set_size_request(50, -1)
             self._panel_scroller.set_propagate_natural_width(True)
+            self._panel_scroller.set_propagate_natural_height(False)
             # Submenu rows stack vertically; the inner ScrolledWindow scrolls
             # vertically.
             for scroll, row in self._panel_swap_pairs:
                 row.set_orientation(Gtk.Orientation.VERTICAL)
                 scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
                 scroll.set_vexpand(True)
+                scroll.set_hexpand(False)
             # Sticker category buttons become a vertical sub-menu strip too.
             if hasattr(self, "_sticker_cat_box"):
                 self._sticker_cat_box.set_orientation(Gtk.Orientation.VERTICAL)
@@ -699,11 +704,15 @@ class EditorView(Gtk.Box):
             self.append(self._panel_revealer)
             self.append(self._image_overlay)
         else:
-            # Layout: [ image / panel / nav ] vertically (original)
+            # Layout: [ image / panel / nav ] vertically (original portrait)
             self.set_orientation(Gtk.Orientation.VERTICAL)
             self._nav_box.set_orientation(Gtk.Orientation.HORIZONTAL)
             self._nav_box.set_hexpand(True)
             self._nav_box.set_vexpand(False)
+            # Equal-width buttons across the toolbar — keeps the portrait
+            # nav looking the way the original (pre-landscape-refactor)
+            # implementation did.
+            self._nav_box.set_homogeneous(True)
             for btn in self._nav_btns.values():
                 btn.set_hexpand(True)
                 btn.set_vexpand(False)
@@ -712,12 +721,18 @@ class EditorView(Gtk.Box):
             self._panel_revealer.set_transition_type(
                 Gtk.RevealerTransitionType.SLIDE_UP
             )
+            self._panel_revealer.set_hexpand(True)
+            self._panel_revealer.set_vexpand(False)
+            # Reset every size hint we may have set in landscape, otherwise
+            # the panel keeps its narrow 50 px width once we flip back.
             self._panel_scroller.set_size_request(-1, -1)
             self._panel_scroller.set_propagate_natural_width(False)
+            self._panel_scroller.set_propagate_natural_height(False)
             for scroll, row in self._panel_swap_pairs:
                 row.set_orientation(Gtk.Orientation.HORIZONTAL)
                 scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
                 scroll.set_vexpand(False)
+                scroll.set_hexpand(True)
             if hasattr(self, "_sticker_cat_box"):
                 self._sticker_cat_box.set_orientation(Gtk.Orientation.HORIZONTAL)
             self.append(self._image_overlay)
