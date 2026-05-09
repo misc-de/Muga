@@ -34,12 +34,13 @@ class MediaScanner:
                 continue
             root = Path(root_text).expanduser()
             if not root.exists():
-                # Mark the category as missing AND prune so the gallery doesn't keep
-                # showing stale entries for a folder the user has deleted. (If a user
-                # ever wants to preserve the index across an unmount, they can simply
-                # not refresh while the drive is offline.)
+                # Root is gone (typical case: unmounted USB / SD-card). Preserve
+                # the cached index — the user wants thumbnails to stay visible
+                # until the drive is reconnected. We deliberately do NOT add
+                # this category to scanned_categories so prune_missing leaves
+                # its rows alone. Truly-removed folders can be cleaned up via
+                # the Settings → Folders UI.
                 self.missing_root[category] = str(root)
-                scanned_categories.append(category)
                 continue
             self.missing_root.pop(category, None)
             scanned_categories.append(category)
