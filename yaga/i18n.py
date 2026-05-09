@@ -59,6 +59,8 @@ TRANSLATIONS = {
         "Reset brush strokes": "Reset brush strokes",
         "Brush size": "Brush size",
         "Drag to reorder": "Drag to reorder",
+        "Path of the Photos folder on your Nextcloud server.":
+            "Path of the Photos folder on your Nextcloud server.",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -233,6 +235,8 @@ TRANSLATIONS = {
         "Reset brush strokes": "Pinselstriche zurücksetzen",
         "Brush size": "Pinselgröße",
         "Drag to reorder": "Zum Sortieren ziehen",
+        "Path of the Photos folder on your Nextcloud server.":
+            "Pfad des Foto-Ordners auf deinem Nextcloud-Server.",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",

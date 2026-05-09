@@ -103,9 +103,14 @@ class Settings:
             "videos":      ("Videos",      self.videos_dir),
             "screenshots": ("Screenshots", self.screenshots_dir),
         }
+        if self.nextcloud_enabled and self.nextcloud_url and self.nextcloud_user:
+            cat_map["nextcloud"] = (
+                "Nextcloud", self.nextcloud_photos_path or "Photos",
+            )
         order = list(self.media_folder_order or [])
-        # Append any built-in keys missing from the saved order so they don't
-        # disappear after a settings.json upgrade.
+        # Append any keys missing from the saved order so they don't disappear
+        # after a settings.json upgrade or when Nextcloud is enabled for the
+        # first time.
         for key in cat_map:
             if key not in order:
                 order.append(key)
@@ -120,8 +125,6 @@ class Settings:
             (f"location:{i}", Path(p).name or "Locations", p)
             for i, p in enumerate(self.extra_locations)
         )
-        if self.nextcloud_enabled and self.nextcloud_url and self.nextcloud_user:
-            cats.append(("nextcloud", "Nextcloud", self.nextcloud_photos_path or "Photos"))
         return cats
 
     # ------------------------------------------------------------------

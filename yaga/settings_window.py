@@ -33,11 +33,15 @@ class SettingsWindow(Adw.PreferencesWindow):
         media.add(group)
 
         # Folder specs by category key (the same key used in Settings.categories()).
-        self._media_folder_specs: dict[str, tuple[str, str]] = {
-            "pictures":    ("pictures_dir",    "Overview folder"),
-            "photos":      ("photos_dir",      "Photos folder"),
-            "videos":      ("videos_dir",      "Videos folder"),
-            "screenshots": ("screenshots_dir", "Screenshots folder"),
+        # Built-in folders use a filesystem chooser; "nextcloud" uses an inline
+        # edit dialog because the path is a server-side string, not a local dir.
+        self._media_folder_specs: dict[str, dict] = {
+            "pictures":    {"attr": "pictures_dir",    "title": "Overview folder",    "kind": "local"},
+            "photos":      {"attr": "photos_dir",      "title": "Photos folder",      "kind": "local"},
+            "videos":      {"attr": "videos_dir",      "title": "Videos folder",      "kind": "local"},
+            "screenshots": {"attr": "screenshots_dir", "title": "Screenshots folder", "kind": "local"},
+            "nextcloud":   {"attr": "nextcloud_photos_path",
+                            "title": "Photos folder on Nextcloud", "kind": "nextcloud"},
         }
         self._media_listbox = Gtk.ListBox()
         self._media_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -46,18 +50,6 @@ class SettingsWindow(Adw.PreferencesWindow):
         # whole listbox as one group child so the rounded card style applies.
         group.add(self._media_listbox)
         self._populate_media_listbox()
-
-        # When Nextcloud is active, surface the NC Photos folder here too —
-        # convenience mirror of the same setting on the Nextcloud page.
-        self._media_nc_path_row: Adw.EntryRow | None = None
-        if self.settings.nextcloud_enabled:
-            nc_row = Adw.EntryRow(title=self._("Photos folder on Nextcloud"))
-            nc_row.set_text(self.settings.nextcloud_photos_path or "Photos")
-            nc_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
-            nc_row.set_show_apply_button(True)
-            nc_row.connect("apply", self._media_nc_path_apply)
-            group.add(nc_row)
-            self._media_nc_path_row = nc_row
 
         extra = Adw.PreferencesGroup(title=self._("Optional locations"))
         media.add(extra)
@@ -204,10 +196,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_pass_row.add_suffix(qr_btn)
         self._nc_creds_group.add(self._nc_pass_row)
 
-        self._nc_path_row = Adw.EntryRow(title=self._("Photos folder on Nextcloud"))
-        self._nc_path_row.set_text(self.settings.nextcloud_photos_path or "Photos")
-        self._nc_path_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
-        self._nc_creds_group.add(self._nc_path_row)
+        # NB: the Photos folder path lives on the Media folders page now —
+        # editable inline there, draggable for ordering.
 
         # ── Performance ──
         self._nc_perf_group = Adw.PreferencesGroup(title=self._("Performance"))
@@ -371,7 +361,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         url  = self._nc_url_row.get_text().strip()
         user = self._nc_user_row.get_text().strip()
         pwd  = self._nc_pass_row.get_text()
-        path = self._nc_path_row.get_text().strip() or "Photos"
+        # Read the Photos path from settings (edited via the media-folders page).
+        path = (self.settings.nextcloud_photos_path or "").strip() or "Photos"
 
         if not url or not user or not pwd:
             self._nc_set_status(self._("Please fill in all fields."), ok=False)
@@ -551,14 +542,23 @@ class SettingsWindow(Adw.PreferencesWindow):
         return row
 
     # ── Media folder reorder via drag handles ───────────────────────────────
+    def _visible_media_keys(self) -> set[str]:
+        """Which keys actually render: built-ins always; nextcloud only when
+        the master toggle is on."""
+        keys = {"pictures", "photos", "videos", "screenshots"}
+        if self.settings.nextcloud_enabled:
+            keys.add("nextcloud")
+        return keys
+
     def _media_order(self) -> list[str]:
-        """Return the saved order, padded with any missing built-in keys so a
-        legacy settings.json upgrade doesn't lose folders."""
-        order = list(self.settings.media_folder_order or [])
-        for key in self._media_folder_specs:
+        """Return the saved order, padded with any visible keys so legacy
+        settings.json upgrades don't drop folders."""
+        visible = self._visible_media_keys()
+        order = [k for k in (self.settings.media_folder_order or []) if k in visible]
+        for key in visible:
             if key not in order:
                 order.append(key)
-        return [k for k in order if k in self._media_folder_specs]
+        return order
 
     def _populate_media_listbox(self) -> None:
         # Remove existing children (used by reorder code that rebuilds the list).
@@ -568,10 +568,14 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._media_listbox.remove(child)
             child = nxt
         for key in self._media_order():
-            attr, title = self._media_folder_specs[key]
-            self._media_listbox.append(self._build_media_row(key, attr, title))
+            self._media_listbox.append(self._build_media_row(key))
 
-    def _build_media_row(self, key: str, attr: str, title: str) -> Gtk.ListBoxRow:
+    def _build_media_row(self, key: str) -> Gtk.ListBoxRow:
+        spec = self._media_folder_specs[key]
+        attr = spec["attr"]
+        title = spec["title"]
+        kind = spec["kind"]
+
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
         # Stash the category key on the widget so the drop handler can
@@ -587,14 +591,13 @@ class SettingsWindow(Adw.PreferencesWindow):
         grip = Gtk.Image.new_from_icon_name("list-drag-handle-symbolic")
         grip.add_css_class("dim-label")
         grip.set_tooltip_text(self._("Drag to reorder"))
-        # The cursor changes to indicate that this part of the row initiates a
-        # drag. (`grab` is the standard cursor name.)
         grip.set_cursor(Gdk.Cursor.new_from_name("grab", None))
         box.append(grip)
 
         title_lbl = Gtk.Label(label=self._(title), xalign=0)
         title_lbl.add_css_class("body")
-        path_lbl = Gtk.Label(label=getattr(self.settings, attr), xalign=0)
+        path_value = getattr(self.settings, attr) or ("Photos" if kind == "nextcloud" else "")
+        path_lbl = Gtk.Label(label=path_value, xalign=0)
         path_lbl.add_css_class("caption")
         path_lbl.add_css_class("dim-label")
         path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
@@ -606,11 +609,16 @@ class SettingsWindow(Adw.PreferencesWindow):
         text_box.append(path_lbl)
         box.append(text_box)
 
-        choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
+        if kind == "local":
+            choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
+            choose.set_tooltip_text(self._("Choose folder"))
+            choose.connect("clicked", self._choose_folder_for_key, attr, path_lbl)
+        else:  # nextcloud
+            choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+            choose.set_tooltip_text(self._("Edit"))
+            choose.connect("clicked", self._edit_nc_path, path_lbl)
         choose.add_css_class("flat")
         choose.set_valign(Gtk.Align.CENTER)
-        choose.set_tooltip_text(self._("Choose folder"))
-        choose.connect("clicked", self._choose_folder_for_key, attr, path_lbl)
         box.append(choose)
 
         row.set_child(box)
@@ -711,14 +719,40 @@ class SettingsWindow(Adw.PreferencesWindow):
         setattr(self.settings, attr, row.get_text())
         self.parent_window.apply_settings(self.settings)
 
-    def _media_nc_path_apply(self, row: Adw.EntryRow) -> None:
-        value = row.get_text().strip() or "Photos"
-        self.settings.nextcloud_photos_path = value
-        self.parent_window.settings.nextcloud_photos_path = value
-        self.parent_window.settings.save()
-        # Mirror into the NC-tab entry so both rows agree without a reopen.
-        if getattr(self, "_nc_path_row", None) is not None:
-            self._nc_path_row.set_text(value)
+    def _edit_nc_path(self, _btn: Gtk.Button, path_lbl: Gtk.Label) -> None:
+        """Inline editor for the Nextcloud Photos folder, opened from the
+        media-folders listbox row."""
+        dialog = Adw.AlertDialog(
+            heading=self._("Photos folder on Nextcloud"),
+            body=self._("Path of the Photos folder on your Nextcloud server."),
+        )
+        entry = Gtk.Entry()
+        entry.set_text(self.settings.nextcloud_photos_path or "Photos")
+        entry.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
+        entry.set_activates_default(True)
+        wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        wrapper.set_margin_top(6)
+        wrapper.append(entry)
+        dialog.set_extra_child(wrapper)
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("ok", self._("Save"))
+        dialog.set_default_response("ok")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("ok", Adw.ResponseAppearance.SUGGESTED)
+
+        def _done(_dialog, response):
+            if response != "ok":
+                return
+            value = entry.get_text().strip() or "Photos"
+            self.settings.nextcloud_photos_path = value
+            self.parent_window.settings.nextcloud_photos_path = value
+            self.parent_window.settings.save()
+            path_lbl.set_label(value)
+            self.parent_window._rebuild_categories()
+
+        dialog.connect("response", _done)
+        dialog.present(self)
+        GLib.idle_add(lambda: (entry.grab_focus(), GLib.SOURCE_REMOVE)[1])
 
     def _columns_changed(self, row: Adw.SpinRow, _param) -> None:
         self.settings.grid_columns = int(row.get_value())
