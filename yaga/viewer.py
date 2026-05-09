@@ -257,15 +257,12 @@ class ViewerWindow(Adw.ApplicationWindow):
         return True  # GLib.SOURCE_CONTINUE
 
     def _apply_date_alignment(self, landscape: bool) -> None:
-        if landscape:
-            # Top-right with a 30 px breathing space to the screen edge.
-            self.date_revealer.set_halign(Gtk.Align.END)
-            self.date_revealer.set_margin_end(30)
-            self.date_revealer.set_margin_start(0)
-        else:
-            self.date_revealer.set_halign(Gtk.Align.CENTER)
-            self.date_revealer.set_margin_end(0)
-            self.date_revealer.set_margin_start(0)
+        # Always horizontally centered between the title bar and the image,
+        # regardless of orientation. (Landscape used to be right-aligned,
+        # but the central placement is what the user actually wants.)
+        self.date_revealer.set_halign(Gtk.Align.CENTER)
+        self.date_revealer.set_margin_end(0)
+        self.date_revealer.set_margin_start(0)
 
     def show_item(self) -> None:
         self._set_view_gestures_enabled(True)
@@ -658,14 +655,13 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self._rotate_gesture_total = angle_delta
         deg = math.degrees(angle_delta)
-        # Pure-rotate deadband. The pinch-dominance heuristic has been removed
-        # because it ended up biasing one direction over the other on real
-        # hardware — instead the zoom_committed mutex above acts as the only
-        # gate. The very low zoom threshold (1%) means a deliberate pinch
-        # almost always crosses its commit line before rotation reaches 30°,
-        # which is the same outcome with cleaner symmetry.
+        # Pure-rotate deadband. Set deliberately high so casual two-finger
+        # gestures aren't misinterpreted as rotations — the user has to twist
+        # at least 60° before the rotate mode kicks in. The zoom_committed
+        # mutex above is the actual gate; this threshold mainly handles the
+        # case of a pure twist without any pinch component.
         if not self._rotate_committed:
-            if abs(deg) < 30.0:
+            if abs(deg) < 60.0:
                 return
             self._rotate_committed = True
         self._set_rotate_preview(deg)
@@ -679,8 +675,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         deg = math.degrees(self._rotate_gesture_total)
         self._rotate_gesture_total = 0.0
         self._set_rotate_preview(None)
-        # 30° of cumulative twist commits the nearest 90° step (positive or negative).
-        if not was_committed or abs(deg) < 30:
+        # 60° of cumulative twist commits the nearest 90° step (positive or
+        # negative). Below that the gesture is treated as accidental.
+        if not was_committed or abs(deg) < 60:
             return
         steps = int(round(deg / 90))
         if steps != 0:
