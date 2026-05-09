@@ -61,6 +61,12 @@ TRANSLATIONS = {
         "Drag to reorder": "Drag to reorder",
         "Path of the Photos folder on your Nextcloud server.":
             "Path of the Photos folder on your Nextcloud server.",
+        "Folders": "Folders",
+        "Photos on Nextcloud": "Photos on Nextcloud",
+        "Remove": "Remove",
+        "Remove this folder?": "Remove this folder?",
+        "It will disappear from the gallery navigation. The files on disk are not deleted.":
+            "It will disappear from the gallery navigation. The files on disk are not deleted.",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -237,6 +243,12 @@ TRANSLATIONS = {
         "Drag to reorder": "Zum Sortieren ziehen",
         "Path of the Photos folder on your Nextcloud server.":
             "Pfad des Foto-Ordners auf deinem Nextcloud-Server.",
+        "Folders": "Ordner",
+        "Photos on Nextcloud": "Fotos auf Nextcloud",
+        "Remove": "Entfernen",
+        "Remove this folder?": "Diesen Ordner entfernen?",
+        "It will disappear from the gallery navigation. The files on disk are not deleted.":
+            "Er verschwindet aus der Navigation. Die Dateien auf der Festplatte werden nicht gelöscht.",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",

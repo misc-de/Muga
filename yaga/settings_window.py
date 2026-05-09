@@ -8,7 +8,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gdk, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from .config import Settings
 
@@ -27,42 +27,39 @@ class SettingsWindow(Adw.PreferencesWindow):
         return self.parent_window._(text)
 
     def _build(self) -> None:
-        media = Adw.PreferencesPage(title=self._("Media folders"), icon_name="folder-pictures-symbolic")
+        media = Adw.PreferencesPage(title=self._("Folders"), icon_name="folder-pictures-symbolic")
         self.add(media)
-        group = Adw.PreferencesGroup(title=self._("Media folders"))
+        group = Adw.PreferencesGroup(title=self._("Folders"))
         media.add(group)
 
-        # Folder specs by category key (the same key used in Settings.categories()).
+        # Built-in folder specs (the same key used in Settings.categories()).
         # Built-in folders use a filesystem chooser; "nextcloud" uses an inline
         # edit dialog because the path is a server-side string, not a local dir.
+        # Titles are intentionally without the word "folder" — keeps them
+        # consistent with the category labels used in the gallery nav.
         self._media_folder_specs: dict[str, dict] = {
-            "pictures":    {"attr": "pictures_dir",    "title": "Overview folder",    "kind": "local"},
-            "photos":      {"attr": "photos_dir",      "title": "Photos folder",      "kind": "local"},
-            "videos":      {"attr": "videos_dir",      "title": "Videos folder",      "kind": "local"},
-            "screenshots": {"attr": "screenshots_dir", "title": "Screenshots folder", "kind": "local"},
+            "pictures":    {"attr": "pictures_dir",    "title": "Overview",    "kind": "local"},
+            "photos":      {"attr": "photos_dir",      "title": "Photos",      "kind": "local"},
+            "videos":      {"attr": "videos_dir",      "title": "Videos",      "kind": "local"},
+            "screenshots": {"attr": "screenshots_dir", "title": "Screenshots", "kind": "local"},
             "nextcloud":   {"attr": "nextcloud_photos_path",
-                            "title": "Photos folder on Nextcloud", "kind": "nextcloud"},
+                            "title": "Photos on Nextcloud", "kind": "nextcloud"},
         }
         self._media_listbox = Gtk.ListBox()
         self._media_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
         self._media_listbox.add_css_class("boxed-list")
-        # The PreferencesGroup wraps non-row children automatically; we add the
-        # whole listbox as one group child so the rounded card style applies.
         group.add(self._media_listbox)
         self._populate_media_listbox()
 
-        extra = Adw.PreferencesGroup(title=self._("Optional locations"))
-        media.add(extra)
-        add = Gtk.Button(label=self._("Add location"), icon_name="list-add-symbolic")
-        add.connect("clicked", self._add_location)
-        extra.add(add)
-        for path in self.settings.extra_locations:
-            row = Adw.ActionRow(title=Path(path).name or path, subtitle=path)
-            remove = Gtk.Button.new_from_icon_name("user-trash-symbolic")
-            remove.connect("clicked", self._remove_location, path)
-            row.add_suffix(remove)
-            extra.add(row)
-        self.extra_group = extra
+        # "Add location" button replaces the separate "Optional locations"
+        # group — extras now live in the same listbox as everything else.
+        add_btn = Gtk.Button(
+            label=self._("Add location"), icon_name="list-add-symbolic",
+        )
+        add_btn.set_halign(Gtk.Align.START)
+        add_btn.set_margin_top(8)
+        add_btn.connect("clicked", self._add_location)
+        group.add(add_btn)
 
         app = Adw.PreferencesPage(title=self._("Appearance"), icon_name="preferences-desktop-appearance-symbolic")
         self.add(app)
@@ -542,39 +539,82 @@ class SettingsWindow(Adw.PreferencesWindow):
         return row
 
     # ── Media folder reorder via drag handles ───────────────────────────────
-    def _visible_media_keys(self) -> set[str]:
-        """Which keys actually render: built-ins always; nextcloud only when
-        the master toggle is on."""
-        keys = {"pictures", "photos", "videos", "screenshots"}
+    def _row_spec(self, key: str) -> dict | None:
+        """Resolve a media-folder key into a render spec.
+        Built-ins are gated by their path being non-empty (clearing the path
+        is how the user "deletes" a built-in). Extras are recovered from
+        extra_locations by their integer index."""
+        if key in self._media_folder_specs:
+            base = self._media_folder_specs[key]
+            attr = base["attr"]
+            value = getattr(self.settings, attr) or ""
+            if not value and base["kind"] != "nextcloud":
+                return None
+            if base["kind"] == "nextcloud" and not self.settings.nextcloud_enabled:
+                return None
+            return {
+                "key":   key,
+                "title": base["title"],
+                "path":  value or ("Photos" if base["kind"] == "nextcloud" else ""),
+                "kind":  base["kind"],
+                "attr":  attr,
+                "removable": base["kind"] != "nextcloud",
+            }
+        if key.startswith("location:"):
+            try:
+                idx = int(key.split(":", 1)[1])
+            except ValueError:
+                return None
+            if idx < 0 or idx >= len(self.settings.extra_locations):
+                return None
+            path = self.settings.extra_locations[idx]
+            return {
+                "key":       key,
+                "title":     Path(path).name or path,
+                "path":      path,
+                "kind":      "extra",
+                "attr":      None,
+                "extra_idx": idx,
+                "removable": True,
+            }
+        return None
+
+    def _available_media_keys(self) -> list[str]:
+        keys: list[str] = []
+        for k in ("pictures", "photos", "videos", "screenshots"):
+            if getattr(self.settings, self._media_folder_specs[k]["attr"]):
+                keys.append(k)
         if self.settings.nextcloud_enabled:
-            keys.add("nextcloud")
+            keys.append("nextcloud")
+        keys.extend(f"location:{i}" for i in range(len(self.settings.extra_locations)))
         return keys
 
     def _media_order(self) -> list[str]:
-        """Return the saved order, padded with any visible keys so legacy
-        settings.json upgrades don't drop folders."""
-        visible = self._visible_media_keys()
-        order = [k for k in (self.settings.media_folder_order or []) if k in visible]
-        for key in visible:
-            if key not in order:
-                order.append(key)
+        """Saved order filtered to currently available keys, with any newly
+        appearing keys appended at the end."""
+        available = self._available_media_keys()
+        saved = list(self.settings.media_folder_order or [])
+        order = [k for k in saved if k in available]
+        for k in available:
+            if k not in order:
+                order.append(k)
         return order
 
     def _populate_media_listbox(self) -> None:
-        # Remove existing children (used by reorder code that rebuilds the list).
         child = self._media_listbox.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
             self._media_listbox.remove(child)
             child = nxt
         for key in self._media_order():
-            self._media_listbox.append(self._build_media_row(key))
+            row = self._build_media_row(key)
+            if row is not None:
+                self._media_listbox.append(row)
 
-    def _build_media_row(self, key: str) -> Gtk.ListBoxRow:
-        spec = self._media_folder_specs[key]
-        attr = spec["attr"]
-        title = spec["title"]
-        kind = spec["kind"]
+    def _build_media_row(self, key: str) -> Gtk.ListBoxRow | None:
+        spec = self._row_spec(key)
+        if spec is None:
+            return None
 
         row = Gtk.ListBoxRow()
         row.set_activatable(False)
@@ -594,10 +634,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         grip.set_cursor(Gdk.Cursor.new_from_name("grab", None))
         box.append(grip)
 
-        title_lbl = Gtk.Label(label=self._(title), xalign=0)
+        title_lbl = Gtk.Label(label=self._(spec["title"]), xalign=0)
         title_lbl.add_css_class("body")
-        path_value = getattr(self.settings, attr) or ("Photos" if kind == "nextcloud" else "")
-        path_lbl = Gtk.Label(label=path_value, xalign=0)
+        path_lbl = Gtk.Label(label=spec["path"], xalign=0)
         path_lbl.add_css_class("caption")
         path_lbl.add_css_class("dim-label")
         path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
@@ -609,10 +648,23 @@ class SettingsWindow(Adw.PreferencesWindow):
         text_box.append(path_lbl)
         box.append(text_box)
 
-        if kind == "local":
+        # Trash icon — left of the chooser/edit button. Hidden for Nextcloud,
+        # which is structurally not removable in this UI.
+        if spec["removable"]:
+            trash = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+            trash.set_tooltip_text(self._("Remove"))
+            trash.add_css_class("flat")
+            trash.set_valign(Gtk.Align.CENTER)
+            trash.connect("clicked", self._confirm_remove_media, key)
+            box.append(trash)
+
+        if spec["kind"] in ("local", "extra"):
             choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
             choose.set_tooltip_text(self._("Choose folder"))
-            choose.connect("clicked", self._choose_folder_for_key, attr, path_lbl)
+            if spec["kind"] == "local":
+                choose.connect("clicked", self._choose_folder_for_key, spec["attr"], path_lbl)
+            else:
+                choose.connect("clicked", self._choose_extra_folder, spec["extra_idx"], path_lbl, title_lbl)
         else:  # nextcloud
             choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
             choose.set_tooltip_text(self._("Edit"))
@@ -821,24 +873,147 @@ class SettingsWindow(Adw.PreferencesWindow):
             title=self._("Choose folder"), transient_for=self,
             action=Gtk.FileChooserAction.SELECT_FOLDER,
         )
+        # Start at the user's home directory rather than wherever the chooser
+        # last landed (typically inside Pictures from a previous interaction).
+        try:
+            home = Gio.File.new_for_path(str(Path.home()))
+            chooser.set_current_folder(home)
+        except Exception:
+            pass
         chooser.connect("response", self._add_location_response)
         chooser.show()
 
     def _add_location_response(self, chooser: Gtk.FileChooserNative, response: int) -> None:
-        if response == Gtk.ResponseType.ACCEPT:
-            path = chooser.get_file().get_path()
-            if path and path not in self.settings.extra_locations:
-                self.settings.extra_locations.append(path)
-                self.parent_window.apply_settings(self.settings)
-                self.close()
-                SettingsWindow(self.parent_window).present()
-        chooser.destroy()
+        try:
+            if response != Gtk.ResponseType.ACCEPT:
+                return
+            file = chooser.get_file()
+            if file is None:
+                return
+            path = file.get_path()
+            if not path or path in self.settings.extra_locations:
+                return
+            # Append the new location to extra_locations and to the order list,
+            # so the new entry shows up at the bottom of the listbox.
+            self.settings.extra_locations.append(path)
+            new_idx = len(self.settings.extra_locations) - 1
+            self.parent_window.settings.extra_locations.append(path)
+            order = list(self.settings.media_folder_order or [])
+            order.append(f"location:{new_idx}")
+            self.settings.media_folder_order = order
+            self.parent_window.settings.media_folder_order = order
+            self.parent_window.settings.save()
+            self._populate_media_listbox()
+            self.parent_window._rebuild_categories()
+            self.parent_window.refresh(scan=True)
+        finally:
+            chooser.destroy()
 
-    def _remove_location(self, _button: Gtk.Button, path: str) -> None:
-        self.settings.extra_locations = [item for item in self.settings.extra_locations if item != path]
-        self.parent_window.apply_settings(self.settings)
-        self.close()
-        SettingsWindow(self.parent_window).present()
+    def _confirm_remove_media(self, _btn: Gtk.Button, key: str) -> None:
+        spec = self._row_spec(key)
+        if spec is None or not spec["removable"]:
+            return
+        dialog = Adw.AlertDialog(
+            heading=self._("Remove this folder?"),
+            body=self._("It will disappear from the gallery navigation. The files on disk are not deleted."),
+        )
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("remove", self._("Remove"))
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", lambda _d, r, k=key: self._remove_media_done(r, k))
+        dialog.present(self)
+
+    def _remove_media_done(self, response: str, key: str) -> None:
+        if response != "remove":
+            return
+        spec = self._row_spec(key)
+        if spec is None:
+            return
+        if spec["kind"] == "extra":
+            self._remove_extra_at(spec["extra_idx"])
+        else:
+            # Built-in: clear the path; the categories() filter will then drop it.
+            setattr(self.settings, spec["attr"], "")
+            setattr(self.parent_window.settings, spec["attr"], "")
+            order = [k for k in (self.settings.media_folder_order or []) if k != key]
+            self.settings.media_folder_order = order
+            self.parent_window.settings.media_folder_order = order
+        self.parent_window.settings.save()
+        self._populate_media_listbox()
+        self.parent_window._rebuild_categories()
+        self.parent_window.refresh(scan=True)
+
+    def _remove_extra_at(self, idx: int) -> None:
+        """Drop extra_locations[idx] and renumber every later location:N key
+        in media_folder_order so indices stay aligned with the list."""
+        if idx < 0 or idx >= len(self.settings.extra_locations):
+            return
+        new_extras = list(self.settings.extra_locations)
+        new_extras.pop(idx)
+        self.settings.extra_locations = new_extras
+        self.parent_window.settings.extra_locations = list(new_extras)
+
+        renumbered: list[str] = []
+        for k in (self.settings.media_folder_order or []):
+            if k == f"location:{idx}":
+                continue  # the deleted one
+            if k.startswith("location:"):
+                try:
+                    n = int(k.split(":", 1)[1])
+                except ValueError:
+                    renumbered.append(k)
+                    continue
+                if n > idx:
+                    renumbered.append(f"location:{n - 1}")
+                else:
+                    renumbered.append(k)
+            else:
+                renumbered.append(k)
+        self.settings.media_folder_order = renumbered
+        self.parent_window.settings.media_folder_order = renumbered
+
+    def _choose_extra_folder(
+        self, _btn: Gtk.Button, idx: int,
+        path_lbl: Gtk.Label, title_lbl: Gtk.Label,
+    ) -> None:
+        chooser = Gtk.FileChooserNative(
+            title=self._("Choose folder"), transient_for=self,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        try:
+            home = Gio.File.new_for_path(str(Path.home()))
+            chooser.set_current_folder(home)
+        except Exception:
+            pass
+        chooser.connect(
+            "response", self._extra_folder_chosen, idx, path_lbl, title_lbl,
+        )
+        chooser.show()
+
+    def _extra_folder_chosen(
+        self, chooser: Gtk.FileChooserNative, response: int,
+        idx: int, path_lbl: Gtk.Label, title_lbl: Gtk.Label,
+    ) -> None:
+        try:
+            if response != Gtk.ResponseType.ACCEPT:
+                return
+            file = chooser.get_file()
+            if file is None:
+                return
+            path = file.get_path() or ""
+            if not path or idx < 0 or idx >= len(self.settings.extra_locations):
+                return
+            self.settings.extra_locations[idx] = path
+            self.parent_window.settings.extra_locations[idx] = path
+            self.parent_window.settings.save()
+            path_lbl.set_label(path)
+            title_lbl.set_label(self._(Path(path).name or path))
+            self.parent_window._rebuild_categories()
+            self.parent_window.refresh(scan=True)
+        finally:
+            chooser.destroy()
 
 
 

@@ -97,20 +97,25 @@ class Settings:
         return self.sort_modes.get(category, default)
 
     def categories(self) -> list[tuple[str, str, str]]:
-        cat_map = {
-            "pictures":    ("Overview",    self.pictures_dir),
-            "photos":      ("Photos",      self.photos_dir),
-            "videos":      ("Videos",      self.videos_dir),
-            "screenshots": ("Screenshots", self.screenshots_dir),
-        }
+        cat_map: dict[str, tuple[str, str]] = {}
+        # Built-ins are visible only when their path is non-empty — clearing
+        # the path is how the user "deletes" a built-in folder.
+        if self.pictures_dir:
+            cat_map["pictures"] = ("Overview", self.pictures_dir)
+        if self.photos_dir:
+            cat_map["photos"] = ("Photos", self.photos_dir)
+        if self.videos_dir:
+            cat_map["videos"] = ("Videos", self.videos_dir)
+        if self.screenshots_dir:
+            cat_map["screenshots"] = ("Screenshots", self.screenshots_dir)
         if self.nextcloud_enabled and self.nextcloud_url and self.nextcloud_user:
             cat_map["nextcloud"] = (
                 "Nextcloud", self.nextcloud_photos_path or "Photos",
             )
+        for i, p in enumerate(self.extra_locations):
+            cat_map[f"location:{i}"] = (Path(p).name or "Locations", p)
+
         order = list(self.media_folder_order or [])
-        # Append any keys missing from the saved order so they don't disappear
-        # after a settings.json upgrade or when Nextcloud is enabled for the
-        # first time.
         for key in cat_map:
             if key not in order:
                 order.append(key)
@@ -121,10 +126,6 @@ class Settings:
                 continue
             label, path = spec
             cats.append((key, label, path))
-        cats.extend(
-            (f"location:{i}", Path(p).name or "Locations", p)
-            for i, p in enumerate(self.extra_locations)
-        )
         return cats
 
     # ------------------------------------------------------------------
