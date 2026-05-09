@@ -487,10 +487,19 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self._rotate_gesture_total = angle_delta
         deg = math.degrees(angle_delta)
-        # Deadband: ignore tiny twists so accidental two-finger noise doesn't
-        # wobble the preview while the user is doing a one-finger swipe.
+        # Deadband: until the user has clearly *twisted* (not just pinched
+        # off-center) we stay silent. Off-center pinches typically leak a few
+        # degrees of accidental rotation, so the threshold is generous; a
+        # pinch that meanwhile crosses the zoom deadband locks rotate out.
         if not self._rotate_committed:
-            if abs(deg) < 8.0:
+            if abs(deg) < 18.0:
+                return
+            # If a pinch is also building up, treat that as the dominant intent.
+            try:
+                pinch_pct = abs(self.zoom_gesture.get_scale_delta() - 1.0) * 100
+            except Exception:
+                pinch_pct = 0.0
+            if pinch_pct >= 3.0 and abs(deg) < pinch_pct * 4:
                 return
             self._rotate_committed = True
         self._set_rotate_preview(deg)
@@ -681,12 +690,15 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self._zoom_anchor = (bx, by, (hadj.get_value() + bx) / s, (vadj.get_value() + by) / s)
 
     def _on_zoom_scale_changed(self, _gesture: Gtk.GestureZoom, scale_delta: float) -> None:
-        # Don't fight rotate, and don't react to tiny pinches that are really
-        # just one-finger swipes contaminated with a stray second touch.
+        # Don't fight rotate; otherwise zoom should win as early as possible
+        # because off-center pinches naturally introduce a few degrees of
+        # rotation that should not derail the user's zoom intent.
         if self._rotate_committed:
             return
         if not self._zoom_committed:
-            if 0.95 <= scale_delta <= 1.05:
+            # 3% pinch is enough to commit zoom — almost any deliberate spread
+            # crosses this before rotation reaches the 18° rotate threshold.
+            if 0.97 <= scale_delta <= 1.03:
                 return
             self._zoom_committed = True
         self._set_zoom(self.zoom_start_scale * scale_delta)
