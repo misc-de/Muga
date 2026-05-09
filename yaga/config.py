@@ -149,57 +149,11 @@ class Settings:
             url = "https://" + url
         return url
 
-    # nextcloud_webdav_url() used to live here. It built a davs://user:pwd@host
-    # URL with the app-password embedded — leftover from a discontinued
-    # gio-mount path. With direct WebDAV (NextcloudClient) the password lives
-    # only in the in-memory Basic-Auth header, never in any URL. Removed so a
-    # future caller can't accidentally log it.
-
-    def nextcloud_local_path(self) -> str:
-        """Return the GVFS path for the configured Photos folder, or ''."""
-        if not self.nextcloud_url or not self.nextcloud_user:
-            return ""
-        gvfs = Path(f"/run/user/{os.getuid()}/gvfs")
-        if not gvfs.exists():
-            return ""
-        host = re.sub(r"^https?://", "", self.nextcloud_url.strip()).split("/")[0]
-        for entry in sorted(gvfs.iterdir()):
-            n = entry.name
-            if "dav" not in n:
-                continue
-            if host not in n and self.nextcloud_user not in n:
-                continue
-            sub = entry / "files" / self.nextcloud_user / self.nextcloud_photos_path
-            try:
-                exists = sub.exists()
-            except OSError:
-                # PermissionError from GVFS FUSE means the mount IS there —
-                # os.stat raises EACCES instead of ENOENT for an existing FUSE path
-                exists = True
-            if exists:
-                return str(sub)
-        return ""
-
-    def nextcloud_available_folders(self) -> list[str]:
-        """Return top-level folder names inside the Nextcloud mount (for error feedback)."""
-        if not self.nextcloud_url or not self.nextcloud_user:
-            return []
-        gvfs = Path(f"/run/user/{os.getuid()}/gvfs")
-        if not gvfs.exists():
-            return []
-        host = re.sub(r"^https?://", "", self.nextcloud_url.strip()).split("/")[0]
-        for entry in sorted(gvfs.iterdir()):
-            n = entry.name
-            if "dav" not in n:
-                continue
-            if host not in n and self.nextcloud_user not in n:
-                continue
-            files_root = entry / "files" / self.nextcloud_user
-            try:
-                return sorted(p.name for p in files_root.iterdir() if p.is_dir())
-            except OSError:
-                return []
-        return []
+    # The GVFS-era helpers (nextcloud_webdav_url, nextcloud_local_path,
+    # nextcloud_available_folders) used to live here. They were leftovers
+    # from a discontinued gio-mount path; the direct WebDAV client
+    # (NextcloudClient in nextcloud.py) replaced all of them. Removed so a
+    # future caller can't accidentally bring them back into use.
 
     # ------------------------------------------------------------------
     # App-password keyring helpers (libsecret, falls back to nothing)

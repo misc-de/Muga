@@ -361,8 +361,6 @@ class SettingsWindow(Adw.PreferencesWindow):
         url  = self._nc_url_row.get_text().strip()
         user = self._nc_user_row.get_text().strip()
         pwd  = self._nc_pass_row.get_text()
-        # Read the Photos path from settings (edited via the media-folders page).
-        path = (self.settings.nextcloud_photos_path or "").strip() or "Photos"
 
         if not url or not user or not pwd:
             self._nc_set_status(self._("Please fill in all fields."), ok=False)
@@ -370,6 +368,46 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         url = self.settings._normalize_url(url)
         self._nc_url_row.set_text(url)
+
+        # Cleartext-only connection: _normalize_url defaults to https://, so
+        # http:// here means the user explicitly typed it. Warn + require
+        # confirmation before sending the password in the clear.
+        if url.startswith("http://"):
+            self._nc_warn_cleartext_then_connect(url, user, pwd)
+            return
+
+        self._nc_proceed_connect(url, user, pwd)
+
+    def _nc_warn_cleartext_then_connect(self, url: str, user: str, pwd: str) -> None:
+        dialog = Adw.AlertDialog(
+            heading=self._("Unencrypted connection"),
+            body=self._(
+                "The server URL starts with http:// — your password and "
+                "photos will be transmitted unencrypted. Anyone on the same "
+                "network can read them. Use https:// unless you have a "
+                "specific reason not to."
+            ),
+        )
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("connect_anyway", self._("Connect anyway"))
+        dialog.set_response_appearance(
+            "connect_anyway", Adw.ResponseAppearance.DESTRUCTIVE,
+        )
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+
+        def on_response(_d, response: str) -> None:
+            if response == "connect_anyway":
+                self._nc_proceed_connect(url, user, pwd)
+            else:
+                self._nc_set_status(self._("Cancelled"), ok=False)
+
+        dialog.connect("response", on_response)
+        dialog.present(self)
+
+    def _nc_proceed_connect(self, url: str, user: str, pwd: str) -> None:
+        # Read the Photos path from settings (edited via the media-folders page).
+        path = (self.settings.nextcloud_photos_path or "").strip() or "Photos"
 
         account_changed = (url != self.settings.nextcloud_url
                            or user != self.settings.nextcloud_user)
