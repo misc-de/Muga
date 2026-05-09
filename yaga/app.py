@@ -310,7 +310,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.settings_button.connect("clicked", self._open_settings)
         self.header.pack_start(self.settings_button)
 
-        self.sort_button = self._build_sort_controls()
+        self.sort_button = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
+        self.sort_button.set_tooltip_text(self._("Sort"))
+        popover = Gtk.Popover()
+        popover.set_child(self._build_sort_controls())
+        self.sort_button.set_popover(popover)
         self.header.pack_end(self.sort_button)
 
         # ── Selection-mode header widgets (hidden until long-press activates) ──
@@ -408,8 +412,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sort_dir_btn.add_css_class("flat")
         self._sort_dir_btn.connect("clicked", self._on_sort_direction_clicked)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         box.set_valign(Gtk.Align.CENTER)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(8)
+        box.set_margin_end(8)
         box.append(self._sort_dropdown)
         box.append(self._sort_dir_btn)
 
@@ -440,12 +448,21 @@ class GalleryWindow(Adw.ApplicationWindow):
         finally:
             self._sort_updating = False
         # Icon shows current direction; tooltip explains what a click would do.
-        if desc:
-            self._sort_dir_btn.set_icon_name("view-sort-descending-symbolic")
-            self._sort_dir_btn.set_tooltip_text(self._("Descending"))
-        else:
-            self._sort_dir_btn.set_icon_name("view-sort-ascending-symbolic")
-            self._sort_dir_btn.set_tooltip_text(self._("Ascending"))
+        icon_name = (
+            "view-sort-descending-symbolic" if desc
+            else "view-sort-ascending-symbolic"
+        )
+        self._sort_dir_btn.set_icon_name(icon_name)
+        self._sort_dir_btn.set_tooltip_text(
+            self._("Descending") if desc else self._("Ascending")
+        )
+        # Mirror the direction icon onto the header MenuButton so the user can
+        # see the current sort direction at a glance without opening the popover.
+        if hasattr(self, "sort_button") and self.sort_button is not None:
+            try:
+                self.sort_button.set_icon_name(icon_name)
+            except Exception:
+                pass
 
     def _on_sort_dropdown_changed(self, dropdown: Gtk.DropDown, _param) -> None:
         if self._sort_updating:
