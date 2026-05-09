@@ -111,6 +111,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         # before that, the credentials fields stay hidden so the page just shows
         # the Setup button.
         self._nc_manual_setup_unlocked = False
+        # Runtime connection state — independent of the persistent
+        # nextcloud_enabled toggle. The Connect/Disconnect buttons toggle this
+        # flag without touching the user's master preference.
+        self._nc_runtime_connected = bool(self.settings.nextcloud_enabled)
 
         # ── Top: Active toggle + Setup button (when not yet configured) ──
         self._nc_top_group = Adw.PreferencesGroup()
@@ -268,7 +272,22 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.settings.save()
         self.parent_window.settings.nextcloud_enabled = active
         self.parent_window.settings.save()
+        # Runtime mirrors the toggle. When deactivating, also drop the shared
+        # client so no scripted call can sneak through with stale credentials.
+        self._nc_runtime_connected = active
+        if not active:
+            old_client = self.parent_window._nc_thumb_shared_client
+            self.parent_window._nc_thumb_shared_client = None
+            if old_client is not None:
+                try:
+                    old_client.close()
+                except Exception:
+                    pass
         self._nc_refresh_status()
+        # Add or remove the Nextcloud entry from the gallery's category nav.
+        self.parent_window._rebuild_categories()
+        # Force a re-render so the merged-Pictures view picks up the change too.
+        self.parent_window.refresh(scan=False)
 
     @staticmethod
     def _make_icon_label(icon_name: str, label: str) -> Gtk.Box:
@@ -278,7 +297,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         return box
 
     def _nc_update_buttons(self) -> None:
-        connected = self.settings.nextcloud_enabled
+        # Buttons reflect *runtime* connection state so a manual disconnect
+        # immediately surfaces a green "Connect" button without touching the
+        # persistent "Nextcloud aktiv" toggle.
+        connected = self._nc_runtime_connected
         self._nc_connect_btn.set_visible(not connected)
         self._nc_disconnect_btn.set_visible(connected)
 
@@ -303,20 +325,19 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_status_row.set_title(f"<span color='{color}' weight='600'>{safe}</span>")
 
     def _nc_refresh_status(self, sync_toggle: bool = True) -> None:
-        """Sync status row + buttons with the current nextcloud_enabled state.
-        The QR-code tip is intentionally suppressed here — it only shows up in
-        the initial setup dialog. The 'Nextcloud aktiv' toggle is only synced
-        when sync_toggle=True (e.g. on connect, but NOT on a manual disconnect)."""
-        connected = self.settings.nextcloud_enabled
+        """Sync status row + buttons. The QR-code tip is intentionally
+        suppressed here — it only shows up in the initial setup dialog.
+        The 'Nextcloud aktiv' toggle is only synced when sync_toggle=True
+        (e.g. on connect, but NOT on a manual disconnect)."""
         self._nc_update_buttons()
         if sync_toggle and hasattr(self, "_nc_active_row") \
-                and self._nc_active_row.get_active() != connected:
+                and self._nc_active_row.get_active() != self.settings.nextcloud_enabled:
             self._nc_active_row.handler_block(self._nc_active_handler)
-            self._nc_active_row.set_active(connected)
+            self._nc_active_row.set_active(self.settings.nextcloud_enabled)
             self._nc_active_row.handler_unblock(self._nc_active_handler)
         # Group description is always empty — the QR tip lives in the setup dialog.
         self._nc_creds_group.set_description("")
-        if connected:
+        if self._nc_runtime_connected:
             self._nc_set_status(self._("Connected"), ok=True)
         else:
             self._nc_set_status(self._("Disconnected"), ok=False)
@@ -365,6 +386,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         if ok:
             self.settings.nextcloud_enabled = True
             self.settings.save()
+            self._nc_runtime_connected = True
             # Setup button is now obsolete; full UI may also have been hidden if
             # this was the very first connect.
             self._nc_manual_setup_unlocked = True
@@ -372,12 +394,17 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._nc_refresh_status()
             self.parent_window.apply_settings(self.settings)
         else:
-            self._nc_set_status(f"{self._('Connection failed')}: {error}" if error else self._("Connection failed"), ok=False)
+            self._nc_runtime_connected = False
+            self._nc_update_buttons()
+            self._nc_set_status(
+                f"{self._('Connection failed')}: {error}" if error else self._("Connection failed"),
+                ok=False,
+            )
 
     def _nc_disconnect(self, _btn: Gtk.Button) -> None:
         # "Disconnect" is a soft action: it drops the runtime NC client so the
-        # next request rebuilds the connection. It deliberately does NOT touch
-        # the user's "Nextcloud aktiv" preference (toggle stays where it was).
+        # next user-initiated reconnect starts fresh. It deliberately does NOT
+        # touch the persistent "Nextcloud aktiv" preference (toggle stays).
         old_client = self.parent_window._nc_thumb_shared_client
         self.parent_window._nc_thumb_shared_client = None
         if old_client is not None:
@@ -385,6 +412,8 @@ class SettingsWindow(Adw.PreferencesWindow):
                 old_client.close()
             except Exception:
                 pass
+        self._nc_runtime_connected = False
+        self._nc_update_buttons()
         self._nc_set_status(self._("Disconnected"), ok=False)
 
     def _nc_scan_qr(self, _btn: Gtk.Button) -> None:

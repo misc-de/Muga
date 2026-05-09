@@ -391,6 +391,9 @@ class ViewerWindow(Adw.ApplicationWindow):
                 old_client.close()
             except Exception:
                 pass
+        # The gallery's category nav was built without the Nextcloud entry —
+        # add it back now that NC is active again.
+        self.parent_window._rebuild_categories()
         # Re-render the current item — it'll go through the active NC path now.
         self.show_item()
 

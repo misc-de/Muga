@@ -480,8 +480,10 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _scan_thread(self, nc_folder: str | None, scope: str | None = None) -> None:
         only_current = scope == "current"
         # Touch NC for full scans, when NC is the active category, or when the
-        # current Pictures view is configured to fold in Nextcloud entries.
-        need_nc = (
+        # current Pictures view is configured to fold in Nextcloud entries —
+        # but ONLY if the user has Nextcloud actively enabled. We never bring
+        # the connection back up automatically; that requires explicit consent.
+        need_nc = self.settings.nextcloud_enabled and (
             (not only_current)
             or self.category == "nextcloud"
             or self._should_merge_nc()
@@ -1025,7 +1027,13 @@ class GalleryWindow(Adw.ApplicationWindow):
     # ── On-demand Nextcloud thumbnail loader ──────────────────────────
     def request_nc_thumbnail(self, item_path: str) -> None:
         """Queue a NC thumbnail fetch for *item_path*. Thread-safe; idempotent
-        per path. Spawns workers up to the configured pool size on demand."""
+        per path. Spawns workers up to the configured pool size on demand.
+
+        Bails out silently when the user has Nextcloud disabled — we never
+        re-establish the connection on our own; that requires explicit consent
+        (Settings toggle or the viewer's "Einmalig/Dauerhaft" prompt)."""
+        if not self.settings.nextcloud_enabled:
+            return
         with self._nc_thumb_lock:
             if item_path in self._nc_thumb_pending:
                 return
