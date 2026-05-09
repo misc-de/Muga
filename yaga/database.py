@@ -62,8 +62,15 @@ class Database:
     def __init__(self, path: Path = DB_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        self._db_path = path
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        # WAL lets the scanner thread write while the main thread reads without
+        # SQLite-level blocking; synchronous=NORMAL is the recommended pairing
+        # (durable on power loss, far cheaper fsyncs).
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA temp_store=MEMORY")
         with self.lock:
             self.conn.executescript(SCHEMA_V1)
             self._migrate()
@@ -123,6 +130,37 @@ class Database:
                     seen_at=excluded.seen_at
                 """,
                 (path, category, media_type, folder, name, mtime, size, thumb_path, time.time()),
+            )
+
+    def upsert_remote_media_bulk(self, rows: list[dict]) -> None:
+        """Batched variant of upsert_remote_media — takes the lock once for the
+        whole batch so the main thread can interleave reads between batches
+        instead of fighting per-row lock acquisitions."""
+        if not rows:
+            return
+        now = time.time()
+        payload = [
+            (
+                r["path"], r["category"], r["media_type"], r["folder"],
+                r["name"], r["mtime"], r["size"], r.get("thumb_path"), now,
+            )
+            for r in rows
+        ]
+        with self.lock:
+            self.conn.executemany(
+                """
+                INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(path, category) DO UPDATE SET
+                    media_type=excluded.media_type,
+                    folder=excluded.folder,
+                    name=excluded.name,
+                    mtime=excluded.mtime,
+                    size=excluded.size,
+                    thumb_path=COALESCE(excluded.thumb_path, media.thumb_path),
+                    seen_at=excluded.seen_at
+                """,
+                payload,
             )
 
     def prune_missing(self, seen_since: float, categories: list[str]) -> int:

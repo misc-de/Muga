@@ -148,27 +148,36 @@ class MediaScanner:
         self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"
         upserted = 0
-        for i, info in enumerate(files):
+        # Batched upserts: holding the DB lock once per batch (instead of per
+        # row) lets the main thread interleave its render/scroll reads, which
+        # is the difference between visible UI stutter and a smooth sync.
+        BATCH_SIZE = 100
+        batch: list[dict] = []
+        for info in files:
             dav = info["dav_path"]
             media_type = media_type_for(Path(info["name"]))
             if not media_type:
                 continue
             folder = self._nc_folder(dav, dav_root, photos_path)
-            self.database.upsert_remote_media(
-                path=nc_path(dav),
-                category="nextcloud",
-                media_type=media_type,
-                folder=folder,
-                name=info["name"],
-                mtime=info["mtime"],
-                size=info["size"],
-                thumb_path=None,
-            )
+            batch.append({
+                "path": nc_path(dav),
+                "category": "nextcloud",
+                "media_type": media_type,
+                "folder": folder,
+                "name": info["name"],
+                "mtime": info["mtime"],
+                "size": info["size"],
+                "thumb_path": None,
+            })
             upserted += 1
-            # Yield occasionally so the main loop can grab the DB lock for queries
-            # and stay responsive while a large structure scan is in progress.
-            if i and i % 200 == 0:
-                time.sleep(0)
+            if len(batch) >= BATCH_SIZE:
+                self.database.upsert_remote_media_bulk(batch)
+                batch = []
+                # Real preemption window — gives the main loop ~10ms to satisfy
+                # any pending DB reads before we grab the lock again.
+                time.sleep(0.01)
+        if batch:
+            self.database.upsert_remote_media_bulk(batch)
         removed = self.database.prune_missing(started, ["nextcloud"])
         self.database.commit()
         LOGGER.info(
