@@ -360,6 +360,10 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.search_bar.set_show_close_button(False)
         self.search_bar.set_search_mode(False)
         self.search_bar.connect_entry(self.search_entry)
+        # Closing the search bar (toggle off, ESC) wipes the entry so that
+        # reopening doesn't silently reapply an old filter, and so the
+        # gallery snaps back to its normal view.
+        self.search_bar.connect("notify::search-mode-enabled", self._on_search_mode_toggled)
         self.toolbar.add_top_bar(self.search_bar)
         # Toggle button drives the search bar visibility.
         self.search_button.bind_property(
@@ -817,9 +821,29 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _on_search_changed(self, entry: Gtk.SearchEntry) -> None:
         new = entry.get_text().strip()
         if new == self._search_query:
+            # Nothing changed but the user might have hit ESC / cleared via
+            # the entry's clear icon — close the search bar in that case.
+            if not new and self.search_bar.get_search_mode():
+                self.search_bar.set_search_mode(False)
             return
         self._search_query = new
         self._render()
+        # Empty query → close the search bar so the gallery returns to the
+        # normal view without any leftover chrome.
+        if not new and self.search_bar.get_search_mode():
+            self.search_bar.set_search_mode(False)
+
+    def _on_search_mode_toggled(self, search_bar: Gtk.SearchBar, _param) -> None:
+        if search_bar.get_search_mode():
+            return
+        # Search bar just closed: drop the query so a category switch later
+        # doesn't re-run a stale filter, and clear the entry text.
+        had_query = bool(self._search_query)
+        self._search_query = ""
+        if self.search_entry.get_text():
+            self.search_entry.set_text("")
+        if had_query:
+            self._render()
 
     def _render_flat(self, sort_mode: str) -> None:
         include_nc = self._should_merge_nc()
