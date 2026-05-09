@@ -415,10 +415,14 @@ class ViewerWindow(Adw.ApplicationWindow):
         # Stop slideshow before closing
         if self._slideshow_active:
             self._stop_slideshow()
-        
+
         if self._rotation != 0:
             self._check_rotation_before_action(self.destroy)
             return True
+        if self.props.fullscreened:
+            self.unfullscreen()
+        parent = self.parent_window
+        GLib.idle_add(lambda: (parent.present(), GLib.SOURCE_REMOVE)[1])
         return False
 
     def _check_rotation_before_action(self, action) -> None:
