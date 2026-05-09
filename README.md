@@ -6,6 +6,12 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 
 ---
 
+## What is Yaga?
+
+Yaga is a gallery app that feels at home on a modern GNOME desktop. It scans your media folders, keeps everything snappy with a thumbnail cache and a SQLite index, and stays out of your way.
+
+---
+
 ## Screenshots
 <img width="270" alt="Screenshot from 2026-05-09 17:26:52" src="https://github.com/user-attachments/assets/0fc0b6bc-4d4f-43f4-816c-42ae1efdb2da" />
 <img width="270" alt="Screenshot from 2026-05-09 17:46:18" src="https://github.com/user-attachments/assets/ed12b04a-d63c-4dd5-bef7-7900b62255dc" />
@@ -15,12 +21,6 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 <img width="270" alt="Screenshot from 2026-05-09 17:32:20" src="https://github.com/user-attachments/assets/e09fe9e7-311e-4802-88e3-2221d0b8ae04" />
 <img width="270" alt="Screenshot from 2026-05-09 17:58:31" src="https://github.com/user-attachments/assets/8725428e-2287-44f6-b29b-a83773c319a3" />
 <img width="270" alt="Screenshot from 2026-05-09 17:32:36" src="https://github.com/user-attachments/assets/0c34fd96-ef2c-4655-abc0-79b93a00bd5d" />
-
----
-
-## What is Yaga?
-
-Yaga is a gallery app that feels at home on a modern GNOME desktop. It scans your media folders, keeps everything snappy with a thumbnail cache and a SQLite index, and stays out of your way.
 
 ---
 
