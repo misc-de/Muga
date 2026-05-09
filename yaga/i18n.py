@@ -76,6 +76,27 @@ TRANSLATIONS = {
         "Search: %d hits": "Search: %d hits",
         "%d hits": "%d hits",
         "No results": "No results",
+        # Nextcloud setup / reconnect dialogs
+        "Nextcloud active": "Nextcloud active",
+        "Enables or disables all Nextcloud functions":
+            "Enables or disables all Nextcloud functions",
+        "Set up connection": "Set up connection",
+        "Connect to your Nextcloud": "Connect to your Nextcloud",
+        "Set up": "Set up",
+        "How would you like to connect to your Nextcloud?\n\n"
+        "You can find the app-password QR code in your Nextcloud under:\n"
+        "Settings → Security → App passwords → \"Create new app password\".":
+            "How would you like to connect to your Nextcloud?\n\n"
+            "You can find the app-password QR code in your Nextcloud under:\n"
+            "Settings → Security → App passwords → \"Create new app password\".",
+        "Manually": "Manually",
+        "Nextcloud connection disabled": "Nextcloud connection disabled",
+        "Enable the connection now so the image can be loaded.":
+            "Enable the connection now so the image can be loaded.",
+        "This image is stored in your Nextcloud.\nThe connection is currently disabled.":
+            "This image is stored in your Nextcloud.\nThe connection is currently disabled.",
+        "Connect once": "Connect once",
+        "Connect permanently": "Connect permanently",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -267,6 +288,27 @@ TRANSLATIONS = {
         "Search: %d hits": "Suche: %d Treffer",
         "%d hits": "%d Treffer",
         "No results": "Keine Treffer",
+        # Nextcloud setup / reconnect dialogs
+        "Nextcloud active": "Nextcloud aktiv",
+        "Enables or disables all Nextcloud functions":
+            "Aktiviert oder deaktiviert alle Nextcloud-Funktionen",
+        "Set up connection": "Verbindung einrichten",
+        "Connect to your Nextcloud": "Mit deiner Nextcloud verbinden",
+        "Set up": "Einrichten",
+        "How would you like to connect to your Nextcloud?\n\n"
+        "You can find the app-password QR code in your Nextcloud under:\n"
+        "Settings → Security → App passwords → \"Create new app password\".":
+            "Wie möchtest du deine Nextcloud verbinden?\n\n"
+            "Den App-Passwort-QR-Code findest du in deiner Nextcloud unter:\n"
+            "Einstellungen → Sicherheit → App-Passwörter → „Neues App-Passwort erstellen“.",
+        "Manually": "Manuell",
+        "Nextcloud connection disabled": "Nextcloud-Verbindung deaktiviert",
+        "Enable the connection now so the image can be loaded.":
+            "Aktiviere jetzt die Verbindung, damit das Bild geladen werden kann.",
+        "This image is stored in your Nextcloud.\nThe connection is currently disabled.":
+            "Das Bild liegt in deiner Nextcloud.\nDie Verbindung ist deaktiviert.",
+        "Connect once": "Einmalig verbinden",
+        "Connect permanently": "Dauerhaft verbinden",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",

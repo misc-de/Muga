@@ -175,7 +175,7 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def is_nc_visible(self) -> bool:
         """May the gallery show Nextcloud entries (tab, merged tiles, cached
-        thumbnails)? Driven by the persistent "Nextcloud aktiv" preference, so
+        thumbnails)? Driven by the persistent "Nextcloud active" preference, so
         a manual Disconnect keeps everything visible from the local cache."""
         return (
             bool(self.settings.nextcloud_enabled)
@@ -1084,7 +1084,15 @@ class GalleryWindow(Adw.ApplicationWindow):
         # Enter on the entry confirms
         entry.connect("entry-activated", lambda _e: dialog.response("create"))
 
+        # Guard against double-creation: pressing Enter inside the EntryRow
+        # AND the dialog's own default-response Enter handling could otherwise
+        # both fire "create" before the dialog closes.
+        done_state = {"fired": False}
+
         def _done(_dialog, response):
+            if done_state["fired"]:
+                return
+            done_state["fired"] = True
             if response != "create":
                 return
             name = entry.get_text().strip()

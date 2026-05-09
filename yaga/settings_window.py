@@ -130,8 +130,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         page.add(self._nc_top_group)
 
         self._nc_active_row = Adw.SwitchRow(
-            title=self._("Nextcloud aktiv"),
-            subtitle=self._("Aktiviert oder deaktiviert alle Nextcloud-Funktionen"),
+            title=self._("Nextcloud active"),
+            subtitle=self._("Enables or disables all Nextcloud functions"),
         )
         self._nc_active_row.set_active(self.settings.nextcloud_enabled)
         self._nc_active_handler = self._nc_active_row.connect(
@@ -140,10 +140,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_top_group.add(self._nc_active_row)
 
         self._nc_setup_row = Adw.ActionRow(
-            title=self._("Verbindung einrichten"),
-            subtitle=self._("Mit deiner Nextcloud verbinden"),
+            title=self._("Set up connection"),
+            subtitle=self._("Connect to your Nextcloud"),
         )
-        setup_btn = Gtk.Button(label=self._("Einrichten"))
+        setup_btn = Gtk.Button(label=self._("Set up"))
         setup_btn.add_css_class("suggested-action")
         setup_btn.set_valign(Gtk.Align.CENTER)
         setup_btn.connect("clicked", self._nc_show_setup_dialog)
@@ -240,16 +240,16 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _nc_show_setup_dialog(self, _btn: Gtk.Button) -> None:
         dialog = Adw.AlertDialog(
-            heading=self._("Verbindung einrichten"),
+            heading=self._("Set up connection"),
             body=self._(
-                "Wie möchtest du deine Nextcloud verbinden?\n\n"
-                "Den App-Passwort-QR-Code findest du in deiner Nextcloud unter:\n"
-                "Einstellungen → Sicherheit → App-Passwörter → „Neues App-Passwort erstellen“."
+                "How would you like to connect to your Nextcloud?\n\n"
+                "You can find the app-password QR code in your Nextcloud under:\n"
+                "Settings → Security → App passwords → \"Create new app password\"."
             ),
         )
-        dialog.add_response("cancel", self._("Abbrechen"))
-        dialog.add_response("manual", self._("Manuell"))
-        dialog.add_response("qr", self._("QR-Code scannen"))
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("manual", self._("Manually"))
+        dialog.add_response("qr", self._("Scan QR code"))
         dialog.set_default_response("qr")
         dialog.set_close_response("cancel")
         dialog.set_response_appearance("qr", Adw.ResponseAppearance.SUGGESTED)
@@ -339,7 +339,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _nc_refresh_status(self, sync_toggle: bool = True) -> None:
         """Sync status row + buttons. The QR-code tip is intentionally
         suppressed here — it only shows up in the initial setup dialog.
-        The 'Nextcloud aktiv' toggle is only synced when sync_toggle=True
+        The 'Nextcloud active' toggle is only synced when sync_toggle=True
         (e.g. on connect, but NOT on a manual disconnect)."""
         self._nc_update_buttons()
         if sync_toggle and hasattr(self, "_nc_active_row") \
@@ -995,11 +995,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         if idx < 0 or idx >= len(self.settings.extra_locations):
             return
         current_path = self.settings.extra_locations[idx]
-        current_name = (
+        custom_name = (
             self.settings.extra_location_names[idx]
             if idx < len(self.settings.extra_location_names)
             else ""
         )
+        # Pre-fill with whatever is currently shown as the entry label so the
+        # user starts editing from the value they actually see.
+        display_name = custom_name or Path(current_path).name or current_path
 
         dialog = Adw.AlertDialog(
             heading=self._("Edit folder"),
@@ -1007,7 +1010,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         )
         # Two stacked entry rows for Name + Path.
         name_row = Adw.EntryRow(title=self._("Name"))
-        name_row.set_text(current_name)
+        name_row.set_text(display_name)
         path_row = Adw.EntryRow(title=self._("Path"))
         path_row.set_text(current_path)
         path_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)

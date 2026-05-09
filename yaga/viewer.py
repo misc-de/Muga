@@ -354,8 +354,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         """Render a placeholder for an NC item when the NC connection is
         deactivated, then offer the user a one-shot or permanent reconnect."""
         msg = self.parent_window._(
-            "Das Bild liegt in deiner Nextcloud.\n"
-            "Die Verbindung ist deaktiviert."
+            "This image is stored in your Nextcloud.\n"
+            "The connection is currently disabled."
         )
         lbl = Gtk.Label(label=msg)
         lbl.set_justify(Gtk.Justification.CENTER)
@@ -373,14 +373,14 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _prompt_nc_reconnect(self, item: MediaItem) -> None:
         dialog = Adw.AlertDialog(
-            heading=self.parent_window._("Nextcloud-Verbindung deaktiviert"),
+            heading=self.parent_window._("Nextcloud connection disabled"),
             body=self.parent_window._(
-                "Aktiviere jetzt die Verbindung, damit das Bild geladen werden kann."
+                "Enable the connection now so the image can be loaded."
             ),
         )
-        dialog.add_response("cancel", self.parent_window._("Abbrechen"))
-        dialog.add_response("once", self.parent_window._("Einmalig verbinden"))
-        dialog.add_response("permanent", self.parent_window._("Dauerhaft verbinden"))
+        dialog.add_response("cancel", self.parent_window._("Cancel"))
+        dialog.add_response("once", self.parent_window._("Connect once"))
+        dialog.add_response("permanent", self.parent_window._("Connect permanently"))
         dialog.set_default_response("permanent")
         dialog.set_close_response("cancel")
         dialog.set_response_appearance("permanent", Adw.ResponseAppearance.SUGGESTED)
