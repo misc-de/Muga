@@ -288,6 +288,9 @@ class ViewerWindow(Adw.ApplicationWindow):
 
         from .nextcloud import is_nc_path
         if is_nc_path(item.path):
+            if not self.parent_window.settings.nextcloud_enabled:
+                self._show_nc_blocked(item)
+                return
             self.info_button.set_visible(True)
             spinner = Gtk.Spinner()
             spinner.start()
@@ -332,6 +335,64 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_gesture.set_propagation_phase(phase)
         self.rotate_gesture.set_propagation_phase(phase)
         self.click_gesture.set_propagation_phase(phase)
+
+    def _show_nc_blocked(self, item: MediaItem) -> None:
+        """Render a placeholder for an NC item when the NC connection is
+        deactivated, then offer the user a one-shot or permanent reconnect."""
+        msg = self.parent_window._(
+            "Das Bild liegt in deiner Nextcloud.\n"
+            "Die Verbindung ist deaktiviert."
+        )
+        lbl = Gtk.Label(label=msg)
+        lbl.set_justify(Gtk.Justification.CENTER)
+        lbl.set_wrap(True)
+        lbl.set_margin_top(24)
+        lbl.set_margin_bottom(24)
+        lbl.set_margin_start(24)
+        lbl.set_margin_end(24)
+        lbl.add_css_class("title-2")
+        self.stack.add_child(lbl)
+        self._set_view_actions_visible(False)
+        # Defer the dialog until the placeholder is on screen so the user has
+        # something to look at while choosing.
+        GLib.idle_add(lambda: (self._prompt_nc_reconnect(item), GLib.SOURCE_REMOVE)[1])
+
+    def _prompt_nc_reconnect(self, item: MediaItem) -> None:
+        dialog = Adw.AlertDialog(
+            heading=self.parent_window._("Nextcloud-Verbindung deaktiviert"),
+            body=self.parent_window._(
+                "Aktiviere jetzt die Verbindung, damit das Bild geladen werden kann."
+            ),
+        )
+        dialog.add_response("cancel", self.parent_window._("Abbrechen"))
+        dialog.add_response("once", self.parent_window._("Einmalig verbinden"))
+        dialog.add_response("permanent", self.parent_window._("Dauerhaft verbinden"))
+        dialog.set_default_response("permanent")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("permanent", Adw.ResponseAppearance.SUGGESTED)
+        dialog.choose(self, None, self._on_nc_reconnect_done, item)
+
+    def _on_nc_reconnect_done(self, dialog: Adw.AlertDialog, result, item: MediaItem) -> None:
+        try:
+            response = dialog.choose_finish(result)
+        except Exception:
+            response = "cancel"
+        if response == "cancel":
+            return
+        # Both options enable NC in memory; "permanent" also persists to disk.
+        self.parent_window.settings.nextcloud_enabled = True
+        if response == "permanent":
+            self.parent_window.settings.save()
+        # Reset the shared NC client so workers reconnect with current creds.
+        old_client = self.parent_window._nc_thumb_shared_client
+        self.parent_window._nc_thumb_shared_client = None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:
+                pass
+        # Re-render the current item — it'll go through the active NC path now.
+        self.show_item()
 
     def _nc_download_worker(self, item) -> None:
         from .nextcloud import NextcloudClient, dav_path_from_nc
@@ -386,12 +447,16 @@ class ViewerWindow(Adw.ApplicationWindow):
         except Exception:
             picture = Gtk.Picture.new_for_filename(path)
         picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        picture.set_can_shrink(True)
         picture.set_hexpand(True)
         picture.set_vexpand(True)
+        picture.set_size_request(0, 0)
         scroller = Gtk.ScrolledWindow()
         scroller.set_hexpand(True)
         scroller.set_vexpand(True)
         scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_propagate_natural_width(False)
+        scroller.set_propagate_natural_height(False)
         scroller.set_child(picture)
         self.zoom_view = picture
         self.zoom_scroller = scroller
@@ -459,16 +524,31 @@ class ViewerWindow(Adw.ApplicationWindow):
         else:
             picture = Gtk.Picture.new_for_filename(self._current_display_path or "")
         picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        picture.set_can_shrink(True)
         picture.set_hexpand(True)
         picture.set_vexpand(True)
+        # Don't let the rotated pixbuf's natural dimensions push the layout
+        # past the screen — explicitly request 0,0 so the picture only takes
+        # what its parent allocation gives it.
+        picture.set_size_request(0, 0)
         scroller = Gtk.ScrolledWindow()
         scroller.set_hexpand(True)
         scroller.set_vexpand(True)
         scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        # Critical: never let the scroller propagate the picture's natural size
+        # upward, otherwise after a portrait → landscape rotation the toolbar
+        # tries to grow wider than the (already fullscreened) window.
+        scroller.set_propagate_natural_width(False)
+        scroller.set_propagate_natural_height(False)
         scroller.set_child(picture)
         self.zoom_view = picture
         self.zoom_scroller = scroller
         self.stack.add_child(scroller)
+        # Force a resize pass: removing + adding stack children doesn't always
+        # reset cached size negotiation, so we nudge the toolbar/window once.
+        self.queue_resize()
+        if not self.props.fullscreened:
+            self.fullscreen()
 
     def _on_media_prepared(self, media_stream, _param=None) -> None:
         w = media_stream.get_intrinsic_width()

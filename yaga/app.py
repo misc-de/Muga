@@ -1007,6 +1007,21 @@ class GalleryWindow(Adw.ApplicationWindow):
             return
         threading.Thread(target=self.evict_cache, daemon=True).start()
 
+    def clear_cache(self) -> None:
+        """Wipe the entire on-disk cache (thumbnails + downloaded NC files).
+        Runs synchronously; callers that need to keep the UI responsive should
+        wrap this in a thread."""
+        from .nextcloud import _NC_CACHE
+        try:
+            self.thumbnailer.clear()
+        except Exception:
+            LOGGER.exception("Failed to clear thumbnail cache")
+        if _NC_CACHE.exists():
+            try:
+                shutil.rmtree(_NC_CACHE, ignore_errors=True)
+            except Exception:
+                LOGGER.exception("Failed to clear Nextcloud file cache")
+
     # ── On-demand Nextcloud thumbnail loader ──────────────────────────
     def request_nc_thumbnail(self, item_path: str) -> None:
         """Queue a NC thumbnail fetch for *item_path*. Thread-safe; idempotent

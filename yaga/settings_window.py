@@ -19,6 +19,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.parent_window = parent
         self.settings = Settings(**parent.settings.__dict__)
         self._build()
+        # Suppress GTK's default "focus the first focusable widget" so opening
+        # settings doesn't pop up the on-screen keyboard on a SpinRow / Entry.
+        GLib.idle_add(lambda: (self.set_focus(None), GLib.SOURCE_REMOVE)[1])
 
     def _(self, text: str) -> str:
         return self.parent_window._(text)
@@ -90,6 +93,11 @@ class SettingsWindow(Adw.PreferencesWindow):
         cache_group.add(cache_size_row)
 
         self._cache_size_row = Adw.ActionRow(title=self._("Current cache size"))
+        clear_btn = Gtk.Button(label=self._("Cache löschen"))
+        clear_btn.add_css_class("destructive-action")
+        clear_btn.set_valign(Gtk.Align.CENTER)
+        clear_btn.connect("clicked", self._on_clear_cache_clicked)
+        self._cache_size_row.add_suffix(clear_btn)
         cache_group.add(self._cache_size_row)
         self._refresh_cache_size_display()
 
@@ -99,11 +107,41 @@ class SettingsWindow(Adw.PreferencesWindow):
         page = Adw.PreferencesPage(title="Nextcloud", icon_name="folder-remote-symbolic")
         self.add(page)
 
-        # ── Credentials ──
+        # Track whether the user explicitly chose "manual" in the setup dialog —
+        # before that, the credentials fields stay hidden so the page just shows
+        # the Setup button.
+        self._nc_manual_setup_unlocked = False
+
+        # ── Top: Active toggle + Setup button (when not yet configured) ──
+        self._nc_top_group = Adw.PreferencesGroup()
+        page.add(self._nc_top_group)
+
+        self._nc_active_row = Adw.SwitchRow(
+            title=self._("Nextcloud aktiv"),
+            subtitle=self._("Aktiviert oder deaktiviert alle Nextcloud-Funktionen"),
+        )
+        self._nc_active_row.set_active(self.settings.nextcloud_enabled)
+        self._nc_active_handler = self._nc_active_row.connect(
+            "notify::active", self._nc_active_changed,
+        )
+        self._nc_top_group.add(self._nc_active_row)
+
+        self._nc_setup_row = Adw.ActionRow(
+            title=self._("Verbindung einrichten"),
+            subtitle=self._("Mit deiner Nextcloud verbinden"),
+        )
+        setup_btn = Gtk.Button(label=self._("Einrichten"))
+        setup_btn.add_css_class("suggested-action")
+        setup_btn.set_valign(Gtk.Align.CENTER)
+        setup_btn.connect("clicked", self._nc_show_setup_dialog)
+        self._nc_setup_row.add_suffix(setup_btn)
+        self._nc_top_group.add(self._nc_setup_row)
+
+        # ── Credentials (only visible after setup or already configured) ──
         self._nc_creds_group = Adw.PreferencesGroup(title=self._("Credentials"))
         page.add(self._nc_creds_group)
 
-        # Top row: status text + Connect/Disconnect button on the right
+        # Status row at the top of credentials with Connect/Disconnect button.
         self._nc_status_row = Adw.ActionRow()
         self._nc_status_icon: Gtk.Image | None = None
 
@@ -148,8 +186,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_creds_group.add(self._nc_path_row)
 
         # ── Performance ──
-        perf = Adw.PreferencesGroup(title=self._("Performance"))
-        page.add(perf)
+        self._nc_perf_group = Adw.PreferencesGroup(title=self._("Performance"))
+        page.add(self._nc_perf_group)
 
         thumb_row = Adw.SwitchRow(
             title=self._("Load thumbnails only"),
@@ -157,7 +195,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         )
         thumb_row.set_active(self.settings.nextcloud_thumbnail_only)
         thumb_row.connect("notify::active", self._nc_thumb_only_changed)
-        perf.add(thumb_row)
+        self._nc_perf_group.add(thumb_row)
 
         merge_row = Adw.SwitchRow(
             title=self._("Show in Pictures"),
@@ -165,8 +203,71 @@ class SettingsWindow(Adw.PreferencesWindow):
         )
         merge_row.set_active(self.settings.nextcloud_show_in_pictures)
         merge_row.connect("notify::active", self._nc_show_in_pictures_changed)
-        perf.add(merge_row)
+        self._nc_perf_group.add(merge_row)
 
+        self._nc_refresh_status()
+        self._nc_refresh_layout()
+
+    def _nc_is_configured(self) -> bool:
+        """True when we have at least URL+user on file (whether or not the
+        connection is currently active)."""
+        return bool(
+            self.settings.nextcloud_url.strip()
+            and self.settings.nextcloud_user.strip()
+        )
+
+    def _nc_refresh_layout(self) -> None:
+        """Show the right page chrome for the current configuration state.
+        - Not configured + manual not unlocked: only Setup button visible.
+        - Configured (or manual unlocked): full credential + perf groups."""
+        configured = self._nc_is_configured() or self._nc_manual_setup_unlocked
+        self._nc_setup_row.set_visible(not configured)
+        self._nc_creds_group.set_visible(configured)
+        self._nc_perf_group.set_visible(configured)
+        # The aktiv-toggle is meaningless until something is configured.
+        self._nc_active_row.set_sensitive(self._nc_is_configured())
+
+    def _nc_show_setup_dialog(self, _btn: Gtk.Button) -> None:
+        dialog = Adw.AlertDialog(
+            heading=self._("Verbindung einrichten"),
+            body=self._(
+                "Wie möchtest du deine Nextcloud verbinden?\n\n"
+                "Den App-Passwort-QR-Code findest du in deiner Nextcloud unter:\n"
+                "Einstellungen → Sicherheit → App-Passwörter → „Neues App-Passwort erstellen“."
+            ),
+        )
+        dialog.add_response("cancel", self._("Abbrechen"))
+        dialog.add_response("manual", self._("Manuell"))
+        dialog.add_response("qr", self._("QR-Code scannen"))
+        dialog.set_default_response("qr")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("qr", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect("response", self._nc_setup_dialog_response)
+        dialog.present(self)
+
+    def _nc_setup_dialog_response(self, _dialog, response: str) -> None:
+        if response == "qr":
+            self._nc_manual_setup_unlocked = True
+            self._nc_refresh_layout()
+            self._nc_scan_qr(None)
+        elif response == "manual":
+            self._nc_manual_setup_unlocked = True
+            self._nc_refresh_layout()
+        # cancel → nothing happens
+
+    def _nc_active_changed(self, row: Adw.SwitchRow, _param) -> None:
+        active = row.get_active()
+        if active and not self._nc_is_configured():
+            # Can't enable without credentials; bounce back and prompt setup.
+            row.handler_block(self._nc_active_handler)
+            row.set_active(False)
+            row.handler_unblock(self._nc_active_handler)
+            self._nc_show_setup_dialog(None)
+            return
+        self.settings.nextcloud_enabled = active
+        self.settings.save()
+        self.parent_window.settings.nextcloud_enabled = active
+        self.parent_window.settings.save()
         self._nc_refresh_status()
 
     @staticmethod
@@ -194,6 +295,11 @@ class SettingsWindow(Adw.PreferencesWindow):
         nextcloud_enabled state. Called whenever the connection state changes."""
         connected = self.settings.nextcloud_enabled
         self._nc_update_buttons()
+        # Keep the "Nextcloud aktiv" toggle in sync without triggering its handler.
+        if hasattr(self, "_nc_active_row") and self._nc_active_row.get_active() != connected:
+            self._nc_active_row.handler_block(self._nc_active_handler)
+            self._nc_active_row.set_active(connected)
+            self._nc_active_row.handler_unblock(self._nc_active_handler)
         if connected:
             self._nc_set_status(self._("Connected ✓"), ok=True)
             # Tip is no longer needed once the user has set things up.
@@ -248,6 +354,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         if ok:
             self.settings.nextcloud_enabled = True
             self.settings.save()
+            # Setup button is now obsolete; full UI may also have been hidden if
+            # this was the very first connect.
+            self._nc_manual_setup_unlocked = True
+            self._nc_refresh_layout()
             self._nc_refresh_status()
             self.parent_window.apply_settings(self.settings)
         else:
@@ -392,6 +502,13 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.parent_window.evict_cache_async()
         # Schedule a delayed display refresh so the user sees the new size.
         GLib.timeout_add(800, self._refresh_cache_size_display_once)
+
+    def _on_clear_cache_clicked(self, _btn: Gtk.Button) -> None:
+        # Run the (potentially slow) wipe off the main thread.
+        def _worker():
+            self.parent_window.clear_cache()
+            GLib.idle_add(self._refresh_cache_size_display_once)
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _refresh_cache_size_display(self) -> None:
         """Compute current cache size off the main thread, then update the row."""
