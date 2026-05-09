@@ -212,8 +212,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.rotate_gesture = Gtk.GestureRotate()
         self._rotate_gesture_total: float = 0.0
         self._rotate_active: bool = False
-        self._rotate_preview_provider = Gtk.CssProvider()
-        self._rotate_preview_provider_added = False
+        self._rotate_current_class: str | None = None
         self.rotate_gesture.connect("begin", self._on_rotate_gesture_begin)
         self.rotate_gesture.connect("angle-changed", self._on_rotate_gesture_angle_changed)
         self.rotate_gesture.connect("end", self._on_rotate_gesture_end)
@@ -439,30 +438,24 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_revealer.set_reveal_child(not self._current_is_video)
 
     # ── Rotation gesture (two-finger rotate, snap to 90° steps on release) ─
-    def _ensure_rotate_preview_provider(self) -> None:
-        if self._rotate_preview_provider_added:
-            return
-        display = self.get_display()
-        if display is None:
-            return
-        Gtk.StyleContext.add_provider_for_display(
-            display,
-            self._rotate_preview_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_USER,
-        )
-        self._rotate_preview_provider_added = True
-
     def _set_rotate_preview(self, deg: float | None) -> None:
         if self.zoom_view is None:
             return
+        new_class: str | None
         if deg is None:
-            self._rotate_preview_provider.load_from_data(b"")
-            self.zoom_view.remove_css_class("viewer-rotate-preview")
+            new_class = None
+        else:
+            # Snap to nearest 5° bucket and normalize to [0, 360). The matching
+            # `.rot-N` class is preloaded in app.py so we just toggle it.
+            bucket = int(round(deg / 5)) * 5 % 360
+            new_class = f"rot-{bucket}"
+        if new_class == self._rotate_current_class:
             return
-        self._ensure_rotate_preview_provider()
-        css = f".viewer-rotate-preview {{ transform: rotate({deg:.2f}deg); }}"
-        self._rotate_preview_provider.load_from_data(css.encode())
-        self.zoom_view.add_css_class("viewer-rotate-preview")
+        if self._rotate_current_class is not None:
+            self.zoom_view.remove_css_class(self._rotate_current_class)
+        if new_class is not None:
+            self.zoom_view.add_css_class(new_class)
+        self._rotate_current_class = new_class
 
     def _on_rotate_gesture_begin(self, _gesture, _seq) -> None:
         if self._current_display_path is None:
@@ -470,11 +463,14 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._rotate_gesture_total = 0.0
         self._rotate_active = True
 
-    def _on_rotate_gesture_angle_changed(self, _gesture, angle, _angle_delta) -> None:
+    def _on_rotate_gesture_angle_changed(self, _gesture, _angle, angle_delta) -> None:
+        # GtkGestureRotate emits (current_finger_angle, delta_since_start). We want
+        # the cumulative delta — the absolute finger angle would only ever rotate
+        # the image clockwise because it's reported in [0, 2π).
         if not self._rotate_active:
             return
-        self._rotate_gesture_total = angle
-        self._set_rotate_preview(math.degrees(angle))
+        self._rotate_gesture_total = angle_delta
+        self._set_rotate_preview(math.degrees(angle_delta))
 
     def _on_rotate_gesture_end(self, _gesture, _seq) -> None:
         if not self._rotate_active:
@@ -483,10 +479,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         deg = math.degrees(self._rotate_gesture_total)
         self._rotate_gesture_total = 0.0
         self._set_rotate_preview(None)
-        # Require 60° of cumulative twist to commit a 90° step (avoids accidental
-        # rotation when the user actually meant to zoom). Above 60° the gesture
-        # snaps to the nearest 90° multiple.
-        if abs(deg) < 60:
+        # 30° of cumulative twist commits the nearest 90° step (positive or negative).
+        if abs(deg) < 30:
             return
         steps = int(round(deg / 90))
         if steps != 0:

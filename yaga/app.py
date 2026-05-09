@@ -1148,6 +1148,11 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _load_css(self) -> None:
         provider = Gtk.CssProvider()
+        # Pre-baked rotation classes in 5° increments (0..355°). Toggling a class
+        # is much cheaper than rewriting a CssProvider during a live gesture.
+        rotation_css = "\n".join(
+            f".rot-{i*5} {{ transform: rotate({i*5}deg); }}" for i in range(72)
+        ).encode()
         provider.load_from_data(
             b"""
             .gallery-tile {
@@ -1218,10 +1223,8 @@ class GalleryWindow(Adw.ApplicationWindow):
                 opacity: 0.55;
                 margin-top: -2px;
             }
-            .viewer-rotate-preview {
-                transition: transform 60ms linear;
-            }
             """
+            + rotation_css
         )
         display = Gdk.Display.get_default()
         Gtk.StyleContext.add_provider_for_display(
