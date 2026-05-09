@@ -383,18 +383,22 @@ class ViewerWindow(Adw.ApplicationWindow):
         # what was there before we opened the connection for this one image.
         prev_session = self.parent_window._nc_session_active
         prev_enabled = self.parent_window.settings.nextcloud_enabled
+        prev_session_setting = getattr(
+            self.parent_window.settings, "nextcloud_session_active", True,
+        )
 
-        # Open the gate and make NC visible. "Dauerhaft" persists; "Einmalig"
-        # only changes things in memory so the next launch starts disabled.
+        # Open the gate and make NC visible. "Dauerhaft" persists everything;
+        # "Einmalig" only flips things in memory and reverts after the load.
         self.parent_window._nc_session_active = True
         self.parent_window.settings.nextcloud_enabled = True
         if response == "permanent":
+            self.parent_window.settings.nextcloud_session_active = True
             self.parent_window.settings.save()
             self._nc_einmalig_revert = None
         else:
-            # Remember to flip both flags back as soon as this one image has
+            # Remember to flip every flag back as soon as this one image has
             # finished loading. A second NC click then triggers the dialog again.
-            self._nc_einmalig_revert = (prev_session, prev_enabled)
+            self._nc_einmalig_revert = (prev_session, prev_enabled, prev_session_setting)
 
         # Reset the shared NC client so workers reconnect with current creds.
         old_client = self.parent_window._nc_thumb_shared_client
@@ -412,17 +416,20 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _revert_einmalig_session(self) -> None:
         """If the user had only granted Einmalig consent, close the gate again
-        once the on-shot download has finished."""
+        once the one-shot download has finished."""
         revert = getattr(self, "_nc_einmalig_revert", None)
         if revert is None:
             return
-        prev_session, prev_enabled = revert
+        prev_session, prev_enabled, prev_session_setting = revert
         self._nc_einmalig_revert = None
         self.parent_window._nc_session_active = prev_session
         # Only roll back nextcloud_enabled if we actually flipped it (i.e. the
         # user hadn't toggled it on permanently before).
         if not prev_enabled:
             self.parent_window.settings.nextcloud_enabled = False
+        # Persistent session-active stays exactly where the user left it before
+        # the einmalig blip — Einmalig is a transient session grant only.
+        self.parent_window.settings.nextcloud_session_active = prev_session_setting
         # Drop the shared NC client so background workers stop using it.
         old_client = self.parent_window._nc_thumb_shared_client
         self.parent_window._nc_thumb_shared_client = None
@@ -651,20 +658,14 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self._rotate_gesture_total = angle_delta
         deg = math.degrees(angle_delta)
-        # Deadband: only commit rotate after a clearly intentional twist.
-        # Off-center pinches always leak some degrees of incidental rotation,
-        # so the threshold is generous. A simultaneous pinch above the zoom
-        # deadband completely locks rotate out — zoom always wins ties.
+        # Pure-rotate deadband. The pinch-dominance heuristic has been removed
+        # because it ended up biasing one direction over the other on real
+        # hardware — instead the zoom_committed mutex above acts as the only
+        # gate. The very low zoom threshold (1%) means a deliberate pinch
+        # almost always crosses its commit line before rotation reaches 30°,
+        # which is the same outcome with cleaner symmetry.
         if not self._rotate_committed:
             if abs(deg) < 30.0:
-                return
-            try:
-                pinch_pct = abs(self.zoom_gesture.get_scale_delta() - 1.0) * 100
-            except Exception:
-                pinch_pct = 0.0
-            # Even a tiny pinch (≥1.5%) is enough to suppress rotate, and we
-            # need ~10× more rotation than scale change before rotate wins.
-            if pinch_pct >= 1.5 and abs(deg) < pinch_pct * 10:
                 return
             self._rotate_committed = True
         self._set_rotate_preview(deg)
@@ -861,9 +862,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         if self._rotate_committed:
             return
         if not self._zoom_committed:
-            # 1.5% pinch is enough to commit zoom — almost any spread crosses
-            # this long before rotation reaches the 30° rotate threshold.
-            if 0.985 <= scale_delta <= 1.015:
+            # 1% pinch is enough to commit zoom — virtually any deliberate
+            # spread crosses this long before rotation reaches 30°.
+            if 0.99 <= scale_delta <= 1.01:
                 return
             self._zoom_committed = True
         self._set_zoom(self.zoom_start_scale * scale_delta)

@@ -56,6 +56,11 @@ class Settings:
     nextcloud_enabled: bool = False  # set to True after successful connect
     nextcloud_thumbnail_only: bool = True  # skip full-file download during scan
     nextcloud_show_in_pictures: bool = False  # merge NC items into the Pictures view
+    # Persistent counterpart of the runtime "session active" flag. Defaults to
+    # True so a fresh nextcloud_enabled → True actually activates the connection;
+    # a manual Disconnect saves False here so the next app launch comes up
+    # disconnected (cached items still visible, no network until user reconnects).
+    nextcloud_session_active: bool = True
 
     @classmethod
     def load(cls) -> "Settings":

@@ -133,9 +133,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         # Runtime gate: True only when the user has *actively* allowed NC for
         # this session. Scripts must NEVER flip this to True; only explicit UI
         # actions (Settings toggle/Connect button, viewer Einmalig/Dauerhaft)
-        # may. Initialized from the persistent setting so a launch with
-        # nextcloud_enabled=True comes up active.
-        self._nc_session_active = bool(self.settings.nextcloud_enabled)
+        # may. Initialized from BOTH persistent flags so a saved Disconnect
+        # survives app restarts.
+        self._nc_session_active = bool(
+            self.settings.nextcloud_enabled
+            and getattr(self.settings, "nextcloud_session_active", True)
+        )
         # Coalesced thumbnail updates from the worker → batched on the main loop
         self._pending_thumb_updates: dict[str, str] = {}
         self._pending_thumb_lock = threading.Lock()
@@ -1534,10 +1537,13 @@ class GalleryWindow(Adw.ApplicationWindow):
                 old_client.close()
             except Exception:
                 pass
-        # Resync the runtime gate with the persisted preference. Settings is
+        # Resync the runtime gate with the persisted preferences. Settings is
         # the source of truth here — anything else would re-enable NC behind
         # the user's back when applying settings after a manual disconnect.
-        self._nc_session_active = bool(self.settings.nextcloud_enabled)
+        self._nc_session_active = bool(
+            self.settings.nextcloud_enabled
+            and getattr(self.settings, "nextcloud_session_active", True)
+        )
         self._apply_theme()
         self._build_ui()
         self.refresh(scan=True)

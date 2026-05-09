@@ -269,8 +269,12 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._nc_show_setup_dialog(None)
             return
         self.settings.nextcloud_enabled = active
+        # Toggling the master "aktiv" switch always resyncs the
+        # session-active flag — the user's intent is "on=fully on".
+        self.settings.nextcloud_session_active = active
         self.settings.save()
         self.parent_window.settings.nextcloud_enabled = active
+        self.parent_window.settings.nextcloud_session_active = active
         self.parent_window.settings.save()
         # Runtime mirrors the toggle. When deactivating, also drop the shared
         # client so no scripted call can sneak through with stale credentials.
@@ -386,10 +390,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_connect_btn.set_sensitive(True)
         if ok:
             self.settings.nextcloud_enabled = True
+            self.settings.nextcloud_session_active = True
             self.settings.save()
             self._nc_runtime_connected = True
             # User-initiated → runtime gate may open.
             self.parent_window._nc_session_active = True
+            self.parent_window.settings.nextcloud_session_active = True
             # Setup button is now obsolete; full UI may also have been hidden if
             # this was the very first connect.
             self._nc_manual_setup_unlocked = True
@@ -409,7 +415,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         # in this session (workers, scans, thumb fetches) by flipping the
         # runtime gate. The NC tab and cached thumbnails stay visible — only
         # operations that need the server are blocked. The persistent
-        # "Nextcloud aktiv" preference is untouched.
+        # "Nextcloud aktiv" preference is untouched, but the disconnect state
+        # itself is persisted so the next launch comes up disconnected too.
         old_client = self.parent_window._nc_thumb_shared_client
         self.parent_window._nc_thumb_shared_client = None
         if old_client is not None:
@@ -418,6 +425,9 @@ class SettingsWindow(Adw.PreferencesWindow):
             except Exception:
                 pass
         self.parent_window._nc_session_active = False
+        self.settings.nextcloud_session_active = False
+        self.parent_window.settings.nextcloud_session_active = False
+        self.parent_window.settings.save()
         self._nc_runtime_connected = False
         self._nc_update_buttons()
         self._nc_set_status(self._("Disconnected"), ok=False)
