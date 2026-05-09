@@ -6,6 +6,8 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 
 ---
 
+⚠️ **AI-assisted project**  
+
 ## What is Yaga?
 
 Yaga is a gallery app that feels right at home on a modern GNOME desktop. It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. And in addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
