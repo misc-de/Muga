@@ -122,14 +122,16 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._selected_paths: set[str] = set()
         self._nc_spinner: Gtk.Spinner | None = None
         self._nc_broken_img: Gtk.Image | None = None
-        self._nc_folder_sync_generation = 0
-
         # On-demand NC thumbnail loader (used by gallery_grid when binding tiles)
         self._nc_thumb_pending: set[str] = set()
         self._nc_thumb_lock = threading.Lock()
         self._nc_thumb_queue: list[str] = []
         self._nc_thumb_event = threading.Event()
         self._nc_thumb_worker_started = False
+        # Coalesced thumbnail updates from the worker → batched on the main loop
+        self._pending_thumb_updates: dict[str, str] = {}
+        self._pending_thumb_lock = threading.Lock()
+        self._pending_thumb_idle = 0
 
         # Pagination for large galleries
         self._page_size: int = 100  # Load 100 items per page
@@ -520,14 +522,8 @@ class GalleryWindow(Adw.ApplicationWindow):
                 GLib.idle_add(self._set_nc_broken, False)
                 self.scanner.scan_nc_structure(nc_client, self.settings.nextcloud_photos_path)
                 GLib.idle_add(self.refresh, False)  # show folder structure immediately
-
-                # Phase 3: load thumbnails only for the active NC folder
-                active_folder = nc_folder or "/"
-                self.scanner.load_nc_folder_thumbs(
-                    nc_client,
-                    active_folder,
-                    lambda path, thumb: GLib.idle_add(self._update_item_thumb, path, thumb),
-                )
+                # No bulk thumbnail pre-fetch: tiles request their own thumbnail when
+                # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
             LOGGER.exception("Media scan failed: %s", e)
             GLib.idle_add(self._set_nc_broken, True)
@@ -551,13 +547,53 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _update_item_thumb(self, path: str, thumb_path: str) -> None:
         updated = self.gallery_grid.update_item_thumb(path, thumb_path)
-        item = self.database.get_media_by_path(path, "nextcloud")
-        if item is not None:
-            folder_path = self._visible_child_folder_for_item(item.folder)
-            if folder_path is not None:
-                updated = self.gallery_grid.update_folder_thumb(folder_path, thumb_path) or updated
+        # Folder-card thumb updates only matter while the user is browsing the
+        # NC folder hierarchy. In Pictures (or other) views the NC items show as
+        # flat tiles, so we skip the extra DB lookup.
+        if self.category == "nextcloud":
+            item = self.database.get_media_by_path(path, "nextcloud")
+            if item is not None:
+                folder_path = self._visible_child_folder_for_item(item.folder)
+                if folder_path is not None:
+                    updated = self.gallery_grid.update_folder_thumb(folder_path, thumb_path) or updated
         if updated:
             LOGGER.debug("Updated visible thumbnail for %s", path)
+
+    def _enqueue_thumb_update(self, path: str, thumb_path: str) -> None:
+        """Buffer thumbnail-arrival events from background workers and flush
+        them on a single idle tick so we don't hammer the main loop with one
+        idle_add per HTTP response."""
+        with self._pending_thumb_lock:
+            self._pending_thumb_updates[path] = thumb_path
+            if self._pending_thumb_idle == 0:
+                self._pending_thumb_idle = GLib.idle_add(
+                    self._flush_thumb_updates,
+                    priority=GLib.PRIORITY_DEFAULT_IDLE,
+                )
+
+    def _flush_thumb_updates(self) -> bool:
+        with self._pending_thumb_lock:
+            updates = self._pending_thumb_updates
+            self._pending_thumb_updates = {}
+            self._pending_thumb_idle = 0
+        # Process at most a chunk per idle tick so the main loop can paint
+        # between batches; remaining work re-arms itself.
+        chunk_limit = 24
+        items = list(updates.items())
+        for path, thumb in items[:chunk_limit]:
+            self._update_item_thumb(path, thumb)
+        leftover = dict(items[chunk_limit:])
+        if leftover:
+            with self._pending_thumb_lock:
+                # Merge any updates that arrived while we were processing.
+                leftover.update(self._pending_thumb_updates)
+                self._pending_thumb_updates = leftover
+                if self._pending_thumb_idle == 0:
+                    self._pending_thumb_idle = GLib.idle_add(
+                        self._flush_thumb_updates,
+                        priority=GLib.PRIORITY_DEFAULT_IDLE,
+                    )
+        return GLib.SOURCE_REMOVE
 
     def _render(self) -> None:
         # Preserve scroll position when refreshing the same view (e.g. after scan)
@@ -910,48 +946,13 @@ class GalleryWindow(Adw.ApplicationWindow):
             if thumb:
                 self.database.set_thumb(path, thumb, "nextcloud")
                 self.database.commit()
-                GLib.idle_add(self._update_item_thumb, path, thumb)
+                self._enqueue_thumb_update(path, thumb)
 
     def _open_folder(self, _button, folder: str) -> None:
         self.current_folder = folder
         self._render()
-        if self.category == "nextcloud":
-            self._nc_folder_sync_generation += 1
-            generation = self._nc_folder_sync_generation
-            threading.Thread(
-                target=lambda: self._nc_folder_sync_bg(folder, generation),
-                daemon=True,
-            ).start()
-
-    def _nc_folder_sync_bg(self, folder: str, generation: int) -> None:
-        LOGGER.info("Nextcloud thumbnail sync started for folder %r", folder)
-        nc_client = None
-        try:
-            from .nextcloud import NextcloudClient
-            pwd = self.settings.load_app_password()
-            if not pwd:
-                GLib.idle_add(self._set_nc_broken, True)
-                return
-            nc_client = NextcloudClient(self.settings.nextcloud_url, self.settings.nextcloud_user, pwd)
-            GLib.idle_add(self._set_nc_syncing, True)
-            GLib.idle_add(self._set_nc_broken, False)
-            self.scanner.load_nc_folder_thumbs(
-                nc_client,
-                folder,
-                lambda path, thumb: self._queue_nc_thumb_update(path, thumb, generation),
-            )
-        except Exception as e:
-            LOGGER.exception("Nextcloud folder sync failed: %s", e)
-            GLib.idle_add(self._set_nc_broken, True)
-        finally:
-            nc_client = None
-            if generation == self._nc_folder_sync_generation:
-                GLib.idle_add(self._set_nc_syncing, False)
-            LOGGER.info("Nextcloud thumbnail sync finished for folder %r", folder)
-
-    def _queue_nc_thumb_update(self, path: str, thumb: str, generation: int) -> None:
-        if generation == self._nc_folder_sync_generation:
-            GLib.idle_add(self._update_item_thumb, path, thumb)
+        # No bulk thumbnail pre-fetch on folder open: the gallery requests each
+        # tile's NC thumbnail on demand as it scrolls into view.
 
     def _open_item(self, _button, item: MediaItem) -> None:
         if item.is_video and self.settings.external_video_player.strip():

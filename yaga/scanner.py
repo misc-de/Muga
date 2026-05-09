@@ -148,7 +148,7 @@ class MediaScanner:
         self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"
         upserted = 0
-        for info in files:
+        for i, info in enumerate(files):
             dav = info["dav_path"]
             media_type = media_type_for(Path(info["name"]))
             if not media_type:
@@ -165,6 +165,10 @@ class MediaScanner:
                 thumb_path=None,
             )
             upserted += 1
+            # Yield occasionally so the main loop can grab the DB lock for queries
+            # and stay responsive while a large structure scan is in progress.
+            if i and i % 200 == 0:
+                time.sleep(0)
         removed = self.database.prune_missing(started, ["nextcloud"])
         self.database.commit()
         LOGGER.info(
