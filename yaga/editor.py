@@ -535,6 +535,9 @@ class EditorView(Gtk.Box):
         self._active_panel: str | None = None
         self._update_id: int | None = None
         self._nav_handler_ids: dict[str, int] = {}
+        # (inner_scroller, inner_row) pairs that should flip orientation when
+        # the editor switches between portrait and landscape mode.
+        self._panel_swap_pairs: list[tuple[Gtk.ScrolledWindow, Gtk.Box]] = []
 
         self._build_ui()
         self._schedule_update()
@@ -672,6 +675,12 @@ class EditorView(Gtk.Box):
             )
             # Cap panel width so the image keeps the majority of the space.
             self._panel_scroller.set_size_request(280, -1)
+            # Submenu rows stack vertically; the inner ScrolledWindow now scrolls
+            # vertically (the outer panel scroller is suppressed by these).
+            for scroll, row in self._panel_swap_pairs:
+                row.set_orientation(Gtk.Orientation.VERTICAL)
+                scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                scroll.set_vexpand(True)
             self.append(self._nav_box)
             self.append(self._panel_revealer)
             self.append(self._image_overlay)
@@ -688,6 +697,10 @@ class EditorView(Gtk.Box):
                 Gtk.RevealerTransitionType.SLIDE_UP
             )
             self._panel_scroller.set_size_request(-1, -1)
+            for scroll, row in self._panel_swap_pairs:
+                row.set_orientation(Gtk.Orientation.HORIZONTAL)
+                scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+                scroll.set_vexpand(False)
             self.append(self._image_overlay)
             self.append(self._panel_revealer)
             self.append(self._nav_box)
@@ -746,6 +759,7 @@ class EditorView(Gtk.Box):
             self._filter_btns[mode] = btn
 
         scroll.set_child(row)
+        self._panel_swap_pairs.append((scroll, row))
         return scroll
 
     def _build_panel_adjust(self) -> Gtk.Widget:
@@ -819,6 +833,7 @@ class EditorView(Gtk.Box):
                 row.append(btn)
             scroll.set_child(row)
             self._sticker_sub_stack.add_named(scroll, key)
+            self._panel_swap_pairs.append((scroll, row))
 
         # Rahmen page (frame theme thumbnails as toggle buttons)
         rahmen_scroll = Gtk.ScrolledWindow()
@@ -886,6 +901,7 @@ class EditorView(Gtk.Box):
             rahmen_row.append(fbtn)
         rahmen_scroll.set_child(rahmen_row)
         self._sticker_sub_stack.add_named(rahmen_scroll, "rahmen")
+        self._panel_swap_pairs.append((rahmen_scroll, rahmen_row))
 
         # Text page (entry + color row + add button)
         text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
