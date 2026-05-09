@@ -831,9 +831,7 @@ class GalleryWindow(Adw.ApplicationWindow):
                 self._append_date_grouped(item)
             else:
                 self.gallery_grid.append_media(item, item.path in self._selected_paths)
-        self._set_status(
-            (self._("Search: %d hits") % self._total_count) if self._total_count else ""
-        )
+        self._set_status("")
         self._set_empty_state(visible=not self.current_items)
 
     def _on_search_changed(self, entry: Gtk.SearchEntry) -> None:

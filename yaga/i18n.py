@@ -74,6 +74,8 @@ TRANSLATIONS = {
         "Search": "Search",
         "Filename, date, month, EXIF…": "Filename, date, month, EXIF…",
         "Search: %d hits": "Search: %d hits",
+        "%d hits": "%d hits",
+        "No results": "No results",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -263,6 +265,8 @@ TRANSLATIONS = {
         "Search": "Suchen",
         "Filename, date, month, EXIF…": "Dateiname, Datum, Monat, EXIF…",
         "Search: %d hits": "Suche: %d Treffer",
+        "%d hits": "%d Treffer",
+        "No results": "Keine Treffer",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",
