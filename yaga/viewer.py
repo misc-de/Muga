@@ -336,7 +336,16 @@ class ViewerWindow(Adw.ApplicationWindow):
             self.edit_button.set_visible(_PIL_OK)
 
     def _show_local_image(self, path: str) -> None:
-        picture = Gtk.Picture.new_for_filename(path)
+        # Honor the EXIF Orientation tag so portrait phone shots aren't sideways.
+        # GdkPixbuf.apply_embedded_orientation does this in one call. If the loader
+        # can't handle the format (rare), fall back to the lazy filename-based path.
+        picture: Gtk.Picture
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+            pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
+            picture = Gtk.Picture.new_for_pixbuf(pixbuf)
+        except Exception:
+            picture = Gtk.Picture.new_for_filename(path)
         picture.set_content_fit(Gtk.ContentFit.CONTAIN)
         picture.set_hexpand(True)
         picture.set_vexpand(True)
@@ -382,6 +391,9 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _rotate_worker(self, path: str, rotation: int) -> None:
         try:
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+            # Apply EXIF orientation first so the user's rotation stacks on top
+            # of the already-corrected display (matches _show_local_image).
+            pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
             rot_map = {
                 90: GdkPixbuf.PixbufRotation.CLOCKWISE,
                 180: GdkPixbuf.PixbufRotation.UPSIDEDOWN,
@@ -545,7 +557,12 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         if _PIL_OK:
             try:
+                from PIL import ImageOps
                 img = PILImage.open(path)
+                # Bake EXIF orientation into the pixels first so the saved file is
+                # standalone-correct (no orientation tag needed), then layer the
+                # user's rotation on top.
+                img = ImageOps.exif_transpose(img)
                 img = img.rotate(-self._rotation, expand=True)
                 ext = Path(path).suffix.lower()
                 if ext in (".jpg", ".jpeg"):
@@ -554,9 +571,10 @@ class ViewerWindow(Adw.ApplicationWindow):
                     img.save(path)
                 return
             except Exception:
-                pass
+                LOGGER.exception("PIL save_rotation failed for %s", path)
         try:
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+            pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
             rot_map = {
                 90: GdkPixbuf.PixbufRotation.CLOCKWISE,
                 180: GdkPixbuf.PixbufRotation.UPSIDEDOWN,

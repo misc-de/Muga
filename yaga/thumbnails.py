@@ -69,8 +69,13 @@ class Thumbnailer:
     def _image_thumbnail(self, path: Path, target: Path) -> str | None:
         # Try PIL/Pillow first (supports most standard formats)
         try:
-            from PIL import Image as PILImage
+            from PIL import Image as PILImage, ImageOps
             img = PILImage.open(str(path))
+            # Apply EXIF orientation so portrait photos from phones aren't sideways.
+            try:
+                img = ImageOps.exif_transpose(img)
+            except Exception:
+                pass
             # Resize to thumbnail size
             img.thumbnail((320, 320), PILImage.LANCZOS)
             # JPEG cannot store alpha — flatten anything non-RGB (RGBA, P, LA, ...)
@@ -89,6 +94,8 @@ class Thumbnailer:
 
             pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(str(path), 320, 320, True)
             if pixbuf:
+                # Apply embedded EXIF orientation if present.
+                pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
                 pixbuf.savev(str(target), "jpeg", ["quality"], ["85"])
                 return str(target)
         except Exception:
