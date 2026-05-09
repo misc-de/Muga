@@ -73,13 +73,13 @@ class Thumbnailer:
             img = PILImage.open(str(path))
             # Resize to thumbnail size
             img.thumbnail((320, 320), PILImage.LANCZOS)
-            # Ensure RGB mode for JPEG
-            if img.mode not in ("RGB", "RGBA"):
+            # JPEG cannot store alpha — flatten anything non-RGB (RGBA, P, LA, ...)
+            if img.mode != "RGB":
                 img = img.convert("RGB")
             img.save(str(target), "JPEG", quality=85)
             return str(target)
         except Exception:
-            pass
+            LOGGER.debug("PIL thumbnail failed for %s", path, exc_info=True)
         
         # Fallback: Try GdkPixbuf (built-in GNOME library)
         try:

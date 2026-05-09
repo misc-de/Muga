@@ -726,7 +726,13 @@ class GalleryWindow(Adw.ApplicationWindow):
         items = self.current_items or self.database.list_media(
             item.category, self.settings.get_sort_mode(item.category, self.current_folder), self.current_folder
         )
-        ViewerWindow(self, items, items.index(item), self.settings.external_video_player).present()
+        # Match by path — frozen MediaItem __eq__ compares all fields, and thumb_path
+        # may differ between the cached current_items and the clicked tile (async thumb update).
+        index = next((i for i, it in enumerate(items) if it.path == item.path), -1)
+        if index < 0:
+            items = [item]
+            index = 0
+        ViewerWindow(self, items, index, self.settings.external_video_player).present()
 
     def _show_context_menu(
         self,
