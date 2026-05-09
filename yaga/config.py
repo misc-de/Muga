@@ -37,6 +37,10 @@ class Settings:
     videos_dir: str = field(default_factory=lambda: default_path("videos"))
     screenshots_dir: str = field(default_factory=lambda: default_path("screenshots"))
     extra_locations: list[str] = field(default_factory=list)
+    # Display names for the entries in extra_locations, index-aligned. An empty
+    # string falls back to Path(path).name. Stored as a parallel list (not as
+    # tuples) to keep settings.json human-editable and JSON-serialisable.
+    extra_location_names: list[str] = field(default_factory=list)
     sort_mode: str = "newest"
     sort_modes: dict = field(default_factory=dict)
     theme: str = "system"
@@ -113,7 +117,11 @@ class Settings:
                 "Nextcloud", self.nextcloud_photos_path or "Photos",
             )
         for i, p in enumerate(self.extra_locations):
-            cat_map[f"location:{i}"] = (Path(p).name or "Locations", p)
+            custom_name = ""
+            if i < len(self.extra_location_names):
+                custom_name = (self.extra_location_names[i] or "").strip()
+            label = custom_name or Path(p).name or "Locations"
+            cat_map[f"location:{i}"] = (label, p)
 
         order = list(self.media_folder_order or [])
         for key in cat_map:

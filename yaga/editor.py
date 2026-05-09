@@ -614,7 +614,7 @@ class EditorView(Gtk.Box):
             ("adjust",   "display-brightness-symbolic", self._("Adjust")),
             ("effects",  "image-adjust-symbolic",       self._("Effects")),
             ("sticker",  "face-smile-symbolic",         self._("Sticker")),
-            ("crop",     "crop-symbolic",               self._("Crop")),
+            ("crop",     "edit-cut-symbolic",           self._("Crop")),
         ]:
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             inner.set_margin_top(6)

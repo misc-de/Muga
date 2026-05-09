@@ -67,6 +67,10 @@ TRANSLATIONS = {
         "Remove this folder?": "Remove this folder?",
         "It will disappear from the gallery navigation. The files on disk are not deleted.":
             "It will disappear from the gallery navigation. The files on disk are not deleted.",
+        "Edit folder": "Edit folder",
+        "The name appears as the entry label in the gallery navigation.":
+            "The name appears as the entry label in the gallery navigation.",
+        "Path": "Path",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -249,6 +253,10 @@ TRANSLATIONS = {
         "Remove this folder?": "Diesen Ordner entfernen?",
         "It will disappear from the gallery navigation. The files on disk are not deleted.":
             "Er verschwindet aus der Navigation. Die Dateien auf der Festplatte werden nicht gelöscht.",
+        "Edit folder": "Ordner bearbeiten",
+        "The name appears as the entry label in the gallery navigation.":
+            "Der Name erscheint als Beschriftung in der Galerie-Navigation.",
+        "Path": "Pfad",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",

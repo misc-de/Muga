@@ -43,7 +43,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             "videos":      {"attr": "videos_dir",      "title": "Videos",      "kind": "local"},
             "screenshots": {"attr": "screenshots_dir", "title": "Screenshots", "kind": "local"},
             "nextcloud":   {"attr": "nextcloud_photos_path",
-                            "title": "Photos on Nextcloud", "kind": "nextcloud"},
+                            "title": "Nextcloud", "kind": "nextcloud"},
         }
         self._media_listbox = Gtk.ListBox()
         self._media_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
@@ -568,9 +568,13 @@ class SettingsWindow(Adw.PreferencesWindow):
             if idx < 0 or idx >= len(self.settings.extra_locations):
                 return None
             path = self.settings.extra_locations[idx]
+            custom_name = ""
+            if idx < len(self.settings.extra_location_names):
+                custom_name = (self.settings.extra_location_names[idx] or "").strip()
+            title = custom_name or Path(path).name or path
             return {
                 "key":       key,
-                "title":     Path(path).name or path,
+                "title":     title,
                 "path":      path,
                 "kind":      "extra",
                 "attr":      None,
@@ -658,13 +662,16 @@ class SettingsWindow(Adw.PreferencesWindow):
             trash.connect("clicked", self._confirm_remove_media, key)
             box.append(trash)
 
-        if spec["kind"] in ("local", "extra"):
+        if spec["kind"] == "local":
             choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
             choose.set_tooltip_text(self._("Choose folder"))
-            if spec["kind"] == "local":
-                choose.connect("clicked", self._choose_folder_for_key, spec["attr"], path_lbl)
-            else:
-                choose.connect("clicked", self._choose_extra_folder, spec["extra_idx"], path_lbl, title_lbl)
+            choose.connect("clicked", self._choose_folder_for_key, spec["attr"], path_lbl)
+        elif spec["kind"] == "extra":
+            # Pencil — opens a dialog with both Name and Path fields, since the
+            # custom name is what shows up in the gallery navigation.
+            choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+            choose.set_tooltip_text(self._("Edit"))
+            choose.connect("clicked", self._edit_extra_location, spec["extra_idx"], title_lbl, path_lbl)
         else:  # nextcloud
             choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
             choose.set_tooltip_text(self._("Edit"))
@@ -896,8 +903,10 @@ class SettingsWindow(Adw.PreferencesWindow):
             # Append the new location to extra_locations and to the order list,
             # so the new entry shows up at the bottom of the listbox.
             self.settings.extra_locations.append(path)
+            self.settings.extra_location_names.append("")
             new_idx = len(self.settings.extra_locations) - 1
             self.parent_window.settings.extra_locations.append(path)
+            self.parent_window.settings.extra_location_names.append("")
             order = list(self.settings.media_folder_order or [])
             order.append(f"location:{new_idx}")
             self.settings.media_folder_order = order
@@ -954,6 +963,11 @@ class SettingsWindow(Adw.PreferencesWindow):
         new_extras.pop(idx)
         self.settings.extra_locations = new_extras
         self.parent_window.settings.extra_locations = list(new_extras)
+        # Names list runs in lock-step with the paths.
+        if idx < len(self.settings.extra_location_names):
+            self.settings.extra_location_names.pop(idx)
+        if idx < len(self.parent_window.settings.extra_location_names):
+            self.parent_window.settings.extra_location_names.pop(idx)
 
         renumbered: list[str] = []
         for k in (self.settings.media_folder_order or []):
@@ -974,46 +988,98 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.settings.media_folder_order = renumbered
         self.parent_window.settings.media_folder_order = renumbered
 
-    def _choose_extra_folder(
+    def _edit_extra_location(
         self, _btn: Gtk.Button, idx: int,
-        path_lbl: Gtk.Label, title_lbl: Gtk.Label,
+        title_lbl: Gtk.Label, path_lbl: Gtk.Label,
     ) -> None:
-        chooser = Gtk.FileChooserNative(
-            title=self._("Choose folder"), transient_for=self,
-            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        if idx < 0 or idx >= len(self.settings.extra_locations):
+            return
+        current_path = self.settings.extra_locations[idx]
+        current_name = (
+            self.settings.extra_location_names[idx]
+            if idx < len(self.settings.extra_location_names)
+            else ""
         )
-        try:
-            home = Gio.File.new_for_path(str(Path.home()))
-            chooser.set_current_folder(home)
-        except Exception:
-            pass
-        chooser.connect(
-            "response", self._extra_folder_chosen, idx, path_lbl, title_lbl,
-        )
-        chooser.show()
 
-    def _extra_folder_chosen(
-        self, chooser: Gtk.FileChooserNative, response: int,
-        idx: int, path_lbl: Gtk.Label, title_lbl: Gtk.Label,
-    ) -> None:
-        try:
-            if response != Gtk.ResponseType.ACCEPT:
+        dialog = Adw.AlertDialog(
+            heading=self._("Edit folder"),
+            body=self._("The name appears as the entry label in the gallery navigation."),
+        )
+        # Two stacked entry rows for Name + Path.
+        name_row = Adw.EntryRow(title=self._("Name"))
+        name_row.set_text(current_name)
+        path_row = Adw.EntryRow(title=self._("Path"))
+        path_row.set_text(current_path)
+        path_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
+        # "Browse" button as suffix on the path row → file picker.
+        browse = Gtk.Button.new_from_icon_name("folder-open-symbolic")
+        browse.set_valign(Gtk.Align.CENTER)
+        browse.add_css_class("flat")
+
+        def _open_picker(_btn):
+            chooser = Gtk.FileChooserNative(
+                title=self._("Choose folder"), transient_for=self,
+                action=Gtk.FileChooserAction.SELECT_FOLDER,
+            )
+            try:
+                home = Gio.File.new_for_path(str(Path.home()))
+                chooser.set_current_folder(home)
+            except Exception:
+                pass
+
+            def _picked(c, response):
+                try:
+                    if response == Gtk.ResponseType.ACCEPT:
+                        f = c.get_file()
+                        if f is not None:
+                            picked_path = f.get_path() or ""
+                            if picked_path:
+                                path_row.set_text(picked_path)
+                finally:
+                    c.destroy()
+
+            chooser.connect("response", _picked)
+            chooser.show()
+
+        browse.connect("clicked", _open_picker)
+        path_row.add_suffix(browse)
+
+        group = Adw.PreferencesGroup()
+        group.add(name_row)
+        group.add(path_row)
+        dialog.set_extra_child(group)
+
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("save", self._("Save"))
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+
+        def _done(_d, response):
+            if response != "save":
                 return
-            file = chooser.get_file()
-            if file is None:
-                return
-            path = file.get_path() or ""
-            if not path or idx < 0 or idx >= len(self.settings.extra_locations):
-                return
-            self.settings.extra_locations[idx] = path
-            self.parent_window.settings.extra_locations[idx] = path
+            new_name = name_row.get_text().strip()
+            new_path = path_row.get_text().strip() or current_path
+            # Apply
+            self.settings.extra_locations[idx] = new_path
+            self.parent_window.settings.extra_locations[idx] = new_path
+            # Pad names list to match index length.
+            while len(self.settings.extra_location_names) <= idx:
+                self.settings.extra_location_names.append("")
+            while len(self.parent_window.settings.extra_location_names) <= idx:
+                self.parent_window.settings.extra_location_names.append("")
+            self.settings.extra_location_names[idx] = new_name
+            self.parent_window.settings.extra_location_names[idx] = new_name
             self.parent_window.settings.save()
-            path_lbl.set_label(path)
-            title_lbl.set_label(self._(Path(path).name or path))
+            # Refresh the row (title falls back to basename if name is empty)
+            display_title = new_name or Path(new_path).name or new_path
+            title_lbl.set_label(display_title)
+            path_lbl.set_label(new_path)
             self.parent_window._rebuild_categories()
             self.parent_window.refresh(scan=True)
-        finally:
-            chooser.destroy()
+
+        dialog.connect("response", _done)
+        dialog.present(self)
 
 
 
