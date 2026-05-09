@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -97,6 +98,10 @@ class GalleryGrid(Gtk.Overlay):
 
         self._cols = 4
         self._building_row: list[MediaRow] = []
+
+        # Stamped by the long-press handler; the click handler on the same
+        # button uses it to ignore the release that follows a long-press.
+        self._last_long_press_at = 0.0
 
         self.row_store = Gio.ListStore(item_type=GalleryRow)
         factory = Gtk.SignalListItemFactory()
@@ -195,6 +200,34 @@ class GalleryGrid(Gtk.Overlay):
                     new_tiles = gallery_row.tiles[:]
                     updated = dataclasses.replace(row.media_item, thumb_path=thumb_path)
                     new_tiles[j] = MediaRow.from_media(updated, row.selected)
+                    self.row_store.splice(pos, 1, [GalleryRow.from_tiles(new_tiles)])
+                    return True
+        return False
+
+    def update_tile_selected(self, path: str, selected: bool) -> bool:
+        """Flip the selected flag on a single tile in place.
+
+        Surgical replacement of one row in the row_store — cheap (no DB
+        requery, scroll position preserved) and the natural shape for
+        toggling selection. Returns True if the path was visible and
+        updated, False if the tile is not in the currently materialised
+        rows (caller should fall back to a full re-render so the
+        eventually-bound tile picks up the right state)."""
+        n = self.row_store.get_n_items()
+        for pos in range(n):
+            gallery_row = self.row_store.get_item(pos)
+            if gallery_row.is_header:
+                continue
+            for j, tile in enumerate(gallery_row.tiles):
+                if (
+                    not tile.is_folder
+                    and tile.media_item is not None
+                    and tile.media_item.path == path
+                ):
+                    if tile.selected == selected:
+                        return True
+                    new_tiles = gallery_row.tiles[:]
+                    new_tiles[j] = MediaRow.from_media(tile.media_item, selected)
                     self.row_store.splice(pos, 1, [GalleryRow.from_tiles(new_tiles)])
                     return True
         return False
@@ -488,6 +521,11 @@ class GalleryGrid(Gtk.Overlay):
         row = button._current_item
         if row is None:
             return
+        # Long-press release fires the button's "clicked" signal too; without
+        # this guard the long-press would enter selection mode and the same
+        # release-event would immediately toggle it back off.
+        if time.monotonic() - self._last_long_press_at < 0.4:
+            return
         if self.owner._selection_mode:
             if not row.is_folder and row.media_item is not None:
                 self.owner._toggle_selection(row.media_item.path)
@@ -514,7 +552,7 @@ class GalleryGrid(Gtk.Overlay):
 
     def _on_tile_long_press(
         self,
-        _gesture,
+        gesture: Gtk.GestureLongPress,
         _x,
         _y,
         list_item: Gtk.ListItem,
@@ -523,6 +561,13 @@ class GalleryGrid(Gtk.Overlay):
         row = self._get_tile_item(list_item, tile_index)
         if row is None or row.is_folder or row.media_item is None:
             return
+        # Stamp the timestamp BEFORE entering selection mode so the click
+        # handler on the same release-event short-circuits early.
+        self._last_long_press_at = time.monotonic()
+        # Claim the gesture sequence so the button's built-in click gesture
+        # doesn't also fire on release. CLAIMED is the GTK4-native way to
+        # tell sibling gestures "I handled this, leave it alone".
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
         if not self.owner._selection_mode:
             self.owner._enter_selection_mode()
         self.owner._toggle_selection(row.media_item.path)

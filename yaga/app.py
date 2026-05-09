@@ -127,6 +127,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.category_buttons: dict[str, Gtk.ToggleButton] = {}
         self._selection_mode: bool = False
         self._selected_paths: set[str] = set()
+        # While a bulk delete/move worker is in flight: re-entry guard so
+        # double-clicks on the toolbar buttons don't kick off a second pass.
+        self._sel_busy: bool = False
         self._nc_spinner: Gtk.Spinner | None = None
         self._nc_broken_img: Gtk.Image | None = None
         # On-demand NC thumbnail loader (used by gallery_grid when binding tiles)
@@ -1473,15 +1476,26 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._render()
 
     def _toggle_selection(self, path: str) -> None:
+        if self._sel_busy:
+            return
         if path in self._selected_paths:
             self._selected_paths.discard(path)
+            new_selected = False
         else:
             self._selected_paths.add(path)
+            new_selected = True
         if not self._selected_paths:
+            # Clearing the last item exits selection mode (and full-renders
+            # to remove every checkbox).
             self._exit_selection_mode()
             return
         self._update_sel_title()
-        self._render()
+        # Surgical update — flips the checkbox on this one tile only, no DB
+        # requery, no scroll jump. Falls back to a full render when the tile
+        # isn't in the materialised window (e.g. a path that hasn't been
+        # lazy-loaded yet).
+        if not self.gallery_grid.update_tile_selected(path, new_selected):
+            self._render()
 
     def _update_sel_title(self) -> None:
         n = len(self._selected_paths)
@@ -1489,6 +1503,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_title.set_subtitle("")
 
     def _sel_delete_selected(self) -> None:
+        if self._sel_busy:
+            return
         paths = list(self._selected_paths)
         n = len(paths)
         if n == 0:
@@ -1507,35 +1523,48 @@ class GalleryWindow(Adw.ApplicationWindow):
         dialog.present()
 
     def _on_sel_delete_confirmed(self, _dialog, response: str, paths: list[str]) -> None:
-        if response != "delete":
+        if response != "delete" or self._sel_busy:
             return
-        errors: list[tuple[str, Exception]] = []
-        for path in paths:
-            try:
-                Gio.File.new_for_path(path).trash(None)
-                self.database.delete_path(path, self.category)
-            except GLib.Error as e:
-                errors.append((path, e))
-            except Exception as e:
-                errors.append((path, e))
+        n = len(paths)
+        category = self.category
+        self._set_sel_busy(True, self._("Deleting %d items…") % n)
+
+        def _worker() -> None:
+            errors: list[tuple[str, Exception]] = []
+            for path in paths:
+                try:
+                    Gio.File.new_for_path(path).trash(None)
+                    self.database.delete_path(path, category)
+                except GLib.Error as e:
+                    errors.append((path, e))
+                except Exception as e:
+                    errors.append((path, e))
+            GLib.idle_add(self._on_sel_delete_done, n, errors)
+
+        threading.Thread(target=_worker, daemon=True, name="sel-delete").start()
+
+    def _on_sel_delete_done(self, total: int, errors: list[tuple[str, Exception]]) -> bool:
+        self._set_sel_busy(False, "")
         self._exit_selection_mode()
+        succeeded = total - len(errors)
         if not errors:
-            self._set_status(self._("Deleted %d items") % len(paths))
-        elif len(errors) == len(paths):
+            self._set_status(self._("Deleted %d items") % total)
+        elif len(errors) == total:
             self._show_error_dialog(
                 self._("Delete failed"),
                 self._("Could not delete all files. Check file permissions or disk state."),
-                f"{len(errors)}/{len(paths)} items"
+                f"{len(errors)}/{total} items",
             )
         else:
             self._set_status(
                 self._("Deleted %d/%d items (%d failed)") % (
-                    len(paths) - len(errors), len(paths), len(errors),
+                    succeeded, total, len(errors),
                 )
             )
+        return GLib.SOURCE_REMOVE
 
     def _sel_move_selected(self) -> None:
-        if not self._selected_paths:
+        if self._sel_busy or not self._selected_paths:
             return
         chooser = Gtk.FileChooserNative(
             title=self._("Choose folder"), transient_for=self,
@@ -1545,33 +1574,65 @@ class GalleryWindow(Adw.ApplicationWindow):
         chooser.show()
 
     def _on_sel_move_response(self, chooser: Gtk.FileChooserNative, response: int) -> None:
-        if response == Gtk.ResponseType.ACCEPT:
-            folder = chooser.get_file().get_path()
+        if response != Gtk.ResponseType.ACCEPT:
+            chooser.destroy()
+            return
+        folder = chooser.get_file().get_path()
+        chooser.destroy()
+        # Snapshot the selection BEFORE the worker starts and BEFORE we exit
+        # selection mode at completion — the previous version computed the
+        # success count from self._selected_paths after _exit_selection_mode
+        # had cleared it, so the status always read "Moved 0 items".
+        paths = list(self._selected_paths)
+        if not paths:
+            return
+        n = len(paths)
+        category = self.category
+        self._set_sel_busy(True, self._("Moving %d items…") % n)
+
+        def _worker() -> None:
             errors: list[tuple[str, Exception]] = []
-            for path in list(self._selected_paths):
+            for path in paths:
                 try:
                     target = Path(folder) / Path(path).name
                     Path(path).rename(target)
-                    self.database.delete_path(path, self.category)
+                    self.database.delete_path(path, category)
                 except (OSError, PermissionError) as e:
                     errors.append((path, e))
-            self._exit_selection_mode()
-            self.refresh(scan=True)
-            if not errors:
-                self._set_status(self._("Moved %d items") % len(self._selected_paths))
-            elif len(errors) == len(self._selected_paths):
-                self._show_error_dialog(
-                    self._("Move failed"),
-                    self._("Could not move files. Check file permissions and disk space."),
-                    f"{len(errors)} file(s) failed"
-                )
-            else:
-                self._set_status(
-                    self._("Moved %d items (%d failed)") % (
-                        len(self._selected_paths) - len(errors), len(errors),
-                    )
-                )
-        chooser.destroy()
+            GLib.idle_add(self._on_sel_move_done, n, errors)
+
+        threading.Thread(target=_worker, daemon=True, name="sel-move").start()
+
+    def _on_sel_move_done(self, total: int, errors: list[tuple[str, Exception]]) -> bool:
+        self._set_sel_busy(False, "")
+        self._exit_selection_mode()
+        succeeded = total - len(errors)
+        # Trigger a rescan so the destination shows up if the user navigates
+        # there. Same pattern as the single-item move path.
+        self.refresh(scan=True)
+        if not errors:
+            self._set_status(self._("Moved %d items") % total)
+        elif len(errors) == total:
+            self._show_error_dialog(
+                self._("Move failed"),
+                self._("Could not move files. Check file permissions and disk space."),
+                f"{len(errors)} file(s) failed",
+            )
+        else:
+            self._set_status(
+                self._("Moved %d items (%d failed)") % (succeeded, len(errors))
+            )
+        return GLib.SOURCE_REMOVE
+
+    def _set_sel_busy(self, busy: bool, status: str) -> None:
+        """Toggle the in-flight state for bulk delete/move. Disables the
+        toolbar buttons while a worker thread runs and surfaces a status
+        line so the user sees the operation is making progress."""
+        self._sel_busy = busy
+        for btn in (self._sel_cancel_btn, self._sel_delete_btn, self._sel_move_btn):
+            btn.set_sensitive(not busy)
+        if status:
+            self._set_status(status)
 
     def _del_item(self, item: MediaItem) -> None:
         try:
