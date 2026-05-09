@@ -174,7 +174,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._editor: EditorView | None = None
         self.toolbar.add_top_bar(header)
 
-        # Date row below header (modern: "1 Mai" large, "2026" smaller and dim)
+        # Date overlay (modern: "1 Mai" large, "2026" smaller and dim).
+        # Floats above the image — does not push it down.
         self.date_day_label = Gtk.Label()
         self.date_day_label.add_css_class("viewer-date-day")
         self.date_year_label = Gtk.Label()
@@ -189,12 +190,21 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_revealer.set_transition_duration(150)
         self.date_revealer.set_child(date_box)
         self.date_revealer.set_reveal_child(False)
-        self.toolbar.add_top_bar(self.date_revealer)
+        self.date_revealer.set_halign(Gtk.Align.CENTER)
+        self.date_revealer.set_valign(Gtk.Align.START)
+        # Don't catch input events — clicks/swipes pass through to the image.
+        self.date_revealer.set_can_target(False)
 
         self.stack = Gtk.Stack()
         self.stack.set_hexpand(True)
         self.stack.set_vexpand(True)
-        self.toolbar.set_content(self.stack)
+
+        # Wrap stack + date in an overlay so the date floats over the image
+        # instead of stealing vertical space from the toolbar layout.
+        self._content_overlay = Gtk.Overlay()
+        self._content_overlay.set_child(self.stack)
+        self._content_overlay.add_overlay(self.date_revealer)
+        self.toolbar.set_content(self._content_overlay)
 
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)

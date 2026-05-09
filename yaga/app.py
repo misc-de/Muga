@@ -705,12 +705,13 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.gallery_grid.append_media(item, item.path in self._selected_paths)
 
     def _month_header_markup(self, dt: datetime) -> str:
-        # Two-line month/year header (locale-aware month name) with smaller dim year.
+        # Two-line month/year header (locale-aware month name); the year is sized
+        # relative to the surrounding label so it scales with the .date-header CSS.
         month = GLib.markup_escape_text(dt.strftime("%B"))
         year = GLib.markup_escape_text(dt.strftime("%Y"))
         return (
             f"<span weight='600'>{month}</span>\n"
-            f"<span size='small' alpha='65%'>{year}</span>"
+            f"<span size='65%' alpha='65%'>{year}</span>"
         )
 
     def _visible_child_folder_for_item(self, item_folder: str) -> str | None:
@@ -1500,10 +1501,11 @@ class GalleryWindow(Adw.ApplicationWindow):
                 padding: 1px;
             }
             .date-header {
-                min-height: 46px;
-                padding: 6px 4px;
+                min-height: 120px;
+                padding: 16px 8px;
                 background: rgba(0,0,0,0.45);
                 color: white;
+                font-size: 32px;
             }
             .folder-label {
                 background: rgba(0,0,0,0.55);
@@ -1527,18 +1529,22 @@ class GalleryWindow(Adw.ApplicationWindow):
                 color: @accent_fg_color;
             }
             .viewer-date {
-                padding: 24px 0 6px 0;
-                background: alpha(@window_bg_color, 0.5);
+                /* Floating pill at the top of the viewer; readable over any image */
+                padding: 12px 24px 14px 24px;
+                margin-top: 12px;
+                background: rgba(0,0,0,0.55);
+                color: white;
+                border-radius: 18px;
             }
             .viewer-date-day {
-                font-size: 15px;
+                font-size: 32px;
                 font-weight: 500;
-                opacity: 0.85;
+                opacity: 0.95;
             }
             .viewer-date-year {
-                font-size: 12px;
-                opacity: 0.55;
-                margin-top: -2px;
+                font-size: 22px;
+                opacity: 0.65;
+                margin-top: -4px;
             }
             """
             + rotation_css
