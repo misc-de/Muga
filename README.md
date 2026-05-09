@@ -1,4 +1,3 @@
-<img width="720" height="1600" alt="Screenshot from 2026-05-09 17:51:42" src="https://github.com/user-attachments/assets/3d19234c-cd96-4236-ba41-1fd485de1611" />
 # Yaga — Photo Gallery
 
 A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and libadwaita.
@@ -10,10 +9,12 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 ## Screenshots
 <img width="300" alt="Screenshot from 2026-05-09 17:26:52" src="https://github.com/user-attachments/assets/0fc0b6bc-4d4f-43f4-816c-42ae1efdb2da" />
 <img width="300" alt="Screenshot from 2026-05-09 17:46:18" src="https://github.com/user-attachments/assets/ed12b04a-d63c-4dd5-bef7-7900b62255dc" />
-<img width="300" alt="Screenshot from 2026-05-09 17:32:20" src="https://github.com/user-attachments/assets/e09fe9e7-311e-4802-88e3-2221d0b8ae04" />
-<img width="300" alt="Screenshot from 2026-05-09 17:32:29" src="https://github.com/user-attachments/assets/484a1886-1b38-454e-a593-53b10e31f3a1" />
-<img width="300" alt="Screenshot from 2026-05-09 17:32:36" src="https://github.com/user-attachments/assets/0c34fd96-ef2c-4655-abc0-79b93a00bd5d" />
 <img width="300" alt="Screenshot from 2026-05-09 17:51:42" src="https://github.com/user-attachments/assets/dbb491da-fe3a-4009-b95a-0cef134a45a0" />
+<img width="300" alt="Screenshot from 2026-05-09 18:02:23" src="https://github.com/user-attachments/assets/00bef21e-5293-4977-9aa0-4c16869ed71a" />
+<img width="300" alt="Screenshot from 2026-05-09 18:02:04" src="https://github.com/user-attachments/assets/d25a1174-5056-4231-99f4-03484f222796" />
+<img width="300" alt="Screenshot from 2026-05-09 17:32:20" src="https://github.com/user-attachments/assets/e09fe9e7-311e-4802-88e3-2221d0b8ae04" />
+<img width="300" alt="Screenshot from 2026-05-09 17:58:31" src="https://github.com/user-attachments/assets/8725428e-2287-44f6-b29b-a83773c319a3" />
+<img width="300" alt="Screenshot from 2026-05-09 17:32:36" src="https://github.com/user-attachments/assets/0c34fd96-ef2c-4655-abc0-79b93a00bd5d" />
 
 ---
 
