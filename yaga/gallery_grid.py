@@ -444,6 +444,10 @@ class GalleryGrid(Gtk.Overlay):
                     Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
                 )
             )
+            # Fetch the NC thumbnail in the background; gallery is updated when it arrives.
+            requester = getattr(self.owner, "request_nc_thumbnail", None)
+            if requester is not None:
+                requester(item.path)
         else:
             single_pic.set_filename(item.path)
         badge.set_visible(item.is_video and not self.owner._selection_mode)

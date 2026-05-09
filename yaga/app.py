@@ -124,6 +124,13 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._nc_broken_img: Gtk.Image | None = None
         self._nc_folder_sync_generation = 0
 
+        # On-demand NC thumbnail loader (used by gallery_grid when binding tiles)
+        self._nc_thumb_pending: set[str] = set()
+        self._nc_thumb_lock = threading.Lock()
+        self._nc_thumb_queue: list[str] = []
+        self._nc_thumb_event = threading.Event()
+        self._nc_thumb_worker_started = False
+
         # Pagination for large galleries
         self._page_size: int = 100  # Load 100 items per page
         self._current_offset: int = 0
@@ -149,6 +156,14 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _set_status(self, text: str) -> None:
         self.status.set_text(text)
         self.status.set_visible(bool(text))
+
+    def _should_merge_nc(self) -> bool:
+        """True when NC items should be folded into the current Pictures view."""
+        return (
+            self.category == "pictures"
+            and self.settings.nextcloud_enabled
+            and getattr(self.settings, "nextcloud_show_in_pictures", False)
+        )
 
     def _set_empty_state(self, visible: bool) -> None:
         """Pick an appropriate empty-state label for the current view."""
@@ -457,8 +472,13 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _scan_thread(self, nc_folder: str | None, scope: str | None = None) -> None:
         only_current = scope == "current"
-        # Only touch NC for full scans or when NC is the active category
-        need_nc = (not only_current) or self.category == "nextcloud"
+        # Touch NC for full scans, when NC is the active category, or when the
+        # current Pictures view is configured to fold in Nextcloud entries.
+        need_nc = (
+            (not only_current)
+            or self.category == "nextcloud"
+            or self._should_merge_nc()
+        )
         try:
             nc_client = None
             if need_nc and self.settings.nextcloud_url and self.settings.nextcloud_user:
@@ -558,19 +578,23 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._render_date_groups(ascending=(sort_mode == "date_asc"))
         else:
             # For large galleries, use pagination to reduce memory and improve responsiveness
-            self._total_count = self.database.count_media(self.category, self.current_folder)
-            
+            include_nc = self._should_merge_nc()
+            self._total_count = self.database.count_media(
+                self.category, self.current_folder, include_nc=include_nc,
+            )
+
             # If gallery has > 300 items, load only first page; otherwise load all
             if self._total_count > 300:
                 self.current_items = self.database.list_media_paginated(
-                    self.category, sort_mode, self.current_folder, self._page_size, 0
+                    self.category, sort_mode, self.current_folder,
+                    self._page_size, 0, include_nc=include_nc,
                 )
                 self._current_offset = self._page_size
                 self._has_more_items = self._total_count > self._page_size
                 LOGGER.debug("Loaded first page (%d items) of %d total", len(self.current_items), self._total_count)
             else:
                 self.current_items = self.database.list_media(
-                    self.category, sort_mode, self.current_folder
+                    self.category, sort_mode, self.current_folder, include_nc=include_nc,
                 )
                 self._has_more_items = False
             
@@ -608,7 +632,8 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _render_date_groups(self, ascending: bool = False) -> None:
         order = "oldest" if ascending else "newest"
         self.current_items = self.database.list_media(
-            self.category, order, self.current_folder
+            self.category, order, self.current_folder,
+            include_nc=self._should_merge_nc(),
         )
         last_key = None
         for item in self.current_items:
@@ -670,7 +695,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         
         sort_mode = self.settings.get_sort_mode(self.category, self.current_folder)
         next_items = self.database.list_media_paginated(
-            self.category, sort_mode, self.current_folder, self._page_size, self._current_offset
+            self.category, sort_mode, self.current_folder, self._page_size, self._current_offset,
+            include_nc=self._should_merge_nc(),
         )
         
         if not next_items:
@@ -816,6 +842,72 @@ class GalleryWindow(Adw.ApplicationWindow):
         else:
             self.refresh(scan=True, scope="current")
         return GLib.SOURCE_REMOVE
+
+    # ── On-demand Nextcloud thumbnail loader ──────────────────────────
+    def request_nc_thumbnail(self, item_path: str) -> None:
+        """Called by the gallery grid when a NC tile without a thumbnail becomes
+        visible. Queues a single download per path; results update the gallery
+        via _update_item_thumb on the main thread."""
+        with self._nc_thumb_lock:
+            if item_path in self._nc_thumb_pending:
+                return
+            self._nc_thumb_pending.add(item_path)
+            self._nc_thumb_queue.append(item_path)
+            if not self._nc_thumb_worker_started:
+                self._nc_thumb_worker_started = True
+                threading.Thread(target=self._nc_thumb_worker, daemon=True).start()
+        self._nc_thumb_event.set()
+
+    def _nc_thumb_worker(self) -> None:
+        from .nextcloud import NextcloudClient, dav_path_from_nc
+        pwd = self.settings.load_app_password()
+        if not pwd:
+            with self._nc_thumb_lock:
+                self._nc_thumb_pending.clear()
+                self._nc_thumb_queue.clear()
+                self._nc_thumb_worker_started = False
+            return
+        try:
+            client = NextcloudClient(
+                self.settings.nextcloud_url, self.settings.nextcloud_user, pwd,
+            )
+        except Exception as exc:
+            LOGGER.exception("NC thumb worker init failed: %s", exc)
+            with self._nc_thumb_lock:
+                self._nc_thumb_pending.clear()
+                self._nc_thumb_queue.clear()
+                self._nc_thumb_worker_started = False
+            return
+
+        while True:
+            with self._nc_thumb_lock:
+                if not self._nc_thumb_queue:
+                    self._nc_thumb_event.clear()
+                    path = None
+                else:
+                    # LIFO: most recently bound tile = most likely on screen now.
+                    path = self._nc_thumb_queue.pop()
+            if path is None:
+                # Idle wait; let the worker exit if nothing arrives for a while.
+                if not self._nc_thumb_event.wait(timeout=20.0):
+                    with self._nc_thumb_lock:
+                        if not self._nc_thumb_queue:
+                            self._nc_thumb_worker_started = False
+                            return
+                continue
+            try:
+                dav = dav_path_from_nc(path)
+                thumb = client.ensure_thumbnail(dav)
+            except Exception:
+                LOGGER.debug("NC thumb fetch failed for %s", path, exc_info=True)
+                thumb = None
+            finally:
+                with self._nc_thumb_lock:
+                    self._nc_thumb_pending.discard(path)
+            if thumb:
+                self.database.set_thumb(path, thumb, "nextcloud")
+                self.database.commit()
+                GLib.idle_add(self._update_item_thumb, path, thumb)
 
     def _open_folder(self, _button, folder: str) -> None:
         self.current_folder = folder

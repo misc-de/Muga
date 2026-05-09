@@ -143,6 +143,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         thumb_row.connect("notify::active", self._nc_thumb_only_changed)
         perf.add(thumb_row)
 
+        merge_row = Adw.SwitchRow(
+            title=self._("Show in Pictures"),
+            subtitle=self._("Merge Nextcloud items into the Pictures view (thumbnails load on demand)"),
+        )
+        merge_row.set_active(self.settings.nextcloud_show_in_pictures)
+        merge_row.connect("notify::active", self._nc_show_in_pictures_changed)
+        perf.add(merge_row)
+
         # ── Status + actions ──
         actions = Adw.PreferencesGroup()
         page.add(actions)
@@ -315,6 +323,10 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _nc_thumb_only_changed(self, row: Adw.SwitchRow, _param) -> None:
         self.settings.nextcloud_thumbnail_only = row.get_active()
+        self.settings.save()
+
+    def _nc_show_in_pictures_changed(self, row: Adw.SwitchRow, _param) -> None:
+        self.settings.nextcloud_show_in_pictures = row.get_active()
         self.settings.save()
 
     def _folder_row(self, attr: str, title: str) -> Adw.ActionRow:

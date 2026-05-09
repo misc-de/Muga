@@ -51,6 +51,7 @@ class Settings:
     nextcloud_photos_path: str = "Photos"
     nextcloud_enabled: bool = False  # set to True after successful connect
     nextcloud_thumbnail_only: bool = True  # skip full-file download during scan
+    nextcloud_show_in_pictures: bool = False  # merge NC items into the Pictures view
 
     @classmethod
     def load(cls) -> "Settings":

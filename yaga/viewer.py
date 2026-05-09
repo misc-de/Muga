@@ -570,14 +570,29 @@ class ViewerWindow(Adw.ApplicationWindow):
             pass
 
     def _do_previous(self) -> None:
-        if self.items:
-            self.index = (self.index - 1) % len(self.items)
-            self.show_item()
+        self._step(-1)
 
     def _do_next(self) -> None:
-        if self.items:
-            self.index = (self.index + 1) % len(self.items)
-            self.show_item()
+        self._step(1)
+
+    def _step(self, direction: int) -> None:
+        """Advance by *direction* (+1 / -1), skipping videos when the current
+        item is an image so picture browsing is not interrupted by video clips."""
+        if not self.items:
+            return
+        n = len(self.items)
+        skip_videos = not self.items[self.index].is_video
+        new_index = (self.index + direction) % n
+        if skip_videos:
+            for _ in range(n):
+                if not self.items[new_index].is_video:
+                    break
+                new_index = (new_index + direction) % n
+            else:
+                # Only videos in the list — keep current item.
+                return
+        self.index = new_index
+        self.show_item()
 
     def previous(self) -> None:
         self._check_rotation_before_action(self._do_previous)
