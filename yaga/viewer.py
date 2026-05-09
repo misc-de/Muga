@@ -211,7 +211,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.stack.add_controller(self.zoom_gesture)
         self.rotate_gesture = Gtk.GestureRotate()
         self._rotate_gesture_total: float = 0.0
-        self._rotate_gesture_committed_steps: int = 0
+        self._rotate_active: bool = False
+        self._rotate_preview_provider = Gtk.CssProvider()
+        self._rotate_preview_provider_added = False
         self.rotate_gesture.connect("begin", self._on_rotate_gesture_begin)
         self.rotate_gesture.connect("angle-changed", self._on_rotate_gesture_angle_changed)
         self.rotate_gesture.connect("end", self._on_rotate_gesture_end)
@@ -436,26 +438,59 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_year_label.set_label(dt.strftime("%Y"))
         self.date_revealer.set_reveal_child(not self._current_is_video)
 
-    # ── Rotation gesture (two-finger rotate, snap to 90° steps) ───────
+    # ── Rotation gesture (two-finger rotate, snap to 90° steps on release) ─
+    def _ensure_rotate_preview_provider(self) -> None:
+        if self._rotate_preview_provider_added:
+            return
+        display = self.get_display()
+        if display is None:
+            return
+        Gtk.StyleContext.add_provider_for_display(
+            display,
+            self._rotate_preview_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_USER,
+        )
+        self._rotate_preview_provider_added = True
+
+    def _set_rotate_preview(self, deg: float | None) -> None:
+        if self.zoom_view is None:
+            return
+        if deg is None:
+            self._rotate_preview_provider.load_from_data(b"")
+            self.zoom_view.remove_css_class("viewer-rotate-preview")
+            return
+        self._ensure_rotate_preview_provider()
+        css = f".viewer-rotate-preview {{ transform: rotate({deg:.2f}deg); }}"
+        self._rotate_preview_provider.load_from_data(css.encode())
+        self.zoom_view.add_css_class("viewer-rotate-preview")
+
     def _on_rotate_gesture_begin(self, _gesture, _seq) -> None:
+        if self._current_display_path is None:
+            return
         self._rotate_gesture_total = 0.0
-        self._rotate_gesture_committed_steps = 0
+        self._rotate_active = True
 
     def _on_rotate_gesture_angle_changed(self, _gesture, angle, _angle_delta) -> None:
-        # `angle` is the cumulative rotation in radians since gesture start.
+        if not self._rotate_active:
+            return
         self._rotate_gesture_total = angle
-        # Live-snap: as soon as the user crosses ±45°, ±135°, ... commit a 90° step
-        # so the rotation feels responsive instead of waiting for finger-up.
-        deg = math.degrees(angle)
-        target_steps = int(round(deg / 90))
-        delta_steps = target_steps - self._rotate_gesture_committed_steps
-        if delta_steps != 0:
-            self._rotate_gesture_committed_steps = target_steps
-            self._rotate_by_step(delta_steps)
+        self._set_rotate_preview(math.degrees(angle))
 
     def _on_rotate_gesture_end(self, _gesture, _seq) -> None:
+        if not self._rotate_active:
+            return
+        self._rotate_active = False
+        deg = math.degrees(self._rotate_gesture_total)
         self._rotate_gesture_total = 0.0
-        self._rotate_gesture_committed_steps = 0
+        self._set_rotate_preview(None)
+        # Require 60° of cumulative twist to commit a 90° step (avoids accidental
+        # rotation when the user actually meant to zoom). Above 60° the gesture
+        # snaps to the nearest 90° multiple.
+        if abs(deg) < 60:
+            return
+        steps = int(round(deg / 90))
+        if steps != 0:
+            self._rotate_by_step(steps)
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -602,6 +637,11 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self._zoom_anchor = (bx, by, (hadj.get_value() + bx) / s, (vadj.get_value() + by) / s)
 
     def _on_zoom_scale_changed(self, _gesture: Gtk.GestureZoom, scale_delta: float) -> None:
+        # Avoid fighting the rotate gesture: while the user is twisting two fingers
+        # we ignore concurrent scale changes so the image doesn't flicker between
+        # zoom and rotate modes.
+        if self._rotate_active:
+            return
         self._set_zoom(self.zoom_start_scale * scale_delta)
         anchor = getattr(self, "_zoom_anchor", None)
         if self.zoom_scroller and anchor and self.zoom_scale > 1.01:
