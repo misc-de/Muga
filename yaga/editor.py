@@ -607,32 +607,27 @@ class EditorView(Gtk.Box):
         self._nav_box.add_css_class("toolbar")
 
         self._nav_btns: dict[str, Gtk.ToggleButton] = {}
-        # Labels that get hidden on landscape (icon-only ~50px strip). Iconless
-        # entries stay visible regardless of orientation, otherwise they would
-        # collapse into a blank button.
+        # Labels we hide on landscape (icon-only, ~50px strip).
         self._nav_labels: list[Gtk.Label] = []
         for key, icon, label in [
             ("filter",   "image-filter-symbolic",       self._("Filter")),
             ("adjust",   "display-brightness-symbolic", self._("Adjust")),
             ("effects",  "image-adjust-symbolic",       self._("Effects")),
             ("sticker",  "face-smile-symbolic",         self._("Sticker")),
-            # Crop intentionally has no icon — text-only by user request.
-            ("crop",     None,                          self._("Crop")),
+            ("crop",     "edit-cut-symbolic",           self._("Crop")),
         ]:
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             inner.set_margin_top(6)
             inner.set_margin_bottom(6)
             inner.set_margin_start(6)
             inner.set_margin_end(6)
-            if icon is not None:
-                img = Gtk.Image.new_from_icon_name(icon)
-                img.set_pixel_size(24)
-                inner.append(img)
+            img = Gtk.Image.new_from_icon_name(icon)
+            img.set_pixel_size(24)
+            inner.append(img)
             lbl = Gtk.Label(label=label)
             lbl.add_css_class("caption")
             inner.append(lbl)
-            if icon is not None:
-                self._nav_labels.append(lbl)
+            self._nav_labels.append(lbl)
             btn = Gtk.ToggleButton()
             btn.add_css_class("flat")
             btn.set_child(inner)
@@ -1060,7 +1055,7 @@ class EditorView(Gtk.Box):
         box.set_halign(Gtk.Align.CENTER)
         box.set_margin_top(8)
         box.set_margin_bottom(8)
-        self._crop_btn = Gtk.ToggleButton(label="✂  Crop")
+        self._crop_btn = Gtk.ToggleButton(label=self._("Crop"))
         self._crop_btn.add_css_class("flat")
         self._crop_btn.connect("toggled", self._on_crop_toggled)
         self._crop_apply_btn = Gtk.Button(label=self._("Apply"))
