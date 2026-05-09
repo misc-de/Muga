@@ -151,20 +151,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.cancel_edit_button.set_visible(False)
         header.pack_start(self.cancel_edit_button)
 
-        self.undo_edit_button = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
-        self.undo_edit_button.set_tooltip_text(parent._("Undo"))
-        self.undo_edit_button.connect("clicked", self._undo_edit)
-        self.undo_edit_button.set_visible(False)
-        self.undo_edit_button.set_sensitive(False)
-        header.pack_start(self.undo_edit_button)
-
-        self.redo_edit_button = Gtk.Button.new_from_icon_name("edit-redo-symbolic")
-        self.redo_edit_button.set_tooltip_text(parent._("Redo"))
-        self.redo_edit_button.connect("clicked", self._redo_edit)
-        self.redo_edit_button.set_visible(False)
-        self.redo_edit_button.set_sensitive(False)
-        header.pack_start(self.redo_edit_button)
-
         self.save_edit_button = Gtk.Button.new_with_label(parent._("Save"))
         self.save_edit_button.add_css_class("suggested-action")
         self.save_edit_button.connect("clicked", self._save_edit)
@@ -933,8 +919,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.rotate_button.set_visible(False)
         self.cancel_edit_button.set_visible(True)
         self.save_edit_button.set_visible(True)
-        self.undo_edit_button.set_visible(True)
-        self.redo_edit_button.set_visible(True)
         # In landscape, fold the filename + date into the title bar so the
         # editor gets every available pixel. In portrait the title bar would
         # truncate aggressively, so we instead float the filename at the *top*
@@ -978,7 +962,6 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self.stack.add_child(self._editor)
         self.stack.set_visible_child(self._editor)
-        self._update_edit_buttons()  # Update undo/redo button states
 
     def _exit_edit_mode(self, _button=None) -> None:
         self._editor = None
@@ -988,8 +971,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.close_button.set_visible(True)
         self.cancel_edit_button.set_visible(False)
         self.save_edit_button.set_visible(False)
-        self.undo_edit_button.set_visible(False)
-        self.redo_edit_button.set_visible(False)
         # Restore the filename pill back to its default bottom position; the
         # editor may have moved it to the top in portrait mode.
         self.filename_revealer.set_valign(Gtk.Align.END)
@@ -1027,27 +1008,6 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self.parent_window.refresh(scan=True)
         self._exit_edit_mode()
-
-    def _undo_edit(self, _button: Gtk.Button) -> None:
-        """Undo last edit in the editor."""
-        if self._editor is None:
-            return
-        self._editor.undo()
-        self._update_edit_buttons()
-
-    def _redo_edit(self, _button: Gtk.Button) -> None:
-        """Redo last undone edit in the editor."""
-        if self._editor is None:
-            return
-        self._editor.redo()
-        self._update_edit_buttons()
-
-    def _update_edit_buttons(self) -> None:
-        """Update undo/redo button sensitivity based on editor state."""
-        if self._editor is None:
-            return
-        self.undo_edit_button.set_sensitive(self._editor.can_undo())
-        self.redo_edit_button.set_sensitive(self._editor.can_redo())
 
     def _upload_to_nextcloud(self, local_edited_path: str) -> None:
         """Upload edited image back to Nextcloud."""
