@@ -288,6 +288,23 @@ class Database:
                 break
         return "(" + " OR ".join(clauses) + ")", args
 
+    def search_media_count(
+        self, category: str, query: str, folder: str | None = None,
+        include_nc: bool = False,
+    ) -> int:
+        """Total number of items matching the search query in the given
+        category/folder context. Mirrors search_media so paginated callers
+        can know when to stop fetching."""
+        base_where, args = self._build_list_where(category, folder, include_nc)
+        search_where, search_args = self._build_search_clause(query)
+        full_where = f"({base_where}) AND {search_where}"
+        args.extend(search_args)
+        with self.lock:
+            row = self.conn.execute(
+                f"SELECT COUNT(*) FROM media WHERE {full_where}", args,
+            ).fetchone()
+        return row[0] if row else 0
+
     def search_media(
         self, category: str, query: str, sort_mode: str = "newest",
         folder: str | None = None, include_nc: bool = False,

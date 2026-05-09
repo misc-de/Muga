@@ -798,25 +798,43 @@ class GalleryWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._maybe_fill_viewport, priority=GLib.PRIORITY_LOW)
 
     def _render_search(self, sort_mode: str) -> None:
-        """Flat search results — bypasses date grouping and folder cards.
-        Sort still applies, so users can pick newest/oldest/name within hits."""
-        # Map "date"/"date_asc" → newest/oldest for the SQL ORDER BY.
-        query_sort = (
-            "oldest" if sort_mode == "date_asc"
-            else "newest" if sort_mode == "date"
-            else sort_mode
+        """Search results, paginated and respecting the active sort.
+        Date-grouping (month headers) applies for date / date_asc just like
+        the regular gallery render."""
+        include_nc = self._should_merge_nc()
+        # Date sorts map onto newest/oldest for the SQL ORDER BY; the actual
+        # grouping is rebuilt client-side from the items.
+        if sort_mode in ("date", "date_asc"):
+            query_sort = "oldest" if sort_mode == "date_asc" else "newest"
+            grouped = True
+        else:
+            # newest / oldest / name / name_desc / folder / folder_desc — pass
+            # through to the DB unchanged.
+            query_sort = sort_mode
+            grouped = False
+
+        self._total_count = self.database.search_media_count(
+            self.category, self._search_query,
+            self.current_folder, include_nc=include_nc,
         )
-        items = self.database.search_media(
+        page = self.database.search_media(
             self.category, self._search_query, query_sort,
-            self.current_folder, include_nc=self._should_merge_nc(),
+            self.current_folder, include_nc=include_nc,
+            limit=self._page_size, offset=0,
         )
-        self.current_items = list(items)
-        self._current_offset = len(items)
-        self._has_more_items = False
-        for item in items:
-            self.gallery_grid.append_media(item, item.path in self._selected_paths)
-        self._set_status(self._("Search: %d hits") % len(items) if items else "")
-        self._set_empty_state(visible=not items)
+        self.current_items = list(page)
+        self._current_offset = len(page)
+        self._has_more_items = self._current_offset < self._total_count
+        self._date_last_key = None
+        for item in page:
+            if grouped:
+                self._append_date_grouped(item)
+            else:
+                self.gallery_grid.append_media(item, item.path in self._selected_paths)
+        self._set_status(
+            (self._("Search: %d hits") % self._total_count) if self._total_count else ""
+        )
+        self._set_empty_state(visible=not self.current_items)
 
     def _on_search_changed(self, entry: Gtk.SearchEntry) -> None:
         new = entry.get_text().strip()
@@ -980,16 +998,23 @@ class GalleryWindow(Adw.ApplicationWindow):
                 query_sort = sort_mode
                 grouped = False
             include_nc = self._should_merge_nc()
-            if sort_mode == "folder":
+            if sort_mode == "folder" and not self._search_query:
                 # Folder mode merges NC only at the root.
                 include_nc = include_nc and self.current_folder in (None, "/")
                 folder_arg = self.current_folder or "/"
             else:
                 folder_arg = self.current_folder
-            next_items = self.database.list_media_paginated(
-                self.category, query_sort, folder_arg,
-                self._page_size, self._current_offset, include_nc=include_nc,
-            )
+            if self._search_query:
+                next_items = self.database.search_media(
+                    self.category, self._search_query, query_sort, folder_arg,
+                    include_nc=include_nc,
+                    limit=self._page_size, offset=self._current_offset,
+                )
+            else:
+                next_items = self.database.list_media_paginated(
+                    self.category, query_sort, folder_arg,
+                    self._page_size, self._current_offset, include_nc=include_nc,
+                )
             if not next_items:
                 self._has_more_items = False
                 return
