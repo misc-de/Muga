@@ -1503,7 +1503,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             .date-header {
                 min-height: 120px;
                 padding: 16px 8px;
-                background: rgba(0,0,0,0.45);
+                background: #202020;
                 color: white;
                 font-size: 32px;
             }
