@@ -22,7 +22,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk
 
 from . import APP_ID, APP_NAME
-from .config import DEBUG_LOG_PATH, Settings
+from .config import DEBUG_LOG_PATH, Settings, THUMB_DIR
 from .database import Database
 from .gallery_grid import GalleryGrid
 from .i18n import Translator
@@ -537,6 +537,9 @@ class GalleryWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._set_nc_syncing, False)
             GLib.idle_add(self.refresh, False)
             GLib.idle_add(lambda: self.refresh_button.set_sensitive(True))
+            # Trim cache after every scan: thumbnail generation may have grown
+            # the disk footprint past the user's configured budget.
+            self.evict_cache_async()
 
     def _set_nc_syncing(self, active: bool) -> None:
         if self._nc_spinner is not None:
@@ -940,6 +943,69 @@ class GalleryWindow(Adw.ApplicationWindow):
         else:
             self.refresh(scan=True, scope="current")
         return GLib.SOURCE_REMOVE
+
+    # ── Disk cache management ────────────────────────────────────────
+    def cache_size_bytes(self) -> int:
+        """Total bytes used by the on-disk cache (thumbnails + NC files)."""
+        from .nextcloud import _NC_CACHE
+        total = 0
+        for root in (THUMB_DIR, _NC_CACHE):
+            if not root.exists():
+                continue
+            for f in root.rglob("*"):
+                try:
+                    if f.is_file():
+                        total += f.stat().st_size
+                except OSError:
+                    pass
+        return total
+
+    def evict_cache(self) -> int:
+        """Trim the disk cache to the configured maximum.
+        Returns the number of bytes freed. Uses LRU eviction (oldest atime
+        gets deleted first). cache_max_mb <= 0 means unlimited (no-op)."""
+        max_mb = getattr(self.settings, "cache_max_mb", 0) or 0
+        if max_mb <= 0:
+            return 0
+        max_bytes = int(max_mb) * 1024 * 1024
+        from .nextcloud import _NC_CACHE
+        files: list[tuple[float, int, "Path"]] = []
+        total = 0
+        for root in (THUMB_DIR, _NC_CACHE):
+            if not root.exists():
+                continue
+            for f in root.rglob("*"):
+                try:
+                    if not f.is_file():
+                        continue
+                    stat = f.stat()
+                    files.append((stat.st_atime, stat.st_size, f))
+                    total += stat.st_size
+                except OSError:
+                    pass
+        if total <= max_bytes:
+            return 0
+        # Oldest atime first — least-recently used.
+        files.sort(key=lambda row: row[0])
+        freed = 0
+        for _atime, size, path in files:
+            if total <= max_bytes:
+                break
+            try:
+                path.unlink()
+                total -= size
+                freed += size
+            except OSError:
+                pass
+        if freed:
+            LOGGER.info("Evicted %.1f MB from disk cache", freed / 1024 / 1024)
+        return freed
+
+    def evict_cache_async(self) -> None:
+        """Run eviction in a daemon thread so the main loop never blocks on it."""
+        if getattr(self.settings, "cache_max_mb", 0) <= 0:
+            return
+        threading.Thread(target=self.evict_cache, daemon=True).start()
 
     # ── On-demand Nextcloud thumbnail loader ──────────────────────────
     def request_nc_thumbnail(self, item_path: str) -> None:

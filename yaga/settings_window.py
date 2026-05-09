@@ -76,6 +76,23 @@ class SettingsWindow(Adw.PreferencesWindow):
         command.connect("apply", self._entry_apply, "external_video_player")
         video_group.add(command)
 
+        cache_group = Adw.PreferencesGroup(
+            title=self._("Cache"),
+            description=self._("Disk cache for thumbnails and downloaded Nextcloud files. When the limit is reached, the least-recently-used files are deleted first."),
+        )
+        app.add(cache_group)
+
+        cache_size_row = Adw.SpinRow.new_with_range(0, 200000, 100)
+        cache_size_row.set_title(self._("Maximum cache size (MB)"))
+        cache_size_row.set_subtitle(self._("0 = unlimited"))
+        cache_size_row.set_value(self.settings.cache_max_mb)
+        cache_size_row.connect("notify::value", self._cache_max_mb_changed)
+        cache_group.add(cache_size_row)
+
+        self._cache_size_row = Adw.ActionRow(title=self._("Current cache size"))
+        cache_group.add(self._cache_size_row)
+        self._refresh_cache_size_display()
+
         self._build_nextcloud_page()
 
     def _build_nextcloud_page(self) -> None:
@@ -364,6 +381,41 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _columns_changed(self, row: Adw.SpinRow, _param) -> None:
         self.settings.grid_columns = int(row.get_value())
         self.parent_window.apply_settings(self.settings)
+
+    def _cache_max_mb_changed(self, row: Adw.SpinRow, _param) -> None:
+        value = int(row.get_value())
+        self.settings.cache_max_mb = value
+        self.parent_window.settings.cache_max_mb = value
+        self.parent_window.settings.save()
+        # Trigger eviction in the background — won't block the UI even on
+        # huge caches, since the file walk runs off the main loop.
+        self.parent_window.evict_cache_async()
+        # Schedule a delayed display refresh so the user sees the new size.
+        GLib.timeout_add(800, self._refresh_cache_size_display_once)
+
+    def _refresh_cache_size_display(self) -> None:
+        """Compute current cache size off the main thread, then update the row."""
+        def _worker():
+            try:
+                size = self.parent_window.cache_size_bytes()
+            except Exception:
+                size = 0
+            GLib.idle_add(self._set_cache_size_text, size)
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _refresh_cache_size_display_once(self) -> bool:
+        self._refresh_cache_size_display()
+        return GLib.SOURCE_REMOVE
+
+    def _set_cache_size_text(self, size_bytes: int) -> bool:
+        if size_bytes < 1024 * 1024:
+            text = f"{size_bytes / 1024:.0f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            text = f"{size_bytes / 1024 / 1024:.1f} MB"
+        else:
+            text = f"{size_bytes / 1024 / 1024 / 1024:.2f} GB"
+        self._cache_size_row.set_subtitle(text)
+        return GLib.SOURCE_REMOVE
 
     def _choose_folder(self, _button: Gtk.Button, attr: str, row: Adw.ActionRow) -> None:
         chooser = Gtk.FileChooserNative(

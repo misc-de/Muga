@@ -573,14 +573,13 @@ class EditorView(Gtk.Box):
         zoom_g.connect("scale-changed", self._on_sticker_zoom_scale)
         self._draw_area.add_controller(zoom_g)
 
-        overlay = Gtk.Overlay()
-        overlay.set_hexpand(True)
-        overlay.set_vexpand(True)
-        overlay.set_child(self._preview)
-        overlay.add_overlay(self._draw_area)
-        self.append(overlay)
+        self._image_overlay = Gtk.Overlay()
+        self._image_overlay.set_hexpand(True)
+        self._image_overlay.set_vexpand(True)
+        self._image_overlay.set_child(self._preview)
+        self._image_overlay.add_overlay(self._draw_area)
 
-        # ── Panel revealer (slides up above nav bar) ──
+        # ── Panel revealer (transition direction is set in _apply_orientation) ──
         self._panel_stack = Gtk.Stack()
         self._panel_stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self._panel_stack.set_vhomogeneous(False)
@@ -590,17 +589,19 @@ class EditorView(Gtk.Box):
         self._panel_stack.add_named(self._build_panel_sticker(), "sticker")
         self._panel_stack.add_named(self._build_panel_crop(), "crop")
 
+        # In landscape the panels can get long — wrap in a ScrolledWindow.
+        self._panel_scroller = Gtk.ScrolledWindow()
+        self._panel_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._panel_scroller.set_child(self._panel_stack)
+
         self._panel_revealer = Gtk.Revealer()
-        self._panel_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
         self._panel_revealer.set_transition_duration(180)
         self._panel_revealer.set_reveal_child(False)
-        self._panel_revealer.set_child(self._panel_stack)
-        self.append(self._panel_revealer)
+        self._panel_revealer.set_child(self._panel_scroller)
 
-        # ── Bottom nav bar ──
-        nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        nav_box.set_hexpand(True)
-        nav_box.add_css_class("toolbar")
+        # ── Nav bar (orientation flipped on landscape vs portrait) ──
+        self._nav_box = Gtk.Box(spacing=0)
+        self._nav_box.add_css_class("toolbar")
 
         self._nav_btns: dict[str, Gtk.ToggleButton] = {}
         for key, icon, label in [
@@ -613,6 +614,8 @@ class EditorView(Gtk.Box):
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             inner.set_margin_top(6)
             inner.set_margin_bottom(6)
+            inner.set_margin_start(6)
+            inner.set_margin_end(6)
             inner.append(Gtk.Image.new_from_icon_name(icon))
             lbl = Gtk.Label(label=label)
             lbl.add_css_class("caption")
@@ -620,13 +623,74 @@ class EditorView(Gtk.Box):
             btn = Gtk.ToggleButton()
             btn.add_css_class("flat")
             btn.set_child(inner)
-            btn.set_hexpand(True)
             hid = btn.connect("toggled", self._on_nav_toggled, key)
             self._nav_handler_ids[key] = hid
-            nav_box.append(btn)
+            self._nav_box.append(btn)
             self._nav_btns[key] = btn
 
-        self.append(nav_box)
+        # Apply initial layout; reapply whenever the editor's allocation flips
+        # between landscape and portrait shape.
+        self._is_landscape: bool | None = None
+        self._apply_orientation(False)
+        self.add_tick_callback(self._on_orientation_tick)
+
+    # ── Responsive orientation ──
+
+    def _on_orientation_tick(self, widget, _clock) -> bool:
+        w = widget.get_width()
+        h = widget.get_height()
+        if w > 0 and h > 0:
+            # Threshold with hysteresis to avoid flapping at near-square sizes.
+            if self._is_landscape:
+                landscape = w > h * 1.05
+            else:
+                landscape = w > h * 1.25
+            if landscape != self._is_landscape:
+                self._apply_orientation(landscape)
+        return True  # GLib.SOURCE_CONTINUE
+
+    def _apply_orientation(self, landscape: bool) -> None:
+        if landscape == self._is_landscape:
+            return
+        self._is_landscape = landscape
+        # Detach current children (a widget can only have one parent in GTK4).
+        for child in (self._image_overlay, self._panel_revealer, self._nav_box):
+            parent = child.get_parent()
+            if parent is self:
+                self.remove(child)
+        if landscape:
+            # Layout: [ nav | panel | image ] horizontally
+            self.set_orientation(Gtk.Orientation.HORIZONTAL)
+            self._nav_box.set_orientation(Gtk.Orientation.VERTICAL)
+            self._nav_box.set_hexpand(False)
+            self._nav_box.set_vexpand(True)
+            for btn in self._nav_btns.values():
+                btn.set_hexpand(False)
+                btn.set_vexpand(False)
+            self._panel_revealer.set_transition_type(
+                Gtk.RevealerTransitionType.SLIDE_RIGHT
+            )
+            # Cap panel width so the image keeps the majority of the space.
+            self._panel_scroller.set_size_request(280, -1)
+            self.append(self._nav_box)
+            self.append(self._panel_revealer)
+            self.append(self._image_overlay)
+        else:
+            # Layout: [ image / panel / nav ] vertically (original)
+            self.set_orientation(Gtk.Orientation.VERTICAL)
+            self._nav_box.set_orientation(Gtk.Orientation.HORIZONTAL)
+            self._nav_box.set_hexpand(True)
+            self._nav_box.set_vexpand(False)
+            for btn in self._nav_btns.values():
+                btn.set_hexpand(True)
+                btn.set_vexpand(False)
+            self._panel_revealer.set_transition_type(
+                Gtk.RevealerTransitionType.SLIDE_UP
+            )
+            self._panel_scroller.set_size_request(-1, -1)
+            self.append(self._image_overlay)
+            self.append(self._panel_revealer)
+            self.append(self._nav_box)
 
     # ── Panel builders ──
 

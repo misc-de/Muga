@@ -45,6 +45,10 @@ class Settings:
     grid_columns: int = 4
     last_category: str = ""
 
+    # Disk cache budget for thumbnails + downloaded NC originals (MB).
+    # 0 means "unlimited"; any positive value triggers LRU eviction.
+    cache_max_mb: int = 0
+
     # Nextcloud — stored in keyring; only URL/user saved to settings.json
     nextcloud_url: str = ""
     nextcloud_user: str = ""
