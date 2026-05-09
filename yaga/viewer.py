@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -133,12 +134,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.info_button.set_visible(False)
         header.pack_start(self.info_button)
 
-        self.rotate_button = Gtk.Button.new_from_icon_name("object-rotate-right-symbolic")
-        self.rotate_button.set_tooltip_text(parent._("Rotate clockwise"))
-        self.rotate_button.set_visible(False)
-        self.rotate_button.connect("clicked", self._rotate_clockwise)
-        header.pack_end(self.rotate_button)
-
         self.edit_button = Gtk.Button.new_from_icon_name("document-edit-symbolic")
         self.edit_button.set_tooltip_text(parent._("Edit"))
         self.edit_button.connect("clicked", self._enter_edit_mode)
@@ -170,12 +165,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.save_edit_button.set_visible(False)
         header.pack_end(self.save_edit_button)
 
-        self.fullscreen_btn = Gtk.Button.new_from_icon_name("view-restore-symbolic")
-        self.fullscreen_btn.set_tooltip_text(parent._("Exit fullscreen"))
-        self.fullscreen_btn.connect("clicked", self._toggle_fullscreen)
-        self.fullscreen_btn.set_visible(False)
-        header.pack_end(self.fullscreen_btn)
-
         self.slideshow_button = Gtk.Button.new_from_icon_name("media-playback-start-symbolic")
         self.slideshow_button.set_tooltip_text(parent._("Start slideshow"))
         self.slideshow_button.connect("clicked", self._toggle_slideshow)
@@ -184,6 +173,23 @@ class ViewerWindow(Adw.ApplicationWindow):
 
         self._editor: EditorView | None = None
         self.toolbar.add_top_bar(header)
+
+        # Date row below header (modern: "1 Mai" large, "2026" smaller and dim)
+        self.date_day_label = Gtk.Label()
+        self.date_day_label.add_css_class("viewer-date-day")
+        self.date_year_label = Gtk.Label()
+        self.date_year_label.add_css_class("viewer-date-year")
+        date_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        date_box.set_halign(Gtk.Align.CENTER)
+        date_box.add_css_class("viewer-date")
+        date_box.append(self.date_day_label)
+        date_box.append(self.date_year_label)
+        self.date_revealer = Gtk.Revealer()
+        self.date_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.date_revealer.set_transition_duration(150)
+        self.date_revealer.set_child(date_box)
+        self.date_revealer.set_reveal_child(False)
+        self.toolbar.add_top_bar(self.date_revealer)
 
         self.stack = Gtk.Stack()
         self.stack.set_hexpand(True)
@@ -203,6 +209,13 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_gesture.connect("begin", self._on_zoom_begin)
         self.zoom_gesture.connect("scale-changed", self._on_zoom_scale_changed)
         self.stack.add_controller(self.zoom_gesture)
+        self.rotate_gesture = Gtk.GestureRotate()
+        self._rotate_gesture_total: float = 0.0
+        self._rotate_gesture_committed_steps: int = 0
+        self.rotate_gesture.connect("begin", self._on_rotate_gesture_begin)
+        self.rotate_gesture.connect("angle-changed", self._on_rotate_gesture_angle_changed)
+        self.rotate_gesture.connect("end", self._on_rotate_gesture_end)
+        self.stack.add_controller(self.rotate_gesture)
         self.click_gesture = Gtk.GestureClick()
         self.click_gesture.connect("pressed", self._on_viewer_pressed)
         self.stack.add_controller(self.click_gesture)
@@ -220,6 +233,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             child = next_child
         item = self.items[self.index]
         self.set_title(item.name)
+        self._update_date_label(item)
         self._reset_zoom()
         self.zoom_view = None
         self.zoom_scroller = None
@@ -249,7 +263,6 @@ class ViewerWindow(Adw.ApplicationWindow):
             self._current_is_video = True
             self.delete_button.set_visible(True)
             self.info_button.set_visible(True)
-            self.fullscreen_btn.set_visible(True)
             video = Gtk.Video.new_for_file(Gio.File.new_for_path(item.path))
             video.set_autoplay(True)
             self.stack.add_child(video)
@@ -260,7 +273,6 @@ class ViewerWindow(Adw.ApplicationWindow):
             self.delete_button.set_visible(True)
             self.info_button.set_visible(True)
             self.edit_button.set_visible(_PIL_OK)
-            self.rotate_button.set_visible(True)
             self._current_display_path = item.path
             self._show_local_image(item.path)
 
@@ -268,15 +280,14 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.delete_button.set_visible(visible)
         self.info_button.set_visible(visible)
         self.edit_button.set_visible(visible and _PIL_OK and not self._current_is_video)
-        self.rotate_button.set_visible(visible and not self._current_is_video)
         self.slideshow_button.set_visible(visible and not self._current_is_video)  # Slideshow only for images
-        self.fullscreen_btn.set_visible(visible and self._current_is_video)
 
     def _set_view_gestures_enabled(self, enabled: bool) -> None:
         phase = Gtk.PropagationPhase.CAPTURE if enabled else Gtk.PropagationPhase.NONE
         self.swipe_gesture.set_propagation_phase(phase)
         self.drag_gesture.set_propagation_phase(phase)
         self.zoom_gesture.set_propagation_phase(phase)
+        self.rotate_gesture.set_propagation_phase(phase)
         self.click_gesture.set_propagation_phase(phase)
 
     def _nc_download_worker(self, item) -> None:
@@ -307,7 +318,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         if item.is_video:
             self._current_is_video = True
             self.info_button.set_visible(True)
-            self.fullscreen_btn.set_visible(True)
             video = Gtk.Video.new_for_file(Gio.File.new_for_path(local_path))
             video.set_autoplay(True)
             self.stack.add_child(video)
@@ -320,7 +330,6 @@ class ViewerWindow(Adw.ApplicationWindow):
             self.delete_button.set_visible(False)
             self.info_button.set_visible(True)
             self.edit_button.set_visible(_PIL_OK)
-            self.rotate_button.set_visible(True)
 
     def _show_local_image(self, path: str) -> None:
         picture = Gtk.Picture.new_for_filename(path)
@@ -336,10 +345,11 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_scroller = scroller
         self.stack.add_child(scroller)
 
-    def _rotate_clockwise(self, _btn=None) -> None:
-        if self._current_display_path is None:
+    def _rotate_by_step(self, steps: int) -> None:
+        """Rotate the displayed image by *steps* * 90° (positive = clockwise)."""
+        if self._current_display_path is None or steps == 0:
             return
-        self._rotation = (self._rotation + 90) % 360
+        self._rotation = (self._rotation + 90 * steps) % 360
         child = self.stack.get_first_child()
         while child:
             nxt = child.get_next_sibling()
@@ -409,7 +419,43 @@ class ViewerWindow(Adw.ApplicationWindow):
         w = media_stream.get_intrinsic_width()
         h = media_stream.get_intrinsic_height()
         if w > 0 and h > 0 and w > h:
-            GLib.idle_add(lambda: (self.header.set_visible(False), GLib.SOURCE_REMOVE)[1])
+            def _hide():
+                self.header.set_visible(False)
+                self.date_revealer.set_reveal_child(False)
+                return GLib.SOURCE_REMOVE
+            GLib.idle_add(_hide)
+
+    def _update_date_label(self, item: MediaItem) -> None:
+        try:
+            dt = datetime.fromtimestamp(item.mtime)
+        except (OverflowError, OSError, ValueError):
+            self.date_revealer.set_reveal_child(False)
+            return
+        # Locale-aware day-month, e.g. "1 Mai" with LC_TIME=de_DE
+        self.date_day_label.set_label(dt.strftime("%-d %B"))
+        self.date_year_label.set_label(dt.strftime("%Y"))
+        self.date_revealer.set_reveal_child(not self._current_is_video)
+
+    # ── Rotation gesture (two-finger rotate, snap to 90° steps) ───────
+    def _on_rotate_gesture_begin(self, _gesture, _seq) -> None:
+        self._rotate_gesture_total = 0.0
+        self._rotate_gesture_committed_steps = 0
+
+    def _on_rotate_gesture_angle_changed(self, _gesture, angle, _angle_delta) -> None:
+        # `angle` is the cumulative rotation in radians since gesture start.
+        self._rotate_gesture_total = angle
+        # Live-snap: as soon as the user crosses ±45°, ±135°, ... commit a 90° step
+        # so the rotation feels responsive instead of waiting for finger-up.
+        deg = math.degrees(angle)
+        target_steps = int(round(deg / 90))
+        delta_steps = target_steps - self._rotate_gesture_committed_steps
+        if delta_steps != 0:
+            self._rotate_gesture_committed_steps = target_steps
+            self._rotate_by_step(delta_steps)
+
+    def _on_rotate_gesture_end(self, _gesture, _seq) -> None:
+        self._rotate_gesture_total = 0.0
+        self._rotate_gesture_committed_steps = 0
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -572,7 +618,9 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _on_viewer_pressed(self, _gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float) -> None:
         if self._current_is_video and n_press == 1:
-            self.header.set_visible(not self.header.get_visible())
+            visible = not self.header.get_visible()
+            self.header.set_visible(visible)
+            self.date_revealer.set_reveal_child(visible and not self._current_is_video)
         elif not self._current_is_video and n_press == 2:
             self._reset_zoom()
 
@@ -633,8 +681,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.delete_button.set_visible(False)
         self.info_button.set_visible(False)
         self.edit_button.set_visible(False)
-        self.rotate_button.set_visible(False)
-        self.fullscreen_btn.set_visible(False)
         self.cancel_edit_button.set_visible(True)
         self.save_edit_button.set_visible(True)
         self.undo_edit_button.set_visible(True)
@@ -769,12 +815,8 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _toggle_fullscreen(self, _btn=None) -> None:
         if self.props.fullscreened:
             self.unfullscreen()
-            self.fullscreen_btn.set_icon_name("view-fullscreen-symbolic")
-            self.fullscreen_btn.set_tooltip_text(self.parent_window._("Fullscreen"))
         else:
             self.fullscreen()
-            self.fullscreen_btn.set_icon_name("view-restore-symbolic")
-            self.fullscreen_btn.set_tooltip_text(self.parent_window._("Exit fullscreen"))
 
     def _confirm_delete_current(self, _button: Gtk.Button) -> None:
         dialog = Adw.AlertDialog(

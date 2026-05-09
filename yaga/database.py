@@ -125,9 +125,9 @@ class Database:
                 (path, category, media_type, folder, name, mtime, size, thumb_path, time.time()),
             )
 
-    def prune_missing(self, seen_since: float, categories: list[str]) -> None:
+    def prune_missing(self, seen_since: float, categories: list[str]) -> int:
         if not categories:
-            return
+            return 0
         placeholders = ",".join("?" for _category in categories)
         with self.lock:
             stale = self.conn.execute(
@@ -145,6 +145,7 @@ class Database:
                     Path(thumb).unlink(missing_ok=True)
                 except OSError:
                     pass
+        return len(stale)
 
     def set_thumb(self, path: str, thumb_path: str, category: str | None = None) -> None:
         with self.lock:

@@ -1204,6 +1204,20 @@ class GalleryWindow(Adw.ApplicationWindow):
                 background: @accent_bg_color;
                 color: @accent_fg_color;
             }
+            .viewer-date {
+                padding: 4px 0 6px 0;
+                background: alpha(@window_bg_color, 0.5);
+            }
+            .viewer-date-day {
+                font-size: 14px;
+                font-weight: 500;
+                opacity: 0.85;
+            }
+            .viewer-date-year {
+                font-size: 11px;
+                opacity: 0.55;
+                margin-top: -2px;
+            }
             """
         )
         display = Gdk.Display.get_default()

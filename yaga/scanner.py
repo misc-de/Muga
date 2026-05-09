@@ -125,10 +125,18 @@ class MediaScanner:
         LOGGER.info("Nextcloud structure scan started for %r", photos_path)
         try:
             files = client.list_files(photos_path)
+        except FileNotFoundError:
+            # Photos folder no longer exists on the server — drop all NC entries.
+            LOGGER.warning("Nextcloud Photos folder %r is gone — pruning all NC entries", photos_path)
+            removed = self.database.prune_missing(started, ["nextcloud"])
+            self.database.commit()
+            LOGGER.info("Pruned %d stale NC entries (folder vanished)", removed)
+            return
         except Exception as e:
             LOGGER.exception("Nextcloud structure scan failed: %s", e)
             return
         dav_root = client.dav_root + "/"
+        upserted = 0
         for info in files:
             dav = info["dav_path"]
             media_type = media_type_for(Path(info["name"]))
@@ -145,9 +153,13 @@ class MediaScanner:
                 size=info["size"],
                 thumb_path=None,
             )
-        self.database.prune_missing(started, ["nextcloud"])
+            upserted += 1
+        removed = self.database.prune_missing(started, ["nextcloud"])
         self.database.commit()
-        LOGGER.info("Nextcloud structure scan indexed %s file(s) in %.2fs", len(files), time.time() - started)
+        LOGGER.info(
+            "Nextcloud structure scan indexed %s file(s), pruned %d stale, in %.2fs",
+            upserted, removed, time.time() - started,
+        )
 
     def load_nc_folder_thumbs(self, client, folder: str, on_thumb_loaded) -> None:
         """Download thumbnails only for NC items in *folder* that don't have one yet."""
