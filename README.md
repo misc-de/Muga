@@ -1,3 +1,4 @@
+<img width="720" height="1600" alt="Screenshot from 2026-05-09 17:51:42" src="https://github.com/user-attachments/assets/3d19234c-cd96-4236-ba41-1fd485de1611" />
 # Yaga — Photo Gallery
 
 A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and libadwaita.
@@ -12,6 +13,7 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 <img width="300" alt="Screenshot from 2026-05-09 17:32:20" src="https://github.com/user-attachments/assets/e09fe9e7-311e-4802-88e3-2221d0b8ae04" />
 <img width="300" alt="Screenshot from 2026-05-09 17:32:29" src="https://github.com/user-attachments/assets/484a1886-1b38-454e-a593-53b10e31f3a1" />
 <img width="300" alt="Screenshot from 2026-05-09 17:32:36" src="https://github.com/user-attachments/assets/0c34fd96-ef2c-4655-abc0-79b93a00bd5d" />
+<img width="300" alt="Screenshot from 2026-05-09 17:51:42" src="https://github.com/user-attachments/assets/dbb491da-fe3a-4009-b95a-0cef134a45a0" />
 
 ---
 
