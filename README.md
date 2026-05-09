@@ -1,7 +1,9 @@
 # Yaga — Photo Gallery
 
-A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and libadwaita.
+A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and libadwaita.  
+  
 ⚠️ **AI-assisted project**  
+  
 ![Yaga](yaga.png)
 
 ---
