@@ -26,14 +26,22 @@ Yaga is a gallery app that feels at home on a modern GNOME desktop. It scans you
 
 ## Highlights
 
-- **Multiple libraries** — separate tabs for Photos, Pictures, Videos, Screenshots, and any extra folders you add
-- **Nextcloud sync** — browse your Nextcloud photo library directly, no FUSE or GVFS mount needed; thumbnails load on demand
-- **QR code scanner** — scan Nextcloud app-password QR codes straight from the camera to connect your account instantly
-- **Date grouping** — sort by date and photos are grouped under clear section headers (day / week / month / year)
-- **Built-in editor** — crop, rotate, adjust brightness / contrast / colour channels, add frames for holidays and occasions, drop stickers
-- **Video playback** — watch videos directly in the app or hand them off to any external player
-- **Selection mode** — long-press any photo to enter multi-select, then delete or move a whole batch at once
-- **Folder view** — drill into subfolders; folder tiles show a 2×2 preview mosaic
+- **Multiple libraries**  
+separate tabs for Photos, Pictures, Videos, Screenshots, and any extra folders you add
+- **Nextcloud sync**  
+browse your Nextcloud photo library directly, no FUSE or GVFS mount needed; thumbnails load on demand
+- **QR code scanner**  
+scan Nextcloud app-password QR codes straight from the camera to connect your account instantly
+- **Date grouping**  
+sort by date and photos are grouped under clear section headers (day / week / month / year)
+- **Built-in editor**  
+crop, rotate, adjust brightness / contrast / colour channels, add frames for holidays and occasions, drop stickers
+- **Video playback**  
+watch videos directly in the app or hand them off to any external player
+- **Selection mode**  
+long-press any photo to enter multi-select, then delete or move a whole batch at once
+- **Folder view**  
+drill into subfolders; folder tiles show a 2×2 preview mosaic
 
 ---
 
