@@ -10,8 +10,8 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 <img width="270" alt="Screenshot from 2026-05-09 17:26:52" src="https://github.com/user-attachments/assets/0fc0b6bc-4d4f-43f4-816c-42ae1efdb2da" />
 <img width="270" alt="Screenshot from 2026-05-09 17:46:18" src="https://github.com/user-attachments/assets/ed12b04a-d63c-4dd5-bef7-7900b62255dc" />
 <img width="270" alt="Screenshot from 2026-05-09 17:51:42" src="https://github.com/user-attachments/assets/dbb491da-fe3a-4009-b95a-0cef134a45a0" />
-<img width="270" alt="Screenshot from 2026-05-09 18:22:26" src="https://github.com/user-attachments/assets/97eab779-7d17-4cfa-b1fa-4fb995099506" />
 <img width="270" alt="Screenshot from 2026-05-09 18:22:19" src="https://github.com/user-attachments/assets/acdcd327-486c-419c-8073-1c03cb40a053" />
+<img width="270" alt="Screenshot from 2026-05-09 18:22:26" src="https://github.com/user-attachments/assets/97eab779-7d17-4cfa-b1fa-4fb995099506" />
 <img width="270" alt="Screenshot from 2026-05-09 17:32:20" src="https://github.com/user-attachments/assets/e09fe9e7-311e-4802-88e3-2221d0b8ae04" />
 <img width="270" alt="Screenshot from 2026-05-09 17:58:31" src="https://github.com/user-attachments/assets/8725428e-2287-44f6-b29b-a83773c319a3" />
 <img width="270" alt="Screenshot from 2026-05-09 17:32:36" src="https://github.com/user-attachments/assets/0c34fd96-ef2c-4655-abc0-79b93a00bd5d" />
