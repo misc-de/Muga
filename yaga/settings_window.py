@@ -65,12 +65,6 @@ class SettingsWindow(Adw.PreferencesWindow):
         columns.connect("notify::value", self._columns_changed)
         grid_group.add(columns)
 
-        thumb_group = Adw.PreferencesGroup(title=self._("Thumbnails"))
-        app.add(thumb_group)
-        clear = Gtk.Button(label=self._("Clear thumbnail cache"), icon_name="edit-clear-symbolic")
-        clear.connect("clicked", self._clear_thumbnails)
-        thumb_group.add(clear)
-
         video_group = Adw.PreferencesGroup(title=self._("Video"))
         app.add(video_group)
         command = Adw.EntryRow(title=self._("External player command"))
@@ -82,12 +76,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         hint = Adw.ActionRow(title=self._("Leave empty to use built-in playback"))
         video_group.add(hint)
 
-        save_group = Adw.PreferencesGroup()
-        app.add(save_group)
-        save = Gtk.Button(label=self._("Settings"), icon_name="document-save-symbolic")
-        save.add_css_class("suggested-action")
-        save.connect("clicked", self._save)
-        save_group.add(save)
+        # Clear thumbnail cache — standalone button at the very bottom of Appearance
+        clear_group = Adw.PreferencesGroup()
+        app.add(clear_group)
+        clear = Gtk.Button(label=self._("Clear thumbnail cache"), icon_name="edit-clear-symbolic")
+        clear.connect("clicked", self._clear_thumbnails)
+        clear_group.add(clear)
 
         self._build_nextcloud_page()
 
@@ -165,22 +159,36 @@ class SettingsWindow(Adw.PreferencesWindow):
         btn_box.set_valign(Gtk.Align.CENTER)
         btn_box.set_hexpand(True)
 
-        self._nc_connect_btn = Gtk.Button(label=self._("Connect"))
+        self._nc_connect_btn = Gtk.Button.new_from_icon_name("network-transmit-receive-symbolic")
+        self._nc_connect_btn.set_child(self._make_icon_label("network-transmit-receive-symbolic", self._("Connect")))
         self._nc_connect_btn.add_css_class("suggested-action")
         self._nc_connect_btn.connect("clicked", self._nc_connect)
         btn_box.append(self._nc_connect_btn)
 
-        self._nc_disconnect_btn = Gtk.Button(label=self._("Disconnect"))
+        self._nc_disconnect_btn = Gtk.Button()
+        self._nc_disconnect_btn.set_child(self._make_icon_label("network-offline-symbolic", self._("Disconnect")))
         self._nc_disconnect_btn.add_css_class("destructive-action")
         self._nc_disconnect_btn.connect("clicked", self._nc_disconnect)
-        self._nc_disconnect_btn.set_visible(self.settings.nextcloud_enabled)
         btn_box.append(self._nc_disconnect_btn)
 
         btn_row.set_child(btn_box)
         actions.add(btn_row)
 
+        self._nc_update_buttons()
         if self.settings.nextcloud_enabled:
             self._nc_set_status(self._("Connected ✓"), ok=True)
+
+    @staticmethod
+    def _make_icon_label(icon_name: str, label: str) -> Gtk.Box:
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box.append(Gtk.Image.new_from_icon_name(icon_name))
+        box.append(Gtk.Label(label=label))
+        return box
+
+    def _nc_update_buttons(self) -> None:
+        connected = self.settings.nextcloud_enabled
+        self._nc_connect_btn.set_visible(not connected)
+        self._nc_disconnect_btn.set_visible(connected)
 
     def _nc_set_status(self, text: str, ok: bool = True) -> None:
         self._nc_status_row.set_title(text)
@@ -236,7 +244,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.settings.nextcloud_enabled = True
             self.settings.save()
             self._nc_set_status(self._("Connected ✓"), ok=True)
-            self._nc_disconnect_btn.set_visible(True)
+            self._nc_update_buttons()
             self.parent_window.apply_settings(self.settings)
         else:
             self._nc_set_status(f"{self._('Connection failed')}: {error}" if error else self._("Connection failed"), ok=False)
@@ -244,7 +252,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _nc_disconnect(self, _btn: Gtk.Button) -> None:
         self.settings.nextcloud_enabled = False
         self.settings.save()
-        self._nc_disconnect_btn.set_visible(False)
+        self._nc_update_buttons()
         self._nc_set_status(self._("Disconnected"), ok=True)
         self.parent_window.apply_settings(self.settings)
 
@@ -322,12 +330,20 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_set_status(f"{self._('QR code scan error')}: {message}", ok=False)
 
     def _nc_thumb_only_changed(self, row: Adw.SwitchRow, _param) -> None:
-        self.settings.nextcloud_thumbnail_only = row.get_active()
-        self.settings.save()
+        value = row.get_active()
+        self.settings.nextcloud_thumbnail_only = value
+        # Apply immediately so the change is live without closing the dialog.
+        self.parent_window.settings.nextcloud_thumbnail_only = value
+        self.parent_window.settings.save()
 
     def _nc_show_in_pictures_changed(self, row: Adw.SwitchRow, _param) -> None:
-        self.settings.nextcloud_show_in_pictures = row.get_active()
-        self.settings.save()
+        value = row.get_active()
+        self.settings.nextcloud_show_in_pictures = value
+        self.parent_window.settings.nextcloud_show_in_pictures = value
+        self.parent_window.settings.save()
+        # Re-render the gallery so the merge takes effect right away.
+        if self.parent_window.category == "pictures":
+            self.parent_window.refresh(scan=False)
 
     def _folder_row(self, attr: str, title: str) -> Adw.ActionRow:
         row = Adw.ActionRow(title=self._(title), subtitle=getattr(self.settings, attr))
@@ -406,9 +422,6 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.parent_window.thumbnailer.clear()
         self.parent_window.refresh(scan=True)
 
-    def _save(self, _button: Gtk.Button) -> None:
-        self.parent_window.apply_settings(self.settings)
-        self.close()
 
 
 # ---------------------------------------------------------------------------
