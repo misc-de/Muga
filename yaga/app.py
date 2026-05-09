@@ -1203,8 +1203,10 @@ class GalleryWindow(Adw.ApplicationWindow):
             while True:
                 with self._nc_thumb_lock:
                     if self._nc_thumb_queue:
-                        # LIFO: most recently bound tile = most likely on screen.
-                        path = self._nc_thumb_queue.pop()
+                        # FIFO: tiles are bound top-to-bottom as the gallery is
+                        # built, so popping from the front means thumbs arrive
+                        # in the same order as the active sort mode dictates.
+                        path = self._nc_thumb_queue.pop(0)
                     else:
                         path = None
                         self._nc_thumb_event.clear()
