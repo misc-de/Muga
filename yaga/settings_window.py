@@ -111,10 +111,11 @@ class SettingsWindow(Adw.PreferencesWindow):
         # before that, the credentials fields stay hidden so the page just shows
         # the Setup button.
         self._nc_manual_setup_unlocked = False
-        # Runtime connection state — independent of the persistent
-        # nextcloud_enabled toggle. The Connect/Disconnect buttons toggle this
-        # flag without touching the user's master preference.
-        self._nc_runtime_connected = bool(self.settings.nextcloud_enabled)
+        # Runtime connection state — mirrors the parent window's session gate
+        # (which already accounts for the persistent disconnect flag). Reading
+        # from the parent ensures we see the same state across restarts: a
+        # saved Disconnect comes up showing "Disconnected" + green Connect btn.
+        self._nc_runtime_connected = bool(self.parent_window._nc_session_active)
 
         # ── Top: Active toggle + Setup button (when not yet configured) ──
         self._nc_top_group = Adw.PreferencesGroup()
