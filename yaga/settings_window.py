@@ -283,32 +283,43 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_disconnect_btn.set_visible(connected)
 
     def _nc_set_status(self, text: str, ok: bool = True) -> None:
-        self._nc_status_row.set_title(text)
-        icon = "emblem-ok-symbolic" if ok else "dialog-warning-symbolic"
+        # No prefix/suffix icons — status is conveyed by the colour of the
+        # text alone (green for connected, red otherwise).
         if self._nc_status_icon is not None:
-            self._nc_status_row.remove(self._nc_status_icon)
-        self._nc_status_icon = Gtk.Image.new_from_icon_name(icon)
-        self._nc_status_row.add_prefix(self._nc_status_icon)
+            try:
+                self._nc_status_row.remove(self._nc_status_icon)
+            except Exception:
+                pass
+            self._nc_status_icon = None
+        color = "#2ec27e" if ok else "#e01b24"
+        try:
+            self._nc_status_row.set_title_use_markup(True)
+        except AttributeError:
+            try:
+                self._nc_status_row.set_property("title-use-markup", True)
+            except Exception:
+                pass
+        safe = GLib.markup_escape_text(text)
+        self._nc_status_row.set_title(f"<span color='{color}' weight='600'>{safe}</span>")
 
-    def _nc_refresh_status(self) -> None:
-        """Sync status row + buttons + group description with the current
-        nextcloud_enabled state. Called whenever the connection state changes."""
+    def _nc_refresh_status(self, sync_toggle: bool = True) -> None:
+        """Sync status row + buttons with the current nextcloud_enabled state.
+        The QR-code tip is intentionally suppressed here — it only shows up in
+        the initial setup dialog. The 'Nextcloud aktiv' toggle is only synced
+        when sync_toggle=True (e.g. on connect, but NOT on a manual disconnect)."""
         connected = self.settings.nextcloud_enabled
         self._nc_update_buttons()
-        # Keep the "Nextcloud aktiv" toggle in sync without triggering its handler.
-        if hasattr(self, "_nc_active_row") and self._nc_active_row.get_active() != connected:
+        if sync_toggle and hasattr(self, "_nc_active_row") \
+                and self._nc_active_row.get_active() != connected:
             self._nc_active_row.handler_block(self._nc_active_handler)
             self._nc_active_row.set_active(connected)
             self._nc_active_row.handler_unblock(self._nc_active_handler)
+        # Group description is always empty — the QR tip lives in the setup dialog.
+        self._nc_creds_group.set_description("")
         if connected:
-            self._nc_set_status(self._("Connected ✓"), ok=True)
-            # Tip is no longer needed once the user has set things up.
-            self._nc_creds_group.set_description("")
+            self._nc_set_status(self._("Connected"), ok=True)
         else:
             self._nc_set_status(self._("Disconnected"), ok=False)
-            self._nc_creds_group.set_description(
-                self._("Create app password: Nextcloud → Settings → Security → App passwords")
-            )
 
     def _nc_connect(self, _btn: Gtk.Button) -> None:
         url  = self._nc_url_row.get_text().strip()
@@ -364,10 +375,17 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._nc_set_status(f"{self._('Connection failed')}: {error}" if error else self._("Connection failed"), ok=False)
 
     def _nc_disconnect(self, _btn: Gtk.Button) -> None:
-        self.settings.nextcloud_enabled = False
-        self.settings.save()
-        self._nc_refresh_status()
-        self.parent_window.apply_settings(self.settings)
+        # "Disconnect" is a soft action: it drops the runtime NC client so the
+        # next request rebuilds the connection. It deliberately does NOT touch
+        # the user's "Nextcloud aktiv" preference (toggle stays where it was).
+        old_client = self.parent_window._nc_thumb_shared_client
+        self.parent_window._nc_thumb_shared_client = None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:
+                pass
+        self._nc_set_status(self._("Disconnected"), ok=False)
 
     def _nc_scan_qr(self, _btn: Gtk.Button) -> None:
         from .qr import WebcamQRScanner, scan_supported, QRScanError
