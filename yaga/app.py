@@ -170,11 +170,20 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.status.set_text(text)
         self.status.set_visible(bool(text))
 
+    def is_nc_visible(self) -> bool:
+        """May the gallery show Nextcloud entries (tab, merged tiles, cached
+        thumbnails)? Driven by the persistent "Nextcloud aktiv" preference, so
+        a manual Disconnect keeps everything visible from the local cache."""
+        return (
+            bool(self.settings.nextcloud_enabled)
+            and bool(self.settings.nextcloud_url)
+            and bool(self.settings.nextcloud_user)
+        )
+
     def is_nc_active(self) -> bool:
-        """The single authoritative check for "may this code touch Nextcloud?"
-        Combines the persistent setting with the runtime session flag and the
-        presence of credentials. Scripts must use this — not the raw
-        nextcloud_enabled — to ensure the user's manual disconnect is honored."""
+        """May this code make a *network* call to Nextcloud? Combines the
+        runtime session flag with credentials. Scripts must use this — not
+        nextcloud_enabled — to honor the user's manual disconnect."""
         return (
             self._nc_session_active
             and bool(self.settings.nextcloud_url)
@@ -182,10 +191,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         )
 
     def _should_merge_nc(self) -> bool:
-        """True when NC items should be folded into the current Pictures view."""
+        """True when NC items should be folded into the current Pictures view.
+        Cached NC items remain visible even on a manual disconnect; a fresh
+        thumbnail will only be fetched once the user reconnects."""
         return (
             self.category == "pictures"
-            and self.is_nc_active()
+            and self.is_nc_visible()
             and getattr(self.settings, "nextcloud_show_in_pictures", False)
         )
 
@@ -413,21 +424,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         _dark = Adw.StyleManager.get_default().get_dark()
         self._nc_spinner = None
         self._nc_broken_img = None
-        cats = list(self.settings.categories())
-        # If the user activated NC just for this session ("Einmalig" in the
-        # viewer), the persistent settings still have nextcloud_enabled=False
-        # and so categories() omits Nextcloud. Patch it back in for the nav.
-        if self.is_nc_active() and not any(c[0] == "nextcloud" for c in cats):
-            cats.append((
-                "nextcloud", "Nextcloud",
-                self.settings.nextcloud_photos_path or "Photos",
-            ))
-        for category, label, path in cats:
+        for category, label, path in self.settings.categories():
             if not path:
-                continue
-            # Hide the NC entry while the session is paused (manual disconnect
-            # without flipping the master toggle). It re-appears on Connect.
-            if category == "nextcloud" and not self.is_nc_active():
                 continue
             if category == "nextcloud":
                 img = self._make_nc_icon(_nc_icon_dir, _dark)

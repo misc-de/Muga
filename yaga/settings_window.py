@@ -405,10 +405,11 @@ class SettingsWindow(Adw.PreferencesWindow):
             )
 
     def _nc_disconnect(self, _btn: Gtk.Button) -> None:
-        # "Disconnect" is a soft action: it stops every NC operation in this
-        # session by flipping the runtime gate (parent._nc_session_active).
-        # The persistent "Nextcloud aktiv" preference stays untouched, so a
-        # reconnect (Connect button) doesn't require credential re-entry.
+        # "Disconnect" is a soft action: it stops every NC *network* operation
+        # in this session (workers, scans, thumb fetches) by flipping the
+        # runtime gate. The NC tab and cached thumbnails stay visible — only
+        # operations that need the server are blocked. The persistent
+        # "Nextcloud aktiv" preference is untouched.
         old_client = self.parent_window._nc_thumb_shared_client
         self.parent_window._nc_thumb_shared_client = None
         if old_client is not None:
@@ -416,11 +417,7 @@ class SettingsWindow(Adw.PreferencesWindow):
                 old_client.close()
             except Exception:
                 pass
-        # Flip the runtime gate so workers/scans bail out immediately and the
-        # NC tab disappears from the gallery.
         self.parent_window._nc_session_active = False
-        self.parent_window._rebuild_categories()
-        self.parent_window.refresh(scan=False)
         self._nc_runtime_connected = False
         self._nc_update_buttons()
         self._nc_set_status(self._("Disconnected"), ok=False)

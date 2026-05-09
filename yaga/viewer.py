@@ -379,11 +379,13 @@ class ViewerWindow(Adw.ApplicationWindow):
             response = "cancel"
         if response == "cancel":
             return
-        # User consent in hand: open the runtime gate.
+        # User consent in hand: open the runtime gate AND make NC visible
+        # in the gallery (set nextcloud_enabled in memory). "Dauerhaft" also
+        # persists the toggle; "Einmalig" leaves it on disk as it was, so the
+        # next launch starts disabled again.
         self.parent_window._nc_session_active = True
-        # "Dauerhaft" additionally persists; "Einmalig" stays session-local.
+        self.parent_window.settings.nextcloud_enabled = True
         if response == "permanent":
-            self.parent_window.settings.nextcloud_enabled = True
             self.parent_window.settings.save()
         # Reset the shared NC client so workers reconnect with current creds.
         old_client = self.parent_window._nc_thumb_shared_client
