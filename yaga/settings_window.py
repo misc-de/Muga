@@ -34,7 +34,7 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         for attr, title in [
             ("photos_dir", "Photos folder"),
-            ("pictures_dir", "Pictures folder"),
+            ("pictures_dir", "Overview folder"),
             ("videos_dir", "Videos folder"),
             ("screenshots_dir", "Screenshots folder"),
         ]:

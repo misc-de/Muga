@@ -610,11 +610,11 @@ class EditorView(Gtk.Box):
         # Labels we hide on landscape (icon-only, ~50px strip).
         self._nav_labels: list[Gtk.Label] = []
         for key, icon, label in [
-            ("filter",   "image-filter-symbolic",       "Filter"),
-            ("adjust",   "display-brightness-symbolic", "Anpassen"),
-            ("effects",  "image-adjust-symbolic",       "Effekte"),
-            ("sticker",  "face-smile-symbolic",         "Sticker"),
-            ("crop",     "crop-symbolic",               "Zuschneiden"),
+            ("filter",   "image-filter-symbolic",       self._("Filter")),
+            ("adjust",   "display-brightness-symbolic", self._("Adjust")),
+            ("effects",  "image-adjust-symbolic",       self._("Effects")),
+            ("sticker",  "face-smile-symbolic",         self._("Sticker")),
+            ("crop",     "crop-symbolic",               self._("Crop")),
         ]:
             inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             inner.set_margin_top(6)
@@ -795,7 +795,7 @@ class EditorView(Gtk.Box):
             ("_blue",       "Blue"),
         ]:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            l = Gtk.Label(label=label, xalign=0)
+            l = Gtk.Label(label=self._(label), xalign=0)
             l.set_size_request(80, -1)
             sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 2.0, 0.05)
             sc.set_value(getattr(self, attr))
@@ -804,7 +804,7 @@ class EditorView(Gtk.Box):
             sc.connect("value-changed", self._on_slider, attr)
             reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
             reset.add_css_class("flat")
-            reset.set_tooltip_text("Reset")
+            reset.set_tooltip_text(self._("Reset"))
             reset.connect("clicked", self._reset_slider, attr, sc)
             row.append(l)
             row.append(sc)
@@ -875,7 +875,7 @@ class EditorView(Gtk.Box):
         none_pic.set_paintable(none_tex)
         none_pic.set_size_request(60, 60)
         none_pic.set_content_fit(Gtk.ContentFit.FILL)
-        none_lbl = Gtk.Label(label="No frame")
+        none_lbl = Gtk.Label(label=self._("No frame"))
         none_lbl.add_css_class("caption")
         none_lbl.set_max_width_chars(9)
         none_lbl.set_ellipsize(Pango.EllipsizeMode.END)
@@ -927,7 +927,7 @@ class EditorView(Gtk.Box):
         text_box.set_margin_start(10); text_box.set_margin_end(10)
         text_box.set_margin_top(8);    text_box.set_margin_bottom(8)
         self._text_entry = Gtk.Entry()
-        self._text_entry.set_placeholder_text("Text input…")
+        self._text_entry.set_placeholder_text(self._("Text input…"))
         self._text_entry.set_hexpand(True)
         text_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         color = Gdk.RGBA()
@@ -936,9 +936,9 @@ class EditorView(Gtk.Box):
         color.blue = 1.0
         color.alpha = 1.0
         self._text_color_button = Gtk.ColorButton.new_with_rgba(color)
-        self._text_color_button.set_tooltip_text("Text color")
+        self._text_color_button.set_tooltip_text(self._("Text color"))
         self._text_color_button.connect("color-set", self._on_text_color_set)
-        add_btn = Gtk.Button(label="Add")
+        add_btn = Gtk.Button(label=self._("Add"))
         add_btn.add_css_class("flat")
         add_btn.add_css_class("suggested-action")
         add_btn.connect("clicked", self._on_text_add)
@@ -964,12 +964,18 @@ class EditorView(Gtk.Box):
 
         self._sticker_cat_btns: dict[str, Gtk.ToggleButton] = {}
         self._sticker_cat_hids: dict[str, int] = {}
-        for key, label in [("smileys", "Smileys"), ("emotions", "Emotions"),
-                            ("symbole", "Symbole"), ("rahmen", "Rahmen"), ("text", "Text")]:
-            btn = Gtk.ToggleButton(label=label)
+        for key, label in [
+            ("smileys",  "Smileys"),
+            ("emotions", "Emotions"),
+            ("symbole",  "Symbols"),
+            ("rahmen",   "Frame"),
+            ("text",     "Text"),
+        ]:
+            translated = self._(label)
+            btn = Gtk.ToggleButton(label=translated)
             btn.add_css_class("flat")
             btn.set_hexpand(True)
-            btn.set_tooltip_text(label)
+            btn.set_tooltip_text(translated)
             hid = btn.connect("toggled", self._on_sticker_cat_toggled, key)
             self._sticker_cat_hids[key] = hid
             self._sticker_cat_box.append(btn)
@@ -1034,11 +1040,11 @@ class EditorView(Gtk.Box):
         self._crop_btn = Gtk.ToggleButton(label="✂  Crop")
         self._crop_btn.add_css_class("flat")
         self._crop_btn.connect("toggled", self._on_crop_toggled)
-        self._crop_apply_btn = Gtk.Button(label="Apply")
+        self._crop_apply_btn = Gtk.Button(label=self._("Apply"))
         self._crop_apply_btn.add_css_class("flat")
         self._crop_apply_btn.set_sensitive(False)
         self._crop_apply_btn.connect("clicked", self._apply_crop)
-        self._crop_reset_btn = Gtk.Button(label="Reset")
+        self._crop_reset_btn = Gtk.Button(label=self._("Reset"))
         self._crop_reset_btn.add_css_class("flat")
         self._crop_reset_btn.connect("clicked", self._reset_working)
         box.append(self._crop_btn)
@@ -1058,13 +1064,13 @@ class EditorView(Gtk.Box):
         self._obfuscate_btn.connect("toggled", self._on_obfuscate_toggled)
         obf_reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
         obf_reset.add_css_class("flat")
-        obf_reset.set_tooltip_text("Pinselstriche zurücksetzen")
+        obf_reset.set_tooltip_text(self._("Reset brush strokes"))
         obf_reset.connect("clicked", self._reset_obfuscate)
         obf_row.append(self._obfuscate_btn)
         obf_row.append(obf_reset)
         box.append(obf_row)
         size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        size_lbl = Gtk.Label(label="Pinselgröße", xalign=0)
+        size_lbl = Gtk.Label(label=self._("Brush size"), xalign=0)
         size_lbl.set_size_request(100, -1)
         self._obfuscate_size_sc = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.02, 0.25, 0.01)
         self._obfuscate_size_sc.set_value(self._obfuscate_brush_size)

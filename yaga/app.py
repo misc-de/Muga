@@ -1369,7 +1369,7 @@ class GalleryWindow(Adw.ApplicationWindow):
                 errors.append((path, e))
         self._exit_selection_mode()
         if not errors:
-            self._set_status(self._(f"Deleted {len(paths)} items"))
+            self._set_status(self._("Deleted %d items") % len(paths))
         elif len(errors) == len(paths):
             self._show_error_dialog(
                 self._("Delete failed"),
@@ -1377,7 +1377,11 @@ class GalleryWindow(Adw.ApplicationWindow):
                 f"{len(errors)}/{len(paths)} items"
             )
         else:
-            self._set_status(self._(f"Deleted {len(paths) - len(errors)}/{len(paths)} items ({len(errors)} failed)"))
+            self._set_status(
+                self._("Deleted %d/%d items (%d failed)") % (
+                    len(paths) - len(errors), len(paths), len(errors),
+                )
+            )
 
     def _sel_move_selected(self) -> None:
         if not self._selected_paths:
@@ -1403,7 +1407,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._exit_selection_mode()
             self.refresh(scan=True)
             if not errors:
-                self._set_status(self._(f"Moved {len(self._selected_paths)} items"))
+                self._set_status(self._("Moved %d items") % len(self._selected_paths))
             elif len(errors) == len(self._selected_paths):
                 self._show_error_dialog(
                     self._("Move failed"),
@@ -1411,7 +1415,11 @@ class GalleryWindow(Adw.ApplicationWindow):
                     f"{len(errors)} file(s) failed"
                 )
             else:
-                self._set_status(self._(f"Moved {len(self._selected_paths) - len(errors)} items ({len(errors)} failed)"))
+                self._set_status(
+                    self._("Moved %d items (%d failed)") % (
+                        len(self._selected_paths) - len(errors), len(errors),
+                    )
+                )
         chooser.destroy()
 
     def _del_item(self, item: MediaItem) -> None:
