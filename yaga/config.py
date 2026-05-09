@@ -91,7 +91,7 @@ class Settings:
 
     def categories(self) -> list[tuple[str, str, str]]:
         cats: list[tuple[str, str, str]] = [
-            ("pictures",    "Pictures",    self.pictures_dir),
+            ("pictures",    "Overview",    self.pictures_dir),
             ("photos",      "Photos",      self.photos_dir),
             ("videos",      "Videos",      self.videos_dir),
             ("screenshots", "Screenshots", self.screenshots_dir),

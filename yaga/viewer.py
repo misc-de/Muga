@@ -13,7 +13,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
 
-from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
 from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem
@@ -205,11 +205,28 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.stack.set_hexpand(True)
         self.stack.set_vexpand(True)
 
-        # Wrap stack + date in an overlay so the date floats over the image
-        # instead of stealing vertical space from the toolbar layout.
+        # Filename pill, floating at the bottom of the viewer with the same
+        # black background as the date pill but at normal font size.
+        self.filename_label = Gtk.Label()
+        self.filename_label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self.filename_label.set_max_width_chars(60)
+        self.filename_label.add_css_class("viewer-filename")
+        self.filename_revealer = Gtk.Revealer()
+        self.filename_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_UP)
+        self.filename_revealer.set_transition_duration(150)
+        self.filename_revealer.set_child(self.filename_label)
+        self.filename_revealer.set_reveal_child(False)
+        self.filename_revealer.set_halign(Gtk.Align.CENTER)
+        self.filename_revealer.set_valign(Gtk.Align.END)
+        self.filename_revealer.set_margin_bottom(20)
+        self.filename_revealer.set_can_target(False)
+
+        # Wrap stack + date + filename in an overlay so they float over the
+        # image instead of stealing vertical space from the toolbar layout.
         self._content_overlay = Gtk.Overlay()
         self._content_overlay.set_child(self.stack)
         self._content_overlay.add_overlay(self.date_revealer)
+        self._content_overlay.add_overlay(self.filename_revealer)
         self.toolbar.set_content(self._content_overlay)
 
         keys = Gtk.EventControllerKey()
@@ -269,7 +286,9 @@ class ViewerWindow(Adw.ApplicationWindow):
             self.stack.remove(child)
             child = next_child
         item = self.items[self.index]
-        self.set_title(item.name)
+        # Title bar stays empty; the filename floats at the bottom of the image.
+        self.set_title("")
+        self._update_filename_label(item)
         self._update_date_label(item)
         self._reset_zoom()
         self.zoom_view = None
@@ -605,6 +624,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             def _hide():
                 self.header.set_visible(False)
                 self.date_revealer.set_reveal_child(False)
+                self.filename_revealer.set_reveal_child(False)
                 return GLib.SOURCE_REMOVE
             GLib.idle_add(_hide)
 
@@ -618,6 +638,10 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_day_label.set_label(dt.strftime("%-d %B"))
         self.date_year_label.set_label(dt.strftime("%Y"))
         self.date_revealer.set_reveal_child(not self._current_is_video)
+
+    def _update_filename_label(self, item: MediaItem) -> None:
+        self.filename_label.set_label(item.name or "")
+        self.filename_revealer.set_reveal_child(bool(item.name) and not self._current_is_video)
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -814,6 +838,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             visible = not self.header.get_visible()
             self.header.set_visible(visible)
             self.date_revealer.set_reveal_child(visible and not self._current_is_video)
+            self.filename_revealer.set_reveal_child(visible and not self._current_is_video)
         elif not self._current_is_video and n_press == 2:
             self._reset_zoom()
 
@@ -879,14 +904,28 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.save_edit_button.set_visible(True)
         self.undo_edit_button.set_visible(True)
         self.redo_edit_button.set_visible(True)
-        # Move date next to filename in the title bar; the floating pill is
-        # redundant (and would steal screen real-estate from the editor).
+        # In landscape, fold the filename + date into the title bar so the
+        # editor gets every available pixel. In portrait the title bar would
+        # truncate aggressively, so we instead float the filename at the *top*
+        # of the editor (with the same black-pill look as before).
         try:
             dt = datetime.fromtimestamp(item.mtime)
-            self.set_title(f"{item.name}  ·  {dt.strftime('%-d %B %Y')}")
+            date_str = dt.strftime('%-d %B %Y')
         except (OverflowError, OSError, ValueError):
-            self.set_title(item.name)
+            date_str = ""
         self.date_revealer.set_reveal_child(False)
+        if self._date_landscape:
+            self.set_title(
+                f"{item.name}  ·  {date_str}" if date_str else item.name
+            )
+            self.filename_revealer.set_reveal_child(False)
+        else:
+            self.set_title("")
+            self.filename_label.set_label(item.name or "")
+            self.filename_revealer.set_valign(Gtk.Align.START)
+            self.filename_revealer.set_margin_top(20)
+            self.filename_revealer.set_margin_bottom(0)
+            self.filename_revealer.set_reveal_child(bool(item.name))
         child = self.stack.get_first_child()
         while child:
             nxt = child.get_next_sibling()
@@ -920,6 +959,11 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.save_edit_button.set_visible(False)
         self.undo_edit_button.set_visible(False)
         self.redo_edit_button.set_visible(False)
+        # Restore the filename pill back to its default bottom position; the
+        # editor may have moved it to the top in portrait mode.
+        self.filename_revealer.set_valign(Gtk.Align.END)
+        self.filename_revealer.set_margin_top(0)
+        self.filename_revealer.set_margin_bottom(20)
         # Title + date overlay are restored by show_item() below.
         self.show_item()
 

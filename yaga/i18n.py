@@ -7,6 +7,7 @@ TRANSLATIONS = {
         # Navigation / gallery
         "Photos": "Photos",
         "Pictures": "Pictures",
+        "Overview": "Overview",
         "Videos": "Videos",
         "Screenshots": "Screenshots",
         "Locations": "Locations",
@@ -27,6 +28,10 @@ TRANSLATIONS = {
         "Oldest first": "Oldest first",
         "Name": "Name",
         "Folder": "Folder",
+        "None": "None",
+        "Date": "Date",
+        "Ascending": "Ascending",
+        "Descending": "Descending",
         # Item actions
         "Open": "Open",
         "Delete": "Delete",
@@ -143,6 +148,7 @@ TRANSLATIONS = {
         # Navigation / gallery
         "Photos": "Fotos",
         "Pictures": "Bilder",
+        "Overview": "Übersicht",
         "Videos": "Videos",
         "Screenshots": "Screenshots",
         "Locations": "Orte",
@@ -163,6 +169,10 @@ TRANSLATIONS = {
         "Oldest first": "Älteste zuerst",
         "Name": "Name",
         "Folder": "Ordner",
+        "None": "Keine",
+        "Date": "Datum",
+        "Ascending": "Aufsteigend",
+        "Descending": "Absteigend",
         # Item actions
         "Open": "Öffnen",
         "Delete": "Löschen",

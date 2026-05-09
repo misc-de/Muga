@@ -310,9 +310,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.settings_button.connect("clicked", self._open_settings)
         self.header.pack_start(self.settings_button)
 
-        self.sort_button = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
-        self.sort_button.set_tooltip_text(self._("Sort"))
-        self.sort_button.set_popover(self._sort_popover())
+        self.sort_button = self._build_sort_controls()
         self.header.pack_end(self.sort_button)
 
         # ── Selection-mode header widgets (hidden until long-press activates) ──
@@ -381,29 +379,103 @@ class GalleryWindow(Adw.ApplicationWindow):
     # Sort popover
     # ------------------------------------------------------------------
 
-    def _sort_popover(self) -> Gtk.Popover:
-        popover = Gtk.Popover()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
-        box.set_margin_start(8)
-        box.set_margin_end(8)
-        for mode, label, icon in [
-            ("newest", "Newest first", "view-sort-descending-symbolic"),
-            ("oldest", "Oldest first", "view-sort-ascending-symbolic"),
-            ("name", "Name", "format-text-bold-symbolic"),
-            ("folder", "Folder", "folder-symbolic"),
-            ("date", "Date", "view-calendar-symbolic"),
-        ]:
-            button = Gtk.Button()
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            row.append(Gtk.Image.new_from_icon_name(icon))
-            row.append(Gtk.Label(label=self._(label), xalign=0))
-            button.set_child(row)
-            button.connect("clicked", self._set_sort_mode, mode, popover)
-            box.append(button)
-        popover.set_child(box)
-        return popover
+    # Internal sort_mode strings ↔ (mode-key, descending bool) tuples.
+    _SORT_KEYS = ["none", "date", "folder", "name"]
+    _SORT_TO_INTERNAL = {
+        ("none",   True):  "newest",
+        ("none",   False): "oldest",
+        ("date",   True):  "date",
+        ("date",   False): "date_asc",
+        ("folder", True):  "folder_desc",
+        ("folder", False): "folder",
+        ("name",   True):  "name_desc",
+        ("name",   False): "name",
+    }
+    _INTERNAL_TO_SORT = {v: k for k, v in _SORT_TO_INTERNAL.items()}
+
+    def _build_sort_controls(self) -> Gtk.Box:
+        # Label texts in the dropdown — matched 1:1 with self._SORT_KEYS.
+        self._sort_dropdown_labels = ["None", "Date", "Folder", "Name"]
+        store = Gtk.StringList()
+        for label in self._sort_dropdown_labels:
+            store.append(self._(label))
+        self._sort_dropdown = Gtk.DropDown.new(store, None)
+        self._sort_dropdown.set_valign(Gtk.Align.CENTER)
+        self._sort_dropdown.connect("notify::selected", self._on_sort_dropdown_changed)
+
+        self._sort_dir_btn = Gtk.Button()
+        self._sort_dir_btn.set_valign(Gtk.Align.CENTER)
+        self._sort_dir_btn.add_css_class("flat")
+        self._sort_dir_btn.connect("clicked", self._on_sort_direction_clicked)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        box.set_valign(Gtk.Align.CENTER)
+        box.append(self._sort_dropdown)
+        box.append(self._sort_dir_btn)
+
+        self._sort_updating = False
+        self._sync_sort_controls()
+        return box
+
+    def _current_sort_internal(self) -> str:
+        sort_key = (
+            f"{self.category}\x00{self.current_folder}"
+            if self.current_folder is not None else self.category
+        )
+        default = "folder" if self.category == "nextcloud" else self.settings.sort_mode
+        return self.settings.sort_modes.get(sort_key, default)
+
+    def _sync_sort_controls(self) -> None:
+        """Set dropdown + direction icon based on the persisted sort mode."""
+        internal = self._current_sort_internal()
+        mode_key, desc = self._INTERNAL_TO_SORT.get(internal, ("none", True))
+        try:
+            idx = self._SORT_KEYS.index(mode_key)
+        except ValueError:
+            idx = 0
+        self._sort_updating = True
+        try:
+            if self._sort_dropdown.get_selected() != idx:
+                self._sort_dropdown.set_selected(idx)
+        finally:
+            self._sort_updating = False
+        # Icon shows current direction; tooltip explains what a click would do.
+        if desc:
+            self._sort_dir_btn.set_icon_name("view-sort-descending-symbolic")
+            self._sort_dir_btn.set_tooltip_text(self._("Descending"))
+        else:
+            self._sort_dir_btn.set_icon_name("view-sort-ascending-symbolic")
+            self._sort_dir_btn.set_tooltip_text(self._("Ascending"))
+
+    def _on_sort_dropdown_changed(self, dropdown: Gtk.DropDown, _param) -> None:
+        if self._sort_updating:
+            return
+        idx = dropdown.get_selected()
+        if idx < 0 or idx >= len(self._SORT_KEYS):
+            return
+        mode_key = self._SORT_KEYS[idx]
+        # Preserve the current direction across mode changes.
+        _prev_mode_key, desc = self._INTERNAL_TO_SORT.get(
+            self._current_sort_internal(), ("none", True),
+        )
+        self._apply_sort_mode(mode_key, desc)
+
+    def _on_sort_direction_clicked(self, _btn: Gtk.Button) -> None:
+        mode_key, desc = self._INTERNAL_TO_SORT.get(
+            self._current_sort_internal(), ("none", True),
+        )
+        self._apply_sort_mode(mode_key, not desc)
+
+    def _apply_sort_mode(self, mode_key: str, desc: bool) -> None:
+        internal = self._SORT_TO_INTERNAL[(mode_key, desc)]
+        sort_key = (
+            f"{self.category}\x00{self.current_folder}"
+            if self.current_folder is not None else self.category
+        )
+        self.settings.sort_modes[sort_key] = internal
+        self.settings.save()
+        self._sync_sort_controls()
+        self._render()
 
     # ------------------------------------------------------------------
     # Category navigation
@@ -650,6 +722,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._date_last_key = None
 
         sort_mode = self.settings.get_sort_mode(self.category, self.current_folder)
+        # Sync the dropdown + direction icon to whatever was saved for this view.
+        if hasattr(self, "_sort_dropdown"):
+            self._sync_sort_controls()
         self.back_button.set_visible(False)
         if sort_mode == "folder":
             self._render_folders()
@@ -1419,17 +1494,6 @@ class GalleryWindow(Adw.ApplicationWindow):
         if velocity_x > 0:
             self._go_back_folder()
 
-    def _set_sort_mode(self, _button: Gtk.Button, mode: str, popover: Gtk.Popover) -> None:
-        sort_key = f"{self.category}\x00{self.current_folder}" if self.current_folder is not None else self.category
-        if mode == "date":
-            # Repeated click toggles ascending/descending.
-            current = self.settings.sort_modes.get(sort_key)
-            mode = "date_asc" if current == "date" else "date"
-        self.settings.sort_modes[sort_key] = mode
-        self.settings.save()
-        popover.popdown()
-        self._render()
-
     def _open_settings(self, _button: Gtk.Button) -> None:
         SettingsWindow(self).present()
 
@@ -1673,6 +1737,13 @@ class GalleryWindow(Adw.ApplicationWindow):
                 font-size: 22px;
                 opacity: 0.65;
                 margin-top: -4px;
+            }
+            .viewer-filename {
+                /* Same black-pill look as the date, but at the regular font size */
+                padding: 8px 18px;
+                background: rgba(0,0,0,0.55);
+                color: white;
+                border-radius: 14px;
             }
             """
             + rotation_css

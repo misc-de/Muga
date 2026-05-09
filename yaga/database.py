@@ -208,10 +208,12 @@ class Database:
     def list_media(self, category: str, sort_mode: str = "newest", folder: str | None = None,
                    include_nc: bool = False) -> list[MediaItem]:
         order = {
-            "newest": "mtime DESC, name COLLATE NOCASE ASC",
-            "oldest": "mtime ASC, name COLLATE NOCASE ASC",
-            "name": "name COLLATE NOCASE ASC",
-            "folder": "folder COLLATE NOCASE ASC, mtime DESC",
+            "newest":      "mtime DESC, name COLLATE NOCASE ASC",
+            "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
+            "name":        "name COLLATE NOCASE ASC",
+            "name_desc":   "name COLLATE NOCASE DESC",
+            "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
+            "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
         }.get(sort_mode, "mtime DESC")
         where, args = self._build_list_where(category, folder, include_nc)
         with self.lock:
@@ -231,10 +233,12 @@ class Database:
     ) -> list[MediaItem]:
         """Return paginated media items with LIMIT and OFFSET."""
         order = {
-            "newest": "mtime DESC, name COLLATE NOCASE ASC",
-            "oldest": "mtime ASC, name COLLATE NOCASE ASC",
-            "name": "name COLLATE NOCASE ASC",
-            "folder": "folder COLLATE NOCASE ASC, mtime DESC",
+            "newest":      "mtime DESC, name COLLATE NOCASE ASC",
+            "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
+            "name":        "name COLLATE NOCASE ASC",
+            "name_desc":   "name COLLATE NOCASE DESC",
+            "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
+            "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
         }.get(sort_mode, "mtime DESC")
         where, args = self._build_list_where(category, folder, include_nc)
         args.extend([limit, offset])
