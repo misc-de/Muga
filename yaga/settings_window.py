@@ -65,23 +65,16 @@ class SettingsWindow(Adw.PreferencesWindow):
         columns.connect("notify::value", self._columns_changed)
         grid_group.add(columns)
 
-        video_group = Adw.PreferencesGroup(title=self._("Video"))
+        video_group = Adw.PreferencesGroup(
+            title=self._("Video"),
+            description=self._("Leave empty to use built-in playback"),
+        )
         app.add(video_group)
         command = Adw.EntryRow(title=self._("External player command"))
         command.set_text(self.settings.external_video_player)
         command.set_show_apply_button(True)
         command.connect("apply", self._entry_apply, "external_video_player")
         video_group.add(command)
-
-        hint = Adw.ActionRow(title=self._("Leave empty to use built-in playback"))
-        video_group.add(hint)
-
-        # Clear thumbnail cache — standalone button at the very bottom of Appearance
-        clear_group = Adw.PreferencesGroup()
-        app.add(clear_group)
-        clear = Gtk.Button(label=self._("Clear thumbnail cache"), icon_name="edit-clear-symbolic")
-        clear.connect("clicked", self._clear_thumbnails)
-        clear_group.add(clear)
 
         self._build_nextcloud_page()
 
@@ -90,18 +83,37 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.add(page)
 
         # ── Credentials ──
-        creds = Adw.PreferencesGroup(title=self._("Credentials"))
-        page.add(creds)
+        self._nc_creds_group = Adw.PreferencesGroup(title=self._("Credentials"))
+        page.add(self._nc_creds_group)
+
+        # Top row: status text + Connect/Disconnect button on the right
+        self._nc_status_row = Adw.ActionRow()
+        self._nc_status_icon: Gtk.Image | None = None
+
+        self._nc_connect_btn = Gtk.Button()
+        self._nc_connect_btn.set_child(self._make_icon_label("network-transmit-receive-symbolic", self._("Connect")))
+        self._nc_connect_btn.add_css_class("suggested-action")
+        self._nc_connect_btn.set_valign(Gtk.Align.CENTER)
+        self._nc_connect_btn.connect("clicked", self._nc_connect)
+        self._nc_status_row.add_suffix(self._nc_connect_btn)
+
+        self._nc_disconnect_btn = Gtk.Button()
+        self._nc_disconnect_btn.set_child(self._make_icon_label("network-offline-symbolic", self._("Disconnect")))
+        self._nc_disconnect_btn.add_css_class("destructive-action")
+        self._nc_disconnect_btn.set_valign(Gtk.Align.CENTER)
+        self._nc_disconnect_btn.connect("clicked", self._nc_disconnect)
+        self._nc_status_row.add_suffix(self._nc_disconnect_btn)
+        self._nc_creds_group.add(self._nc_status_row)
 
         self._nc_url_row = Adw.EntryRow(title=self._("Server URL"))
         self._nc_url_row.set_text(self.settings.nextcloud_url)
         self._nc_url_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
-        creds.add(self._nc_url_row)
+        self._nc_creds_group.add(self._nc_url_row)
 
         self._nc_user_row = Adw.EntryRow(title=self._("Username"))
         self._nc_user_row.set_text(self.settings.nextcloud_user)
         self._nc_user_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
-        creds.add(self._nc_user_row)
+        self._nc_creds_group.add(self._nc_user_row)
 
         self._nc_pass_row = Adw.PasswordEntryRow(title=self._("App password"))
         self._nc_pass_row.set_text(self.settings.load_app_password())
@@ -111,19 +123,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         qr_btn.set_valign(Gtk.Align.CENTER)
         qr_btn.connect("clicked", self._nc_scan_qr)
         self._nc_pass_row.add_suffix(qr_btn)
-        creds.add(self._nc_pass_row)
+        self._nc_creds_group.add(self._nc_pass_row)
 
         self._nc_path_row = Adw.EntryRow(title=self._("Photos folder on Nextcloud"))
         self._nc_path_row.set_text(self.settings.nextcloud_photos_path or "Photos")
         self._nc_path_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
-        creds.add(self._nc_path_row)
-
-        hint = Adw.ActionRow(
-            title=self._("Create app password"),
-            subtitle=self._("Nextcloud → Settings → Security → App passwords"),
-        )
-        hint.add_prefix(Gtk.Image.new_from_icon_name("dialog-information-symbolic"))
-        creds.add(hint)
+        self._nc_creds_group.add(self._nc_path_row)
 
         # ── Performance ──
         perf = Adw.PreferencesGroup(title=self._("Performance"))
@@ -145,38 +150,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         merge_row.connect("notify::active", self._nc_show_in_pictures_changed)
         perf.add(merge_row)
 
-        # ── Status + actions ──
-        actions = Adw.PreferencesGroup()
-        page.add(actions)
-
-        self._nc_status_row = Adw.ActionRow()
-        self._nc_status_row.set_visible(False)
-        actions.add(self._nc_status_row)
-
-        btn_row = Adw.ActionRow()
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_box.set_halign(Gtk.Align.CENTER)
-        btn_box.set_valign(Gtk.Align.CENTER)
-        btn_box.set_hexpand(True)
-
-        self._nc_connect_btn = Gtk.Button.new_from_icon_name("network-transmit-receive-symbolic")
-        self._nc_connect_btn.set_child(self._make_icon_label("network-transmit-receive-symbolic", self._("Connect")))
-        self._nc_connect_btn.add_css_class("suggested-action")
-        self._nc_connect_btn.connect("clicked", self._nc_connect)
-        btn_box.append(self._nc_connect_btn)
-
-        self._nc_disconnect_btn = Gtk.Button()
-        self._nc_disconnect_btn.set_child(self._make_icon_label("network-offline-symbolic", self._("Disconnect")))
-        self._nc_disconnect_btn.add_css_class("destructive-action")
-        self._nc_disconnect_btn.connect("clicked", self._nc_disconnect)
-        btn_box.append(self._nc_disconnect_btn)
-
-        btn_row.set_child(btn_box)
-        actions.add(btn_row)
-
-        self._nc_update_buttons()
-        if self.settings.nextcloud_enabled:
-            self._nc_set_status(self._("Connected ✓"), ok=True)
+        self._nc_refresh_status()
 
     @staticmethod
     def _make_icon_label(icon_name: str, label: str) -> Gtk.Box:
@@ -192,12 +166,26 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _nc_set_status(self, text: str, ok: bool = True) -> None:
         self._nc_status_row.set_title(text)
-        self._nc_status_row.set_visible(True)
         icon = "emblem-ok-symbolic" if ok else "dialog-warning-symbolic"
-        if hasattr(self, "_nc_status_icon") and self._nc_status_icon is not None:
+        if self._nc_status_icon is not None:
             self._nc_status_row.remove(self._nc_status_icon)
         self._nc_status_icon = Gtk.Image.new_from_icon_name(icon)
         self._nc_status_row.add_prefix(self._nc_status_icon)
+
+    def _nc_refresh_status(self) -> None:
+        """Sync status row + buttons + group description with the current
+        nextcloud_enabled state. Called whenever the connection state changes."""
+        connected = self.settings.nextcloud_enabled
+        self._nc_update_buttons()
+        if connected:
+            self._nc_set_status(self._("Connected ✓"), ok=True)
+            # Tip is no longer needed once the user has set things up.
+            self._nc_creds_group.set_description("")
+        else:
+            self._nc_set_status(self._("Disconnected"), ok=False)
+            self._nc_creds_group.set_description(
+                self._("Create app password: Nextcloud → Settings → Security → App passwords")
+            )
 
     def _nc_connect(self, _btn: Gtk.Button) -> None:
         url  = self._nc_url_row.get_text().strip()
@@ -243,8 +231,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         if ok:
             self.settings.nextcloud_enabled = True
             self.settings.save()
-            self._nc_set_status(self._("Connected ✓"), ok=True)
-            self._nc_update_buttons()
+            self._nc_refresh_status()
             self.parent_window.apply_settings(self.settings)
         else:
             self._nc_set_status(f"{self._('Connection failed')}: {error}" if error else self._("Connection failed"), ok=False)
@@ -252,8 +239,7 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _nc_disconnect(self, _btn: Gtk.Button) -> None:
         self.settings.nextcloud_enabled = False
         self.settings.save()
-        self._nc_update_buttons()
-        self._nc_set_status(self._("Disconnected"), ok=True)
+        self._nc_refresh_status()
         self.parent_window.apply_settings(self.settings)
 
     def _nc_scan_qr(self, _btn: Gtk.Button) -> None:
@@ -417,10 +403,6 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.parent_window.apply_settings(self.settings)
         self.close()
         SettingsWindow(self.parent_window).present()
-
-    def _clear_thumbnails(self, _button: Gtk.Button) -> None:
-        self.parent_window.thumbnailer.clear()
-        self.parent_window.refresh(scan=True)
 
 
 
