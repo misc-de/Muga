@@ -651,19 +651,20 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self._rotate_gesture_total = angle_delta
         deg = math.degrees(angle_delta)
-        # Deadband: until the user has clearly *twisted* (not just pinched
-        # off-center) we stay silent. Off-center pinches typically leak a few
-        # degrees of accidental rotation, so the threshold is generous; a
-        # pinch that meanwhile crosses the zoom deadband locks rotate out.
+        # Deadband: only commit rotate after a clearly intentional twist.
+        # Off-center pinches always leak some degrees of incidental rotation,
+        # so the threshold is generous. A simultaneous pinch above the zoom
+        # deadband completely locks rotate out — zoom always wins ties.
         if not self._rotate_committed:
-            if abs(deg) < 18.0:
+            if abs(deg) < 30.0:
                 return
-            # If a pinch is also building up, treat that as the dominant intent.
             try:
                 pinch_pct = abs(self.zoom_gesture.get_scale_delta() - 1.0) * 100
             except Exception:
                 pinch_pct = 0.0
-            if pinch_pct >= 3.0 and abs(deg) < pinch_pct * 4:
+            # Even a tiny pinch (≥1.5%) is enough to suppress rotate, and we
+            # need ~10× more rotation than scale change before rotate wins.
+            if pinch_pct >= 1.5 and abs(deg) < pinch_pct * 10:
                 return
             self._rotate_committed = True
         self._set_rotate_preview(deg)
@@ -860,9 +861,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         if self._rotate_committed:
             return
         if not self._zoom_committed:
-            # 3% pinch is enough to commit zoom — almost any deliberate spread
-            # crosses this before rotation reaches the 18° rotate threshold.
-            if 0.97 <= scale_delta <= 1.03:
+            # 1.5% pinch is enough to commit zoom — almost any spread crosses
+            # this long before rotation reaches the 30° rotate threshold.
+            if 0.985 <= scale_delta <= 1.015:
                 return
             self._zoom_committed = True
         self._set_zoom(self.zoom_start_scale * scale_delta)
