@@ -123,7 +123,6 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._nc_spinner: Gtk.Spinner | None = None
         self._nc_broken_img: Gtk.Image | None = None
         self._nc_folder_sync_generation = 0
-        self._date_group_modes: dict[str, str] = {}
 
         # Pagination for large galleries
         self._page_size: int = 100  # Load 100 items per page
@@ -150,6 +149,16 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _set_status(self, text: str) -> None:
         self.status.set_text(text)
         self.status.set_visible(bool(text))
+
+    def _set_empty_state(self, visible: bool) -> None:
+        """Pick an appropriate empty-state label for the current view."""
+        missing = self.scanner.missing_root.get(self.category)
+        if visible and missing is not None:
+            display = self.current_folder or Path(missing).name or missing
+            text = self._("Folder %s not found") % display
+        else:
+            text = self._("No pictures found")
+        self.gallery_grid.set_empty(text, visible)
 
     def _show_error_dialog(self, title: str, message: str, details: str = "") -> None:
         """Show an error dialog with title, message, and optional details."""
@@ -230,6 +239,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.back_button.set_tooltip_text(self._("Back"))
         self.back_button.connect("clicked", self._on_back)
         self.header.pack_start(self.back_button)
+
+        self.new_folder_button = Gtk.Button.new_from_icon_name("list-add-symbolic")
+        self.new_folder_button.set_tooltip_text(self._("New folder"))
+        self.new_folder_button.connect("clicked", lambda _b: self._prompt_new_folder())
+        self.header.pack_start(self.new_folder_button)
 
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
@@ -540,8 +554,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.back_button.set_visible(False)
         if sort_mode == "folder":
             self._render_folders()
-        elif sort_mode == "date":
-            self._render_date_groups()
+        elif sort_mode in ("date", "date_asc"):
+            self._render_date_groups(ascending=(sort_mode == "date_asc"))
         else:
             # For large galleries, use pagination to reduce memory and improve responsiveness
             self._total_count = self.database.count_media(self.category, self.current_folder)
@@ -563,7 +577,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             for item in self.current_items:
                 self.gallery_grid.append_media(item, item.path in self._selected_paths)
             self._set_status("")
-            self.gallery_grid.set_empty(self._("No pictures found"), not self.current_items)
+            self._set_empty_state(visible=not self.current_items)
         self.gallery_grid.finish()
 
         if saved_pos > 0:
@@ -588,35 +602,33 @@ class GalleryWindow(Adw.ApplicationWindow):
         for item in self.current_items:
             self.gallery_grid.append_media(item, item.path in self._selected_paths)
         total = len(folders) + len(self.current_items)
-        self.gallery_grid.set_empty(self._("No pictures found"), total == 0)
+        self._set_empty_state(visible=total == 0)
         self._set_status("")
 
-    def _render_date_groups(self) -> None:
-        date_key = f"{self.category}\x00{self.current_folder or '/'}"
-        granularity = self._date_group_modes.get(date_key, "day")
+    def _render_date_groups(self, ascending: bool = False) -> None:
+        order = "oldest" if ascending else "newest"
         self.current_items = self.database.list_media(
-            self.category, "newest", self.current_folder
+            self.category, order, self.current_folder
         )
-        last_header = None
+        last_key = None
         for item in self.current_items:
-            header = self._date_group_label(item.mtime, granularity)
-            if header != last_header:
-                self.gallery_grid.append_header(header)
-                last_header = header
+            dt = datetime.fromtimestamp(item.mtime)
+            key = (dt.year, dt.month)
+            if key != last_key:
+                self.gallery_grid.append_header(self._month_header_markup(dt))
+                last_key = key
             self.gallery_grid.append_media(item, item.path in self._selected_paths)
         self._set_status("")
-        self.gallery_grid.set_empty(self._("No pictures found"), not self.current_items)
+        self._set_empty_state(visible=not self.current_items)
 
-    def _date_group_label(self, mtime: float, granularity: str) -> str:
-        dt = datetime.fromtimestamp(mtime)
-        if granularity == "week":
-            year, week, _weekday = dt.isocalendar()
-            return f"{year} · Week {week:02d}"
-        if granularity == "month":
-            return dt.strftime("%B %Y")
-        if granularity == "year":
-            return dt.strftime("%Y")
-        return dt.strftime("%Y-%m-%d")
+    def _month_header_markup(self, dt: datetime) -> str:
+        # Two-line month/year header (locale-aware month name) with smaller dim year.
+        month = GLib.markup_escape_text(dt.strftime("%B"))
+        year = GLib.markup_escape_text(dt.strftime("%Y"))
+        return (
+            f"<span weight='600'>{month}</span>\n"
+            f"<span size='small' alpha='65%'>{year}</span>"
+        )
 
     def _visible_child_folder_for_item(self, item_folder: str) -> str | None:
         if item_folder in ("", "/"):
@@ -677,6 +689,133 @@ class GalleryWindow(Adw.ApplicationWindow):
     # ------------------------------------------------------------------
     # Item actions
     # ------------------------------------------------------------------
+
+    def _category_root(self, category: str) -> str | None:
+        """Filesystem path or NC photos_path that backs *category*, or None."""
+        for cat, _label, path in self.settings.categories():
+            if cat == category:
+                return path
+        return None
+
+    def _prompt_new_folder(self) -> None:
+        """Adwaita-styled dialog asking for a folder name; creates it on confirm."""
+        if self.scanner.missing_root.get(self.category) is not None:
+            self._show_error_dialog(
+                self._("Cannot create folder"),
+                self._("The current location is not available."),
+            )
+            return
+
+        entry = Adw.EntryRow()
+        entry.set_title(self._("Folder name"))
+        entry.set_show_apply_button(False)
+        # Wrap in a list-style group so it gets Adwaita rounded corners
+        group = Adw.PreferencesGroup()
+        group.add(entry)
+
+        dialog = Adw.AlertDialog(
+            heading=self._("New folder"),
+            body=self._("Create a new folder in %s") % (self.current_folder or "/"),
+        )
+        dialog.set_extra_child(group)
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("create", self._("Create"))
+        dialog.set_default_response("create")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("create", Adw.ResponseAppearance.SUGGESTED)
+
+        # Enter on the entry confirms
+        entry.connect("entry-activated", lambda _e: dialog.response("create"))
+
+        def _done(_dialog, response):
+            if response != "create":
+                return
+            name = entry.get_text().strip()
+            if not name:
+                return
+            self._create_folder_in_current(name)
+
+        dialog.connect("response", _done)
+        dialog.present(self)
+        # Focus the entry so the user can start typing immediately
+        GLib.idle_add(lambda: (entry.grab_focus(), GLib.SOURCE_REMOVE)[1])
+
+    def _create_folder_in_current(self, name: str) -> None:
+        # Disallow path separators in folder name
+        if "/" in name or "\\" in name:
+            self._show_error_dialog(
+                self._("Invalid folder name"),
+                self._("Folder names cannot contain slashes."),
+            )
+            return
+
+        if self.category == "nextcloud":
+            self._create_nc_folder(name)
+        else:
+            self._create_local_folder(name)
+
+    def _create_local_folder(self, name: str) -> None:
+        root = self._category_root(self.category)
+        if not root:
+            return
+        parent = Path(root).expanduser()
+        if self.current_folder:
+            parent = parent / self.current_folder
+        new_dir = parent / name
+        try:
+            new_dir.mkdir(parents=False, exist_ok=False)
+        except FileExistsError:
+            self._show_error_dialog(
+                self._("Folder exists"),
+                self._("A folder named %s already exists here.") % name,
+            )
+            return
+        except OSError as exc:
+            self._show_error_dialog(
+                self._("Could not create folder"), str(exc),
+            )
+            return
+        self.refresh(scan=True, scope="current")
+
+    def _create_nc_folder(self, name: str) -> None:
+        from .nextcloud import NextcloudClient
+        pwd = self.settings.load_app_password()
+        if not pwd:
+            self._show_error_dialog(
+                self._("Not connected"),
+                self._("Nextcloud password is unavailable."),
+            )
+            return
+        photos_path = self.settings.nextcloud_photos_path or "Photos"
+        rel_parts = [photos_path.strip("/")]
+        if self.current_folder:
+            rel_parts.append(self.current_folder.strip("/"))
+        rel_parts.append(name)
+        rel = "/".join(p for p in rel_parts if p)
+
+        def _worker():
+            try:
+                client = NextcloudClient(
+                    self.settings.nextcloud_url, self.settings.nextcloud_user, pwd,
+                )
+                dav = f"{client.dav_root}/{rel}"
+                ok = client.mkcol(dav)
+            except Exception as exc:
+                LOGGER.exception("NC folder creation failed: %s", exc)
+                ok = False
+            GLib.idle_add(self._on_nc_folder_created, name, ok)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_nc_folder_created(self, name: str, ok: bool) -> bool:
+        if not ok:
+            self._show_error_dialog(
+                self._("Could not create folder"),
+                self._("The Nextcloud server rejected the new folder %s.") % name,
+            )
+        else:
+            self.refresh(scan=True, scope="current")
+        return GLib.SOURCE_REMOVE
 
     def _open_folder(self, _button, folder: str) -> None:
         self.current_folder = folder
@@ -770,6 +909,7 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _enter_selection_mode(self) -> None:
         self._selection_mode = True
         self.back_button.set_visible(False)
+        self.new_folder_button.set_visible(False)
         self.refresh_button.set_visible(False)
         self.settings_button.set_visible(False)
         self.sort_button.set_visible(False)
@@ -789,6 +929,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
         self.back_button.set_visible(False)
+        self.new_folder_button.set_visible(True)
         self.refresh_button.set_visible(True)
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)
@@ -985,14 +1126,9 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _set_sort_mode(self, _button: Gtk.Button, mode: str, popover: Gtk.Popover) -> None:
         sort_key = f"{self.category}\x00{self.current_folder}" if self.current_folder is not None else self.category
         if mode == "date":
-            current_mode = self.settings.sort_modes.get(sort_key)
-            order = ["day", "week", "month", "year"]
-            date_key = f"{self.category}\x00{self.current_folder or '/'}"
-            current_group = self._date_group_modes.get(date_key, "day")
-            if current_mode == "date":
-                current_group = order[(order.index(current_group) + 1) % len(order)]
-            self._date_group_modes[date_key] = current_group
-            self._set_status(self._date_group_label(time.time(), current_group).split(" · ")[0])
+            # Repeated click toggles ascending/descending.
+            current = self.settings.sort_modes.get(sort_key)
+            mode = "date_asc" if current == "date" else "date"
         self.settings.sort_modes[sort_key] = mode
         self.settings.save()
         popover.popdown()
@@ -1182,11 +1318,10 @@ class GalleryWindow(Adw.ApplicationWindow):
                 padding: 1px;
             }
             .date-header {
-                min-height: 30px;
-                padding: 0 4px;
+                min-height: 46px;
+                padding: 6px 4px;
                 background: rgba(0,0,0,0.45);
                 color: white;
-                font-weight: 700;
             }
             .folder-label {
                 background: rgba(0,0,0,0.55);

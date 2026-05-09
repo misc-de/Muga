@@ -246,11 +246,32 @@ class NextcloudClient:
             if resp.status in (201, 204):  # Created or No Content
                 LOGGER.info("Successfully uploaded %s to %s", local_path, dav_path)
                 return True
-            
+
             LOGGER.warning("Nextcloud upload HTTP %s for %s", resp.status, dav_path)
             return False
         except Exception as exc:
             LOGGER.error("Nextcloud upload failed for %s: %s", dav_path, exc)
+            return False
+        finally:
+            conn.close()
+
+    def mkcol(self, dav_path: str) -> bool:
+        """Create a remote collection (folder) at *dav_path* via WebDAV MKCOL."""
+        conn = self._conn()
+        try:
+            conn.request(
+                "MKCOL",
+                quote(dav_path, safe="/:@!$&'()*+,;="),
+                headers=self._headers(),
+            )
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status in (201, 204):
+                return True
+            LOGGER.warning("Nextcloud MKCOL HTTP %s for %s", resp.status, dav_path)
+            return False
+        except Exception as exc:
+            LOGGER.error("Nextcloud MKCOL failed for %s: %s", dav_path, exc)
             return False
         finally:
             conn.close()

@@ -16,6 +16,9 @@ class MediaScanner:
         self.database = database
         self.thumbnailer = thumbnailer
         self._visited_inodes: set[tuple] = set()  # Track (device, inode) to prevent symlink loops
+        # Categories whose root location is gone (missing on disk / 404 on server).
+        # Maps category → human-readable folder name shown in the empty state.
+        self.missing_root: dict[str, str] = {}
 
     def scan(self, categories: list[tuple[str, str, str]], nc_client=None,
              nc_thumbnail_only: bool = True) -> None:
@@ -32,7 +35,9 @@ class MediaScanner:
             root = Path(root_text).expanduser()
             if not root.exists():
                 # Skip pruning for vanished roots so unmounted drives don't lose their index.
+                self.missing_root[category] = str(root)
                 continue
+            self.missing_root.pop(category, None)
             scanned_categories.append(category)
             if root.is_symlink():
                 LOGGER.warning("Skipping symlink root folder: %s", root)
@@ -128,6 +133,7 @@ class MediaScanner:
         except FileNotFoundError:
             # Photos folder no longer exists on the server — drop all NC entries.
             LOGGER.warning("Nextcloud Photos folder %r is gone — pruning all NC entries", photos_path)
+            self.missing_root["nextcloud"] = photos_path
             removed = self.database.prune_missing(started, ["nextcloud"])
             self.database.commit()
             LOGGER.info("Pruned %d stale NC entries (folder vanished)", removed)
@@ -135,6 +141,7 @@ class MediaScanner:
         except Exception as e:
             LOGGER.exception("Nextcloud structure scan failed: %s", e)
             return
+        self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"
         upserted = 0
         for info in files:

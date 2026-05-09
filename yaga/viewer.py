@@ -208,11 +208,14 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_gesture = Gtk.GestureZoom()
         self.zoom_gesture.connect("begin", self._on_zoom_begin)
         self.zoom_gesture.connect("scale-changed", self._on_zoom_scale_changed)
+        self.zoom_gesture.connect("end", lambda *_: setattr(self, "_zoom_committed", False))
         self.stack.add_controller(self.zoom_gesture)
         self.rotate_gesture = Gtk.GestureRotate()
         self._rotate_gesture_total: float = 0.0
         self._rotate_active: bool = False
+        self._rotate_committed: bool = False
         self._rotate_current_class: str | None = None
+        self._zoom_committed: bool = False
         self.rotate_gesture.connect("begin", self._on_rotate_gesture_begin)
         self.rotate_gesture.connect("angle-changed", self._on_rotate_gesture_angle_changed)
         self.rotate_gesture.connect("end", self._on_rotate_gesture_end)
@@ -462,25 +465,35 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         self._rotate_gesture_total = 0.0
         self._rotate_active = True
+        self._rotate_committed = False
 
     def _on_rotate_gesture_angle_changed(self, _gesture, _angle, angle_delta) -> None:
         # GtkGestureRotate emits (current_finger_angle, delta_since_start). We want
         # the cumulative delta — the absolute finger angle would only ever rotate
-        # the image clockwise because it's reported in [0, 2π).
-        if not self._rotate_active:
+        # clockwise because it's reported in [0, 2π).
+        if not self._rotate_active or self._zoom_committed:
             return
         self._rotate_gesture_total = angle_delta
-        self._set_rotate_preview(math.degrees(angle_delta))
+        deg = math.degrees(angle_delta)
+        # Deadband: ignore tiny twists so accidental two-finger noise doesn't
+        # wobble the preview while the user is doing a one-finger swipe.
+        if not self._rotate_committed:
+            if abs(deg) < 8.0:
+                return
+            self._rotate_committed = True
+        self._set_rotate_preview(deg)
 
     def _on_rotate_gesture_end(self, _gesture, _seq) -> None:
         if not self._rotate_active:
             return
         self._rotate_active = False
+        was_committed = self._rotate_committed
+        self._rotate_committed = False
         deg = math.degrees(self._rotate_gesture_total)
         self._rotate_gesture_total = 0.0
         self._set_rotate_preview(None)
         # 30° of cumulative twist commits the nearest 90° step (positive or negative).
-        if abs(deg) < 30:
+        if not was_committed or abs(deg) < 30:
             return
         steps = int(round(deg / 90))
         if steps != 0:
@@ -608,6 +621,9 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _navigate_from_horizontal_motion(self, x: float, y: float) -> None:
         if self.zoom_scale > 1.05:
             return
+        # Don't navigate if a two-finger gesture is the real intent
+        if self._rotate_committed or self._zoom_committed:
+            return
         if abs(x) < 90 or abs(x) <= abs(y) * 1.8:
             return
         now = GLib.get_monotonic_time()
@@ -621,6 +637,7 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _on_zoom_begin(self, gesture: Gtk.GestureZoom, _sequence) -> None:
         self.zoom_start_scale = self.zoom_scale
+        self._zoom_committed = False
         self._zoom_anchor: tuple[float, float, float, float] | None = None
         if self.zoom_scroller:
             ok, bx, by = gesture.get_bounding_box_center()
@@ -631,11 +648,14 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self._zoom_anchor = (bx, by, (hadj.get_value() + bx) / s, (vadj.get_value() + by) / s)
 
     def _on_zoom_scale_changed(self, _gesture: Gtk.GestureZoom, scale_delta: float) -> None:
-        # Avoid fighting the rotate gesture: while the user is twisting two fingers
-        # we ignore concurrent scale changes so the image doesn't flicker between
-        # zoom and rotate modes.
-        if self._rotate_active:
+        # Don't fight rotate, and don't react to tiny pinches that are really
+        # just one-finger swipes contaminated with a stray second touch.
+        if self._rotate_committed:
             return
+        if not self._zoom_committed:
+            if 0.95 <= scale_delta <= 1.05:
+                return
+            self._zoom_committed = True
         self._set_zoom(self.zoom_start_scale * scale_delta)
         anchor = getattr(self, "_zoom_anchor", None)
         if self.zoom_scroller and anchor and self.zoom_scale > 1.01:

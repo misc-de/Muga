@@ -229,11 +229,12 @@ class GalleryGrid(Gtk.Overlay):
 
     def _on_item_setup(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
         # ── Header widget ────────────────────────────────────────────
+        # Two-line month/year, centered (matches the viewer's date display style).
         header_lbl = Gtk.Label()
         header_lbl.set_halign(Gtk.Align.FILL)
-        header_lbl.set_xalign(0.0)
+        header_lbl.set_xalign(0.5)
+        header_lbl.set_justify(Gtk.Justification.CENTER)
         header_lbl.set_hexpand(True)
-        header_lbl.set_margin_start(10)
         header_lbl.add_css_class("date-header")
 
         # ── Tile row widget ──────────────────────────────────────────
@@ -350,7 +351,8 @@ class GalleryGrid(Gtk.Overlay):
 
         if gallery_row.is_header:
             stack.set_visible_child_name("header")
-            stack._header_lbl.set_label(gallery_row.header_text)
+            # header_text may include Pango markup (e.g. month/year two-liner)
+            stack._header_lbl.set_markup(gallery_row.header_text)
             return
 
         stack.set_visible_child_name("tiles")
