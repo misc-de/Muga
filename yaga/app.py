@@ -127,7 +127,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._nc_thumb_lock = threading.Lock()
         self._nc_thumb_queue: list[str] = []
         self._nc_thumb_event = threading.Event()
-        self._nc_thumb_worker_started = False
+        self._nc_thumb_active_workers = 0
+        self._nc_thumb_worker_target = 4  # parallel HTTPS thumb fetchers
+        self._nc_thumb_shared_client = None  # lazily built, reused across workers
         # Coalesced thumbnail updates from the worker → batched on the main loop
         self._pending_thumb_updates: dict[str, str] = {}
         self._pending_thumb_lock = threading.Lock()
@@ -940,69 +942,87 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     # ── On-demand Nextcloud thumbnail loader ──────────────────────────
     def request_nc_thumbnail(self, item_path: str) -> None:
-        """Called by the gallery grid when a NC tile without a thumbnail becomes
-        visible. Queues a single download per path; results update the gallery
-        via _update_item_thumb on the main thread."""
+        """Queue a NC thumbnail fetch for *item_path*. Thread-safe; idempotent
+        per path. Spawns workers up to the configured pool size on demand."""
         with self._nc_thumb_lock:
             if item_path in self._nc_thumb_pending:
                 return
             self._nc_thumb_pending.add(item_path)
             self._nc_thumb_queue.append(item_path)
-            if not self._nc_thumb_worker_started:
-                self._nc_thumb_worker_started = True
-                threading.Thread(target=self._nc_thumb_worker, daemon=True).start()
+            workers_to_start = self._nc_thumb_worker_target - self._nc_thumb_active_workers
+            # Cap by queue depth so we don't spin up 4 threads for a single item.
+            workers_to_start = min(workers_to_start, len(self._nc_thumb_queue))
+            self._nc_thumb_active_workers += max(0, workers_to_start)
+        for _ in range(max(0, workers_to_start)):
+            threading.Thread(target=self._nc_thumb_worker, daemon=True).start()
         self._nc_thumb_event.set()
 
-    def _nc_thumb_worker(self) -> None:
-        from .nextcloud import NextcloudClient, dav_path_from_nc
+    def _ensure_nc_thumb_client(self):
+        """Lazily build a single NextcloudClient that all worker threads share.
+        The client uses thread-local persistent HTTPS connections, so each
+        worker effectively gets its own keep-alive socket."""
+        if self._nc_thumb_shared_client is not None:
+            return self._nc_thumb_shared_client
         pwd = self.settings.load_app_password()
         if not pwd:
-            with self._nc_thumb_lock:
-                self._nc_thumb_pending.clear()
-                self._nc_thumb_queue.clear()
-                self._nc_thumb_worker_started = False
-            return
+            return None
         try:
-            client = NextcloudClient(
+            from .nextcloud import NextcloudClient
+            self._nc_thumb_shared_client = NextcloudClient(
                 self.settings.nextcloud_url, self.settings.nextcloud_user, pwd,
             )
         except Exception as exc:
             LOGGER.exception("NC thumb worker init failed: %s", exc)
+            return None
+        return self._nc_thumb_shared_client
+
+    def _nc_thumb_worker(self) -> None:
+        from .nextcloud import dav_path_from_nc
+        client = self._ensure_nc_thumb_client()
+        if client is None:
             with self._nc_thumb_lock:
+                self._nc_thumb_active_workers -= 1
                 self._nc_thumb_pending.clear()
                 self._nc_thumb_queue.clear()
-                self._nc_thumb_worker_started = False
             return
-
-        while True:
-            with self._nc_thumb_lock:
-                if not self._nc_thumb_queue:
-                    self._nc_thumb_event.clear()
-                    path = None
-                else:
-                    # LIFO: most recently bound tile = most likely on screen now.
-                    path = self._nc_thumb_queue.pop()
-            if path is None:
-                # Idle wait; let the worker exit if nothing arrives for a while.
-                if not self._nc_thumb_event.wait(timeout=20.0):
-                    with self._nc_thumb_lock:
-                        if not self._nc_thumb_queue:
-                            self._nc_thumb_worker_started = False
-                            return
-                continue
-            try:
-                dav = dav_path_from_nc(path)
-                thumb = client.ensure_thumbnail(dav)
-            except Exception:
-                LOGGER.debug("NC thumb fetch failed for %s", path, exc_info=True)
-                thumb = None
-            finally:
+        try:
+            while True:
                 with self._nc_thumb_lock:
-                    self._nc_thumb_pending.discard(path)
-            if thumb:
-                self.database.set_thumb(path, thumb, "nextcloud")
-                self.database.commit()
-                self._enqueue_thumb_update(path, thumb)
+                    if self._nc_thumb_queue:
+                        # LIFO: most recently bound tile = most likely on screen.
+                        path = self._nc_thumb_queue.pop()
+                    else:
+                        path = None
+                        self._nc_thumb_event.clear()
+                if path is None:
+                    # Wait briefly for new work; exit if queue stays empty so we
+                    # don't keep idle threads alive forever.
+                    if not self._nc_thumb_event.wait(timeout=15.0):
+                        with self._nc_thumb_lock:
+                            if not self._nc_thumb_queue:
+                                self._nc_thumb_active_workers -= 1
+                                return
+                    continue
+                thumb = None
+                try:
+                    dav = dav_path_from_nc(path)
+                    thumb = client.ensure_thumbnail(dav)
+                except Exception:
+                    LOGGER.debug("NC thumb fetch failed for %s", path, exc_info=True)
+                finally:
+                    with self._nc_thumb_lock:
+                        self._nc_thumb_pending.discard(path)
+                if thumb:
+                    try:
+                        self.database.set_thumb(path, thumb, "nextcloud")
+                        self.database.commit()
+                    except Exception:
+                        LOGGER.debug("NC thumb DB write failed for %s", path, exc_info=True)
+                    self._enqueue_thumb_update(path, thumb)
+        except Exception:
+            LOGGER.exception("NC thumb worker crashed")
+            with self._nc_thumb_lock:
+                self._nc_thumb_active_workers = max(0, self._nc_thumb_active_workers - 1)
 
     def _open_folder(self, _button, folder: str) -> None:
         self.current_folder = folder
@@ -1385,6 +1405,14 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.settings = settings
         self.settings.save()
         self.translator.language = settings.language
+        # Invalidate the shared NC client — credentials/URL may have changed.
+        old_client = self._nc_thumb_shared_client
+        self._nc_thumb_shared_client = None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:
+                pass
         self._apply_theme()
         self._build_ui()
         self.refresh(scan=True)

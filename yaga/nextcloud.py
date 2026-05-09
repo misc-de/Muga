@@ -41,6 +41,7 @@ def is_nc_path(path: str) -> bool:
 
 class NextcloudClient:
     def __init__(self, server_url: str, username: str, app_password: str) -> None:
+        import threading as _threading
         url = server_url.strip()
         if not url.startswith("http"):
             url = "https://" + url
@@ -50,16 +51,40 @@ class NextcloudClient:
         self.username = username
         self._auth = base64.b64encode(f"{username}:{app_password}".encode()).decode()
         self.dav_root = f"/remote.php/dav/files/{username}"
+        # Per-thread persistent HTTP connection for thumbnail fetches.
+        # HTTPS handshakes are the dominant cost in tight loops, so we keep
+        # the connection alive across many requests on the same thread.
+        self._tls_local = _threading.local()
 
     # ------------------------------------------------------------------
     # Low-level HTTP
     # ------------------------------------------------------------------
 
-    def _conn(self) -> http.client.HTTPConnection:
+    def _conn(self, timeout: float = 30.0) -> http.client.HTTPConnection:
         if self.use_ssl:
             ctx = ssl.create_default_context()
-            return http.client.HTTPSConnection(self.host, context=ctx, timeout=30)
-        return http.client.HTTPConnection(self.host, timeout=30)
+            return http.client.HTTPSConnection(self.host, context=ctx, timeout=timeout)
+        return http.client.HTTPConnection(self.host, timeout=timeout)
+
+    def _persistent_conn(self, timeout: float = 10.0) -> http.client.HTTPConnection:
+        """Return a per-thread connection, opening one lazily."""
+        conn = getattr(self._tls_local, "conn", None)
+        if conn is None:
+            conn = self._conn(timeout=timeout)
+            self._tls_local.conn = conn
+        return conn
+
+    def _drop_persistent_conn(self) -> None:
+        conn = getattr(self._tls_local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._tls_local.conn = None
+
+    def close(self) -> None:
+        self._drop_persistent_conn()
 
     def _headers(self, extra: dict | None = None) -> dict:
         h = {"Authorization": f"Basic {self._auth}", "User-Agent": USER_AGENT}
@@ -153,6 +178,10 @@ class NextcloudClient:
         """
         Download a thumbnail via the Nextcloud preview API.
         Returns local path on success, None on failure.
+
+        Uses a per-thread keep-alive connection: on a busy worker thread the
+        TCP/TLS handshake happens once and then every subsequent thumb just
+        reuses the open socket — typically 10-30× faster than reconnecting.
         """
         # Derive a stable local filename from the dav_path
         safe = dav_path.lstrip("/").replace("/", "_")
@@ -168,18 +197,29 @@ class NextcloudClient:
             f"/index.php/apps/files/api/v1/thumbnail/{size}/{size}/"
             + quote(file_path, safe="/")
         )
-        conn = self._conn()
-        try:
-            conn.request("GET", thumb_url, headers=self._headers())
-            resp = conn.getresponse()
-            if resp.status == 200:
-                dest.write_bytes(resp.read())
-                return str(dest)
-            LOGGER.debug("Nextcloud thumbnail HTTP %s for %s", resp.status, dav_path)
-        except Exception:
-            LOGGER.debug("Nextcloud thumbnail download failed for %s", dav_path, exc_info=True)
-        finally:
-            conn.close()
+
+        # Try once with the persistent connection; on any failure, drop it,
+        # reopen, retry. Stops after one retry so a hard server error doesn't
+        # spin forever on the worker.
+        for attempt in (0, 1):
+            try:
+                conn = self._persistent_conn()
+                conn.request("GET", thumb_url, headers=self._headers())
+                resp = conn.getresponse()
+                if resp.status == 200:
+                    dest.write_bytes(resp.read())
+                    return str(dest)
+                # Drain so the connection can be reused.
+                resp.read()
+                LOGGER.debug("Nextcloud thumbnail HTTP %s for %s", resp.status, dav_path)
+                return None
+            except Exception as exc:
+                LOGGER.debug(
+                    "NC thumb attempt %d failed for %s: %s", attempt, dav_path, exc,
+                )
+                self._drop_persistent_conn()
+                if attempt == 1:
+                    return None
         return None
 
     # ------------------------------------------------------------------
