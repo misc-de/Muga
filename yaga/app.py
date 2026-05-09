@@ -1203,27 +1203,29 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _del_item(self, item: MediaItem) -> None:
         try:
             Gio.File.new_for_path(item.path).trash(None)
+            if item.thumb_path:
+                try:
+                    Path(item.thumb_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
             self.database.delete_path(item.path, item.category)
             self._set_status(self._("Deleted"))
+            self._render()
         except GLib.Error as e:
             if "Permission" in str(e):
                 self._show_error_dialog(
                     self._("Cannot delete"),
                     self._("Permission denied. The file or folder is protected."),
-                    ""
+                    "",
                 )
             else:
                 self._show_error_dialog(
                     self._("Delete failed"),
                     self._("Could not move the file to trash."),
-                    str(e)
+                    str(e),
                 )
         except Exception as e:
             self._handle_file_error(e, item.path)
-            self._render()
-            self._set_status(self._("Deleted"))
-        except GLib.Error:
-            self._set_status(self._("Could not complete action"))
 
     def _move_item(self, item: MediaItem) -> None:
         chooser = Gtk.FileChooserNative(
