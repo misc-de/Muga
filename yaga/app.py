@@ -317,9 +317,10 @@ class GalleryWindow(Adw.ApplicationWindow):
 
         self.sort_button = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
         self.sort_button.set_tooltip_text(self._("Sort"))
-        popover = Gtk.Popover()
-        popover.set_child(self._build_sort_controls())
-        self.sort_button.set_popover(popover)
+        self._sort_popover = Gtk.Popover()
+        self._sort_popover.set_autohide(True)
+        self._sort_popover.set_child(self._build_sort_controls())
+        self.sort_button.set_popover(self._sort_popover)
         self.header.pack_end(self.sort_button)
 
         # ── Selection-mode header widgets (hidden until long-press activates) ──
@@ -525,6 +526,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.settings.sort_modes[sort_key] = internal
         self.settings.save()
         self._sync_sort_controls()
+        if getattr(self, "_sort_popover", None) is not None:
+            self._sort_popover.popdown()
         self._render()
 
     # ------------------------------------------------------------------
