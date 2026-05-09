@@ -71,6 +71,9 @@ TRANSLATIONS = {
         "The name appears as the entry label in the gallery navigation.":
             "The name appears as the entry label in the gallery navigation.",
         "Path": "Path",
+        "Search": "Search",
+        "Filename, date, month, EXIF…": "Filename, date, month, EXIF…",
+        "Search: %d hits": "Search: %d hits",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -257,6 +260,9 @@ TRANSLATIONS = {
         "The name appears as the entry label in the gallery navigation.":
             "Der Name erscheint als Beschriftung in der Galerie-Navigation.",
         "Path": "Pfad",
+        "Search": "Suchen",
+        "Filename, date, month, EXIF…": "Dateiname, Datum, Monat, EXIF…",
+        "Search: %d hits": "Suche: %d Treffer",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",

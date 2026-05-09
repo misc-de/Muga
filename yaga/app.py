@@ -19,7 +19,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
 
-from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
 from . import APP_ID, APP_NAME
 from .config import DEBUG_LOG_PATH, Settings, THUMB_DIR
@@ -288,6 +288,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.header = Adw.HeaderBar()
         self.toolbar.add_top_bar(self.header)
 
+        self.search_button = Gtk.ToggleButton()
+        self.search_button.set_icon_name("system-search-symbolic")
+        self.search_button.set_tooltip_text(self._("Search"))
+        self.header.pack_start(self.search_button)
+
         self.back_button = Gtk.Button.new_from_icon_name("go-previous-symbolic")
         self.back_button.set_tooltip_text(self._("Back"))
         self.back_button.connect("clicked", self._on_back)
@@ -339,6 +344,29 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_move_btn.set_visible(False)
         self._sel_move_btn.connect("clicked", lambda _: self._sel_move_selected())
         self.header.pack_end(self._sel_move_btn)
+
+        # Search bar (toggled via the magnifier in the header). Uses a
+        # GtkSearchBar so the entry slides down as a top-bar and animates with
+        # the standard GNOME search look.
+        self.search_entry = Gtk.SearchEntry()
+        self.search_entry.set_placeholder_text(
+            self._("Filename, date, month, EXIF…")
+        )
+        self.search_entry.set_hexpand(True)
+        self.search_entry.connect("search-changed", self._on_search_changed)
+
+        self.search_bar = Gtk.SearchBar()
+        self.search_bar.set_child(self.search_entry)
+        self.search_bar.set_show_close_button(False)
+        self.search_bar.set_search_mode(False)
+        self.search_bar.connect_entry(self.search_entry)
+        self.toolbar.add_top_bar(self.search_bar)
+        # Toggle button drives the search bar visibility.
+        self.search_button.bind_property(
+            "active", self.search_bar, "search-mode-enabled",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE,
+        )
+        self._search_query: str = ""
 
         # Category nav bar (styled like a bottom switcher bar)
         self.nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -743,7 +771,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         if hasattr(self, "_sort_dropdown"):
             self._sync_sort_controls()
         self.back_button.set_visible(False)
-        if sort_mode == "folder":
+        if self._search_query:
+            self._render_search(sort_mode)
+        elif sort_mode == "folder":
             self._render_folders()
         elif sort_mode in ("date", "date_asc"):
             self._render_date_groups(ascending=(sort_mode == "date_asc"))
@@ -762,6 +792,34 @@ class GalleryWindow(Adw.ApplicationWindow):
         # If the first page didn't fill the viewport, keep loading until it does.
         if self._has_more_items:
             GLib.idle_add(self._maybe_fill_viewport, priority=GLib.PRIORITY_LOW)
+
+    def _render_search(self, sort_mode: str) -> None:
+        """Flat search results — bypasses date grouping and folder cards.
+        Sort still applies, so users can pick newest/oldest/name within hits."""
+        # Map "date"/"date_asc" → newest/oldest for the SQL ORDER BY.
+        query_sort = (
+            "oldest" if sort_mode == "date_asc"
+            else "newest" if sort_mode == "date"
+            else sort_mode
+        )
+        items = self.database.search_media(
+            self.category, self._search_query, query_sort,
+            self.current_folder, include_nc=self._should_merge_nc(),
+        )
+        self.current_items = list(items)
+        self._current_offset = len(items)
+        self._has_more_items = False
+        for item in items:
+            self.gallery_grid.append_media(item, item.path in self._selected_paths)
+        self._set_status(self._("Search: %d hits") % len(items) if items else "")
+        self._set_empty_state(visible=not items)
+
+    def _on_search_changed(self, entry: Gtk.SearchEntry) -> None:
+        new = entry.get_text().strip()
+        if new == self._search_query:
+            return
+        self._search_query = new
+        self._render()
 
     def _render_flat(self, sort_mode: str) -> None:
         include_nc = self._should_merge_nc()
@@ -1298,6 +1356,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._selection_mode = True
         self.back_button.set_visible(False)
         self.new_folder_button.set_visible(False)
+        self.search_button.set_visible(False)
         self.refresh_button.set_visible(False)
         self.settings_button.set_visible(False)
         self.sort_button.set_visible(False)
@@ -1318,6 +1377,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.header.set_title_widget(title)
         self.back_button.set_visible(False)
         self.new_folder_button.set_visible(True)
+        self.search_button.set_visible(True)
         self.refresh_button.set_visible(True)
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)

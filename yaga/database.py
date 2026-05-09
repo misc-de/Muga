@@ -227,6 +227,95 @@ class Database:
             result = self.conn.execute(f"SELECT COUNT(*) FROM media WHERE {where}", args).fetchone()
         return result[0] if result else 0
 
+    # Month-name → number lookup for search. Covers German + English, both
+    # short and long forms. Lower-cased keys.
+    _MONTH_LOOKUP: dict[str, int] = {
+        "januar": 1, "january": 1, "jan": 1,
+        "februar": 2, "february": 2, "feb": 2,
+        "märz": 3, "marz": 3, "march": 3, "mar": 3, "mär": 3,
+        "april": 4, "apr": 4,
+        "mai": 5, "may": 5,
+        "juni": 6, "june": 6, "jun": 6,
+        "juli": 7, "july": 7, "jul": 7,
+        "august": 8, "aug": 8,
+        "september": 9, "september": 9, "sep": 9, "sept": 9,
+        "oktober": 10, "october": 10, "oct": 10, "okt": 10,
+        "november": 11, "nov": 11,
+        "dezember": 12, "december": 12, "dec": 12, "dez": 12,
+    }
+
+    @staticmethod
+    def _build_search_clause(query: str) -> tuple[str, list]:
+        """Build a SQL OR-clause that matches the query against name, exif
+        text, year, year-month or month-name. Returns ('1=1', []) for an
+        empty query so the caller can drop it back into a WHERE."""
+        import re
+        q = (query or "").strip()
+        if not q:
+            return "1=1", []
+
+        clauses: list[str] = []
+        args: list = []
+        like = f"%{q}%"
+        # Filename
+        clauses.append("name LIKE ? COLLATE NOCASE")
+        args.append(like)
+        # EXIF blob
+        clauses.append("exif_data LIKE ?")
+        args.append(like)
+        # Year (4-digit number anywhere in the query).
+        ym = re.search(r"(\d{4})[-/.](\d{1,2})", q)
+        if ym:
+            year, month = ym.group(1), int(ym.group(2))
+            clauses.append(
+                "(strftime('%Y', mtime, 'unixepoch') = ? "
+                "AND CAST(strftime('%m', mtime, 'unixepoch') AS INTEGER) = ?)"
+            )
+            args.extend([year, month])
+        else:
+            year = re.search(r"\b(\d{4})\b", q)
+            if year:
+                clauses.append("strftime('%Y', mtime, 'unixepoch') = ?")
+                args.append(year.group(1))
+        # Month name
+        q_low = q.lower()
+        for name, num in Database._MONTH_LOOKUP.items():
+            if name in q_low:
+                clauses.append(
+                    "CAST(strftime('%m', mtime, 'unixepoch') AS INTEGER) = ?"
+                )
+                args.append(num)
+                break
+        return "(" + " OR ".join(clauses) + ")", args
+
+    def search_media(
+        self, category: str, query: str, sort_mode: str = "newest",
+        folder: str | None = None, include_nc: bool = False,
+        limit: int | None = None, offset: int = 0,
+    ) -> list[MediaItem]:
+        """Filter media by a free-text query. Matches filename, EXIF text,
+        year (4-digit), year-month (YYYY-MM / YYYY/MM / YYYY.MM) and locale
+        month names (German + English)."""
+        order = {
+            "newest":      "mtime DESC, name COLLATE NOCASE ASC",
+            "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
+            "name":        "name COLLATE NOCASE ASC",
+            "name_desc":   "name COLLATE NOCASE DESC",
+            "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
+            "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
+        }.get(sort_mode, "mtime DESC")
+        base_where, args = self._build_list_where(category, folder, include_nc)
+        search_where, search_args = self._build_search_clause(query)
+        full_where = f"({base_where}) AND {search_where}"
+        args.extend(search_args)
+        sql = f"SELECT * FROM media WHERE {full_where} ORDER BY {order}"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            args.extend([int(limit), int(offset)])
+        with self.lock:
+            rows = self.conn.execute(sql, args).fetchall()
+        return [self._row_to_item(row) for row in rows]
+
     def list_media_paginated(
         self, category: str, sort_mode: str = "newest", folder: str | None = None,
         limit: int = 100, offset: int = 0, include_nc: bool = False,
