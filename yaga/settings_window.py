@@ -101,7 +101,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         cache_group.add(cache_size_row)
 
         self._cache_size_row = Adw.ActionRow(title=self._("Current cache size"))
-        clear_btn = Gtk.Button(label=self._("Cache löschen"))
+        clear_btn = Gtk.Button(label=self._("Clear cache"))
         clear_btn.add_css_class("destructive-action")
         clear_btn.set_valign(Gtk.Align.CENTER)
         clear_btn.connect("clicked", self._on_clear_cache_clicked)
