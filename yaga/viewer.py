@@ -140,6 +140,12 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.edit_button.set_visible(False)
         header.pack_end(self.edit_button)
 
+        self.rotate_button = Gtk.Button.new_from_icon_name("object-rotate-right-symbolic")
+        self.rotate_button.set_tooltip_text(parent._("Rotate clockwise"))
+        self.rotate_button.connect("clicked", lambda _b: self._rotate_by_step(1))
+        self.rotate_button.set_visible(False)
+        header.pack_end(self.rotate_button)
+
         self.cancel_edit_button = Gtk.Button.new_with_label(parent._("Cancel"))
         self.cancel_edit_button.connect("clicked", self._exit_edit_mode)
         self.cancel_edit_button.set_visible(False)
@@ -220,16 +226,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_gesture.connect("scale-changed", self._on_zoom_scale_changed)
         self.zoom_gesture.connect("end", lambda *_: setattr(self, "_zoom_committed", False))
         self.stack.add_controller(self.zoom_gesture)
-        self.rotate_gesture = Gtk.GestureRotate()
-        self._rotate_gesture_total: float = 0.0
-        self._rotate_active: bool = False
-        self._rotate_committed: bool = False
-        self._rotate_current_class: str | None = None
         self._zoom_committed: bool = False
-        self.rotate_gesture.connect("begin", self._on_rotate_gesture_begin)
-        self.rotate_gesture.connect("angle-changed", self._on_rotate_gesture_angle_changed)
-        self.rotate_gesture.connect("end", self._on_rotate_gesture_end)
-        self.stack.add_controller(self.rotate_gesture)
         self.click_gesture = Gtk.GestureClick()
         self.click_gesture.connect("pressed", self._on_viewer_pressed)
         self.stack.add_controller(self.click_gesture)
@@ -316,6 +313,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             self.delete_button.set_visible(True)
             self.info_button.set_visible(True)
             self.edit_button.set_visible(_PIL_OK)
+            self.rotate_button.set_visible(True)
             self._current_display_path = item.path
             self._show_local_image(item.path)
 
@@ -323,6 +321,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.delete_button.set_visible(visible)
         self.info_button.set_visible(visible)
         self.edit_button.set_visible(visible and _PIL_OK and not self._current_is_video)
+        self.rotate_button.set_visible(visible and not self._current_is_video)
         self.slideshow_button.set_visible(visible and not self._current_is_video)  # Slideshow only for images
 
     def _set_view_gestures_enabled(self, enabled: bool) -> None:
@@ -330,7 +329,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.swipe_gesture.set_propagation_phase(phase)
         self.drag_gesture.set_propagation_phase(phase)
         self.zoom_gesture.set_propagation_phase(phase)
-        self.rotate_gesture.set_propagation_phase(phase)
         self.click_gesture.set_propagation_phase(phase)
 
     def _show_nc_blocked(self, item: MediaItem) -> None:
@@ -480,6 +478,7 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self.delete_button.set_visible(False)
                 self.info_button.set_visible(True)
                 self.edit_button.set_visible(_PIL_OK)
+                self.rotate_button.set_visible(True)
         finally:
             # The one-shot consent expires now — next NC interaction re-asks.
             self._revert_einmalig_session()
@@ -619,69 +618,6 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_day_label.set_label(dt.strftime("%-d %B"))
         self.date_year_label.set_label(dt.strftime("%Y"))
         self.date_revealer.set_reveal_child(not self._current_is_video)
-
-    # ── Rotation gesture (two-finger rotate, snap to 90° steps on release) ─
-    def _set_rotate_preview(self, deg: float | None) -> None:
-        if self.zoom_view is None:
-            return
-        new_class: str | None
-        if deg is None:
-            new_class = None
-        else:
-            # Snap to nearest 5° bucket and normalize to [0, 360). The matching
-            # `.rot-N` class is preloaded in app.py so we just toggle it.
-            bucket = int(round(deg / 5)) * 5 % 360
-            new_class = f"rot-{bucket}"
-        if new_class == self._rotate_current_class:
-            return
-        if self._rotate_current_class is not None:
-            self.zoom_view.remove_css_class(self._rotate_current_class)
-        if new_class is not None:
-            self.zoom_view.add_css_class(new_class)
-        self._rotate_current_class = new_class
-
-    def _on_rotate_gesture_begin(self, _gesture, _seq) -> None:
-        if self._current_display_path is None:
-            return
-        self._rotate_gesture_total = 0.0
-        self._rotate_active = True
-        self._rotate_committed = False
-
-    def _on_rotate_gesture_angle_changed(self, _gesture, _angle, angle_delta) -> None:
-        # GtkGestureRotate emits (current_finger_angle, delta_since_start). We want
-        # the cumulative delta — the absolute finger angle would only ever rotate
-        # clockwise because it's reported in [0, 2π).
-        if not self._rotate_active or self._zoom_committed:
-            return
-        self._rotate_gesture_total = angle_delta
-        deg = math.degrees(angle_delta)
-        # Pure-rotate deadband. Set deliberately high so casual two-finger
-        # gestures aren't misinterpreted as rotations — the user has to twist
-        # at least 60° before the rotate mode kicks in. The zoom_committed
-        # mutex above is the actual gate; this threshold mainly handles the
-        # case of a pure twist without any pinch component.
-        if not self._rotate_committed:
-            if abs(deg) < 60.0:
-                return
-            self._rotate_committed = True
-        self._set_rotate_preview(deg)
-
-    def _on_rotate_gesture_end(self, _gesture, _seq) -> None:
-        if not self._rotate_active:
-            return
-        self._rotate_active = False
-        was_committed = self._rotate_committed
-        self._rotate_committed = False
-        deg = math.degrees(self._rotate_gesture_total)
-        self._rotate_gesture_total = 0.0
-        self._set_rotate_preview(None)
-        # 60° of cumulative twist commits the nearest 90° step (positive or
-        # negative). Below that the gesture is treated as accidental.
-        if not was_committed or abs(deg) < 60:
-            return
-        steps = int(round(deg / 90))
-        if steps != 0:
-            self._rotate_by_step(steps)
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -826,8 +762,8 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _navigate_from_horizontal_motion(self, x: float, y: float) -> None:
         if self.zoom_scale > 1.05:
             return
-        # Don't navigate if a two-finger gesture is the real intent
-        if self._rotate_committed or self._zoom_committed:
+        # Don't navigate if a pinch-zoom gesture is the real intent
+        if self._zoom_committed:
             return
         if abs(x) < 90 or abs(x) <= abs(y) * 1.8:
             return
@@ -853,14 +789,9 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self._zoom_anchor = (bx, by, (hadj.get_value() + bx) / s, (vadj.get_value() + by) / s)
 
     def _on_zoom_scale_changed(self, _gesture: Gtk.GestureZoom, scale_delta: float) -> None:
-        # Don't fight rotate; otherwise zoom should win as early as possible
-        # because off-center pinches naturally introduce a few degrees of
-        # rotation that should not derail the user's zoom intent.
-        if self._rotate_committed:
-            return
         if not self._zoom_committed:
-            # 1% pinch is enough to commit zoom — virtually any deliberate
-            # spread crosses this long before rotation reaches 30°.
+            # 1% pinch is enough to commit zoom; below that the gesture is
+            # treated as a stray two-finger touch.
             if 0.99 <= scale_delta <= 1.01:
                 return
             self._zoom_committed = True
@@ -943,6 +874,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.delete_button.set_visible(False)
         self.info_button.set_visible(False)
         self.edit_button.set_visible(False)
+        self.rotate_button.set_visible(False)
         self.cancel_edit_button.set_visible(True)
         self.save_edit_button.set_visible(True)
         self.undo_edit_button.set_visible(True)
