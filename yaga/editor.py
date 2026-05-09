@@ -727,7 +727,10 @@ class EditorView(Gtk.Box):
             # the panel keeps its narrow 50 px width once we flip back.
             self._panel_scroller.set_size_request(-1, -1)
             self._panel_scroller.set_propagate_natural_width(False)
-            self._panel_scroller.set_propagate_natural_height(False)
+            # Critical: without natural-height propagation a vertical panel
+            # (Adjust with 5 sliders, Effects, ...) renders at a single-row
+            # default height and clips everything but the first option.
+            self._panel_scroller.set_propagate_natural_height(True)
             for scroll, row in self._panel_swap_pairs:
                 row.set_orientation(Gtk.Orientation.HORIZONTAL)
                 scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
