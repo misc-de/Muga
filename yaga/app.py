@@ -84,12 +84,17 @@ class GalleryApplication(Adw.Application):
         self.connect("activate", self.on_activate)
 
     def on_activate(self, _app: Adw.Application) -> None:
+        # If --trace is active, prove the main loop is alive via a 1 Hz heartbeat
+        # so the watchdog can distinguish "idle main loop" from "frozen main loop".
+        if "yaga.tracer" in sys.modules:
+            sys.modules["yaga.tracer"].start_heartbeat()
+
         icons_dir = Path(__file__).parent / "data" / "icons"
         Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(str(icons_dir))
-        
+
         # Cleanup leftover temp files from previous sessions
         _cleanup_abandoned_temp_files()
-        
+
         window = GalleryWindow(self)
         window.present()
 
