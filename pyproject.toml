@@ -4,9 +4,14 @@ version = "0.1.0"
 description = "GTK4/libadwaita gallery app"
 requires-python = ">=3.11"
 dependencies = [
-    "Pillow>=10.0",
+    # Pillow floor: 10.3 is the first release after CVE-2024-28219
+    # (buffer overflow in ICC profile parsing, exploitable via crafted images).
+    "Pillow>=10.3",
     "pycairo>=1.25",
     "PyGObject>=3.46",
+    # defusedxml hardens the PROPFIND parser against XML billion-laughs / DoS
+    # from malicious or MitM'd Nextcloud responses.
+    "defusedxml>=0.7",
 ]
 
 [project.scripts]

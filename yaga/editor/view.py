@@ -1244,7 +1244,7 @@ class EditorView(Gtk.Box):
         Upload edited local image back to Nextcloud at the original path.
         Used for cloud-sync workflow.
         """
-        from .nextcloud import dav_path_from_nc, NC_PATH_PREFIX
+        from ..nextcloud import dav_path_from_nc, NC_PATH_PREFIX
         
         # Extract DAV path from the original Nextcloud item
         if not self._item.path.startswith(NC_PATH_PREFIX):

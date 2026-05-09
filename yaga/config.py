@@ -5,7 +5,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import quote
 
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "yaga"
@@ -150,19 +149,11 @@ class Settings:
             url = "https://" + url
         return url
 
-    def nextcloud_webdav_url(self, app_password: str) -> str:
-        """davs:// URL used with gio mount (always HTTPS unless user forced http://)."""
-        if not self.nextcloud_url or not self.nextcloud_user:
-            return ""
-        base = self._normalize_url(self.nextcloud_url)
-        host = re.sub(r"^https?://", "", base).split("/")[0]
-        # Only use plain dav:// when the user explicitly typed http://
-        scheme = "dav" if self.nextcloud_url.strip().startswith("http://") else "davs"
-        pwd = quote(app_password, safe="")
-        return (
-            f"{scheme}://{self.nextcloud_user}:{pwd}@{host}"
-            f"/remote.php/dav/files/{self.nextcloud_user}/"
-        )
+    # nextcloud_webdav_url() used to live here. It built a davs://user:pwd@host
+    # URL with the app-password embedded — leftover from a discontinued
+    # gio-mount path. With direct WebDAV (NextcloudClient) the password lives
+    # only in the in-memory Basic-Auth header, never in any URL. Removed so a
+    # future caller can't accidentally log it.
 
     def nextcloud_local_path(self) -> str:
         """Return the GVFS path for the configured Photos folder, or ''."""

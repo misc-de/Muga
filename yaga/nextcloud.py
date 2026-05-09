@@ -9,13 +9,31 @@ import ssl
 import time
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
-from xml.etree import ElementTree
+
+# PROPFIND responses come from a network peer, so we prefer defusedxml's
+# hardened parser (no DTD, no entity expansion → safe against billion-laughs
+# DoS via a malicious or MitM'd server response). Stdlib ElementTree is the
+# fallback for users on bare clones without the optional package; we log
+# once on first parse so the operator notices.
+try:
+    from defusedxml.ElementTree import fromstring as _xml_fromstring
+    from defusedxml.ElementTree import ParseError as _xml_ParseError
+    _XML_HARDENED = True
+except ImportError:
+    from xml.etree.ElementTree import fromstring as _xml_fromstring  # type: ignore[assignment]
+    from xml.etree.ElementTree import ParseError as _xml_ParseError  # type: ignore[assignment]
+    _XML_HARDENED = False
 
 from . import VERSION
 from .config import CACHE_DIR, THUMB_DIR
 
 USER_AGENT = f"Yaga/{VERSION}"
 LOGGER = logging.getLogger(__name__)
+if not _XML_HARDENED:
+    LOGGER.warning(
+        "defusedxml not installed — falling back to xml.etree for PROPFIND. "
+        "Install 'defusedxml' to harden against XML DoS / entity attacks.",
+    )
 
 # Local directories for cached full-res files and thumbnails
 _NC_CACHE = CACHE_DIR / "nextcloud"
@@ -141,8 +159,8 @@ class NextcloudClient:
     def _parse_propfind(self, data: bytes, base_path: str) -> list[dict]:
         ns = {"D": "DAV:"}
         try:
-            root = ElementTree.fromstring(data)
-        except ElementTree.ParseError:
+            root = _xml_fromstring(data)
+        except _xml_ParseError:
             return []
         results: list[dict] = []
         for response in root.findall("D:response", ns):

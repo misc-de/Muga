@@ -44,6 +44,13 @@ def _configure_debug_logging() -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s"))
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
+    # Restrict to user-only — log lines may carry filenames, DAV paths and
+    # server URL that other local accounts on a multi-user host shouldn't
+    # see. Default umask would leave this 0644.
+    try:
+        DEBUG_LOG_PATH.chmod(0o600)
+    except OSError:
+        pass
 
 
 def _enable_thread_dump_signal() -> None:
@@ -1616,12 +1623,19 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _share_item(self, item: MediaItem) -> None:
         if shutil.which("xdg-email"):
+            # xdg-email's --attach consumes the next argv as the file, so a
+            # '--' separator would itself be treated as the filename. We rely
+            # on item.path being an absolute path from the filesystem scan
+            # (always starts with '/') so it can't be misread as an option.
             subprocess.Popen(["xdg-email", "--attach", item.path])
             return
         self._set_status(self._("Could not complete action"))
 
     def _open_externally(self, item: MediaItem) -> None:
-        subprocess.Popen(["xdg-open", item.path])
+        # '--' is a real end-of-options marker in xdg-open: a hypothetical
+        # filename starting with '-' (we currently never emit one, but cheap
+        # defense) can't be reinterpreted as an option.
+        subprocess.Popen(["xdg-open", "--", item.path])
 
     # ------------------------------------------------------------------
     # Navigation handlers
