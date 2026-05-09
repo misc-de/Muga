@@ -379,14 +379,23 @@ class ViewerWindow(Adw.ApplicationWindow):
             response = "cancel"
         if response == "cancel":
             return
-        # User consent in hand: open the runtime gate AND make NC visible
-        # in the gallery (set nextcloud_enabled in memory). "Dauerhaft" also
-        # persists the toggle; "Einmalig" leaves it on disk as it was, so the
-        # next launch starts disabled again.
+        # Snapshot the previous gate state so "Einmalig" can revert exactly to
+        # what was there before we opened the connection for this one image.
+        prev_session = self.parent_window._nc_session_active
+        prev_enabled = self.parent_window.settings.nextcloud_enabled
+
+        # Open the gate and make NC visible. "Dauerhaft" persists; "Einmalig"
+        # only changes things in memory so the next launch starts disabled.
         self.parent_window._nc_session_active = True
         self.parent_window.settings.nextcloud_enabled = True
         if response == "permanent":
             self.parent_window.settings.save()
+            self._nc_einmalig_revert = None
+        else:
+            # Remember to flip both flags back as soon as this one image has
+            # finished loading. A second NC click then triggers the dialog again.
+            self._nc_einmalig_revert = (prev_session, prev_enabled)
+
         # Reset the shared NC client so workers reconnect with current creds.
         old_client = self.parent_window._nc_thumb_shared_client
         self.parent_window._nc_thumb_shared_client = None
@@ -400,6 +409,31 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.parent_window._rebuild_categories()
         # Re-render the current item — it'll go through the active NC path now.
         self.show_item()
+
+    def _revert_einmalig_session(self) -> None:
+        """If the user had only granted Einmalig consent, close the gate again
+        once the on-shot download has finished."""
+        revert = getattr(self, "_nc_einmalig_revert", None)
+        if revert is None:
+            return
+        prev_session, prev_enabled = revert
+        self._nc_einmalig_revert = None
+        self.parent_window._nc_session_active = prev_session
+        # Only roll back nextcloud_enabled if we actually flipped it (i.e. the
+        # user hadn't toggled it on permanently before).
+        if not prev_enabled:
+            self.parent_window.settings.nextcloud_enabled = False
+        # Drop the shared NC client so background workers stop using it.
+        old_client = self.parent_window._nc_thumb_shared_client
+        self.parent_window._nc_thumb_shared_client = None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:
+                pass
+        # If NC vanished from the gallery (master toggle was off before), the
+        # nav has to be rebuilt to reflect that.
+        self.parent_window._rebuild_categories()
 
     def _nc_download_worker(self, item) -> None:
         from .nextcloud import NextcloudClient, dav_path_from_nc
@@ -420,27 +454,31 @@ class ViewerWindow(Adw.ApplicationWindow):
             next_child = child.get_next_sibling()
             self.stack.remove(child)
             child = next_child
-        if local_path is None:
-            lbl = Gtk.Label(label=self.parent_window._("Could not load file"))
-            lbl.set_hexpand(True)
-            lbl.set_vexpand(True)
-            self.stack.add_child(lbl)
-            return
-        if item.is_video:
-            self._current_is_video = True
-            self.info_button.set_visible(True)
-            video = Gtk.Video.new_for_file(Gio.File.new_for_path(local_path))
-            video.set_autoplay(True)
-            self.stack.add_child(video)
-            media = video.get_media_stream()
-            if media is not None:
-                media.connect("notify::prepared", self._on_media_prepared)
-        else:
-            self._current_display_path = local_path
-            self._show_local_image(local_path)
-            self.delete_button.set_visible(False)
-            self.info_button.set_visible(True)
-            self.edit_button.set_visible(_PIL_OK)
+        try:
+            if local_path is None:
+                lbl = Gtk.Label(label=self.parent_window._("Could not load file"))
+                lbl.set_hexpand(True)
+                lbl.set_vexpand(True)
+                self.stack.add_child(lbl)
+                return
+            if item.is_video:
+                self._current_is_video = True
+                self.info_button.set_visible(True)
+                video = Gtk.Video.new_for_file(Gio.File.new_for_path(local_path))
+                video.set_autoplay(True)
+                self.stack.add_child(video)
+                media = video.get_media_stream()
+                if media is not None:
+                    media.connect("notify::prepared", self._on_media_prepared)
+            else:
+                self._current_display_path = local_path
+                self._show_local_image(local_path)
+                self.delete_button.set_visible(False)
+                self.info_button.set_visible(True)
+                self.edit_button.set_visible(_PIL_OK)
+        finally:
+            # The one-shot consent expires now — next NC interaction re-asks.
+            self._revert_einmalig_session()
 
     def _show_local_image(self, path: str) -> None:
         # Honor the EXIF Orientation tag so portrait phone shots aren't sideways.
