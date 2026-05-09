@@ -245,7 +245,13 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.stack.add_controller(self.zoom_gesture)
         self._zoom_committed: bool = False
         self.click_gesture = Gtk.GestureClick()
-        self.click_gesture.connect("pressed", self._on_viewer_pressed)
+        # set_exclusive: only fire when exactly one touch/button is involved,
+        # so a two-finger pinch never registers as a click.
+        self.click_gesture.set_exclusive(True)
+        self._click_press_x: float = 0.0
+        self._click_press_y: float = 0.0
+        self.click_gesture.connect("pressed", self._on_viewer_press_begin)
+        self.click_gesture.connect("released", self._on_viewer_pressed)
         self.stack.add_controller(self.click_gesture)
         self._set_view_gestures_enabled(True)
         self.connect("close-request", self._on_close_request)
@@ -833,7 +839,23 @@ class ViewerWindow(Adw.ApplicationWindow):
 
             GLib.idle_add(_apply)
 
-    def _on_viewer_pressed(self, _gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float) -> None:
+    def _on_viewer_press_begin(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        """Stash press coordinates so the released handler can tell a real
+        tap apart from a swipe."""
+        self._click_press_x = x
+        self._click_press_y = y
+
+    def _on_viewer_pressed(self, _gesture: Gtk.GestureClick, n_press: int, x: float, y: float) -> None:
+        # Skip if the click was actually a pinch — set_exclusive normally
+        # filters this, but on some hardware the click still fires before
+        # the second touch arrives.
+        if self._zoom_committed:
+            return
+        # Treat anything with > ~12 px movement as a swipe/drag, not a tap.
+        dx = abs(x - self._click_press_x)
+        dy = abs(y - self._click_press_y)
+        if dx > 12 or dy > 12:
+            return
         if n_press == 1:
             # Single tap toggles the floating overlays (date pill, filename
             # pill, header) — slides them out so the user can see the image
@@ -844,7 +866,7 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self.date_revealer.set_reveal_child(visible)
                 self.filename_revealer.set_reveal_child(visible)
             else:
-                # On videos the pills weren't shown anyway; only the header
+                # On videos the pills aren't shown anyway; only the header
                 # toggles so the user can hide playback chrome.
                 self.date_revealer.set_reveal_child(False)
                 self.filename_revealer.set_reveal_child(False)

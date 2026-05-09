@@ -778,7 +778,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.back_button.set_visible(False)
         if self._search_query:
             self._render_search(sort_mode)
-        elif sort_mode == "folder":
+        elif sort_mode in ("folder", "folder_desc"):
             self._render_folders()
         elif sort_mode in ("date", "date_asc"):
             self._render_date_groups(ascending=(sort_mode == "date_asc"))
