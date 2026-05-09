@@ -260,9 +260,11 @@ class Database:
         # Filename
         clauses.append("name LIKE ? COLLATE NOCASE")
         args.append(like)
-        # EXIF blob
-        clauses.append("exif_data LIKE ?")
-        args.append(like)
+        # EXIF blob — LIKE on a JSON text column is a full-table scan; only
+        # bother when the user has typed enough that a hit is realistic.
+        if len(q) >= 3:
+            clauses.append("exif_data LIKE ?")
+            args.append(like)
         # Year (4-digit number anywhere in the query).
         ym = re.search(r"(\d{4})[-/.](\d{1,2})", q)
         if ym:

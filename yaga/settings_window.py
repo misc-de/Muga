@@ -298,6 +298,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_refresh_status()
         # Add or remove the Nextcloud entry from the gallery's category nav.
         self.parent_window._rebuild_categories()
+        # Same for the Settings → Folders listbox: the NC row must appear/
+        # disappear in lock-step with the toggle.
+        self._populate_media_listbox()
         # Force a re-render so the merged-Pictures view picks up the change too.
         self.parent_window.refresh(scan=False)
 

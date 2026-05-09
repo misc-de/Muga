@@ -834,11 +834,20 @@ class ViewerWindow(Adw.ApplicationWindow):
             GLib.idle_add(_apply)
 
     def _on_viewer_pressed(self, _gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float) -> None:
-        if self._current_is_video and n_press == 1:
+        if n_press == 1:
+            # Single tap toggles the floating overlays (date pill, filename
+            # pill, header) — slides them out so the user can see the image
+            # uncluttered, slides them back in on the next tap.
             visible = not self.header.get_visible()
             self.header.set_visible(visible)
-            self.date_revealer.set_reveal_child(visible and not self._current_is_video)
-            self.filename_revealer.set_reveal_child(visible and not self._current_is_video)
+            if not self._current_is_video:
+                self.date_revealer.set_reveal_child(visible)
+                self.filename_revealer.set_reveal_child(visible)
+            else:
+                # On videos the pills weren't shown anyway; only the header
+                # toggles so the user can hide playback chrome.
+                self.date_revealer.set_reveal_child(False)
+                self.filename_revealer.set_reveal_child(False)
         elif not self._current_is_video and n_press == 2:
             self._reset_zoom()
 

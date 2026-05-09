@@ -371,6 +371,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE,
         )
         self._search_query: str = ""
+        self._search_debounce_id: int = 0
 
         # Category nav bar (styled like a bottom switcher bar)
         self.nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -842,16 +843,39 @@ class GalleryWindow(Adw.ApplicationWindow):
             if not new and self.search_bar.get_search_mode():
                 self.search_bar.set_search_mode(False)
             return
-        self._search_query = new
-        self._render()
-        # Empty query → close the search bar so the gallery returns to the
-        # normal view without any leftover chrome.
-        if not new and self.search_bar.get_search_mode():
-            self.search_bar.set_search_mode(False)
+        # Debounce: a search-changed signal fires on every keystroke, but each
+        # render runs a COUNT(*) plus a SELECT with multi-OR LIKE clauses on a
+        # potentially huge media table. Without debouncing the main loop ends
+        # up frozen while the user is typing.
+        if getattr(self, "_search_debounce_id", 0):
+            GLib.source_remove(self._search_debounce_id)
+            self._search_debounce_id = 0
+        # Empty query takes effect immediately so the gallery snaps back.
+        if not new:
+            self._search_query = ""
+            self._render()
+            if self.search_bar.get_search_mode():
+                self.search_bar.set_search_mode(False)
+            return
+        # Otherwise wait 250 ms after the last keystroke before querying.
+        def _fire():
+            self._search_debounce_id = 0
+            current = self.search_entry.get_text().strip()
+            if current == self._search_query:
+                return GLib.SOURCE_REMOVE
+            self._search_query = current
+            self._render()
+            return GLib.SOURCE_REMOVE
+        self._search_debounce_id = GLib.timeout_add(250, _fire)
 
     def _on_search_mode_toggled(self, search_bar: Gtk.SearchBar, _param) -> None:
         if search_bar.get_search_mode():
             return
+        # Cancel any pending debounced render so it doesn't fire after the bar
+        # is already closed.
+        if getattr(self, "_search_debounce_id", 0):
+            GLib.source_remove(self._search_debounce_id)
+            self._search_debounce_id = 0
         # Search bar just closed: drop the query so a category switch later
         # doesn't re-run a stale filter, and clear the entry text.
         had_query = bool(self._search_query)
