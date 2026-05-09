@@ -1149,6 +1149,12 @@ class GalleryWindow(Adw.ApplicationWindow):
             .gallery-tile > * {
                 margin: 0;
             }
+            .gallery-tile.empty,
+            .gallery-tile.empty:hover,
+            .gallery-tile.empty:active {
+                background: transparent;
+                box-shadow: none;
+            }
             listview.gallery-grid > row {
                 padding: 0;
             }
@@ -1223,5 +1229,25 @@ class GalleryWindow(Adw.ApplicationWindow):
 
 
 def main() -> int:
+    # Strip our own debug flags before GTK sees argv.
+    trace_enabled = False
+    trace_path: Path | None = None
+    argv = list(sys.argv)
+    if "--trace" in argv:
+        trace_enabled = True
+        argv.remove("--trace")
+    while "--trace-file" in argv:
+        i = argv.index("--trace-file")
+        if i + 1 < len(argv):
+            trace_path = Path(argv[i + 1]).expanduser()
+            del argv[i : i + 2]
+        else:
+            del argv[i]
+    sys.argv = argv
+
+    if trace_enabled:
+        from .tracer import install as install_tracer
+        install_tracer(trace_path)
+
     app = GalleryApplication()
     return app.run()

@@ -31,10 +31,9 @@ class MediaScanner:
                 continue
             root = Path(root_text).expanduser()
             if not root.exists():
+                # Skip pruning for vanished roots so unmounted drives don't lose their index.
                 continue
             scanned_categories.append(category)
-            
-            # Check for symlink: skip if root itself is a symlink
             if root.is_symlink():
                 LOGGER.warning("Skipping symlink root folder: %s", root)
                 continue

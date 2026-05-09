@@ -130,7 +130,21 @@ class Database:
             return
         placeholders = ",".join("?" for _category in categories)
         with self.lock:
-            self.conn.execute(f"DELETE FROM media WHERE seen_at < ? AND category IN ({placeholders})", [seen_since, *categories])
+            stale = self.conn.execute(
+                f"SELECT thumb_path FROM media WHERE seen_at < ? AND category IN ({placeholders})",
+                [seen_since, *categories],
+            ).fetchall()
+            self.conn.execute(
+                f"DELETE FROM media WHERE seen_at < ? AND category IN ({placeholders})",
+                [seen_since, *categories],
+            )
+        for row in stale:
+            thumb = row["thumb_path"]
+            if thumb:
+                try:
+                    Path(thumb).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def set_thumb(self, path: str, thumb_path: str, category: str | None = None) -> None:
         with self.lock:
