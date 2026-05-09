@@ -58,6 +58,7 @@ TRANSLATIONS = {
         "Text color": "Text color",
         "Reset brush strokes": "Reset brush strokes",
         "Brush size": "Brush size",
+        "Drag to reorder": "Drag to reorder",
         # Status counters
         "Deleted %d items": "Deleted %d items",
         "Deleted %d/%d items (%d failed)": "Deleted %d/%d items (%d failed)",
@@ -231,6 +232,7 @@ TRANSLATIONS = {
         "Text color": "Textfarbe",
         "Reset brush strokes": "Pinselstriche zurücksetzen",
         "Brush size": "Pinselgröße",
+        "Drag to reorder": "Zum Sortieren ziehen",
         # Status counters
         "Deleted %d items": "%d Elemente gelöscht",
         "Deleted %d/%d items (%d failed)": "%d/%d Elemente gelöscht (%d fehlgeschlagen)",

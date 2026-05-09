@@ -8,7 +8,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from .config import Settings
 
@@ -32,13 +32,32 @@ class SettingsWindow(Adw.PreferencesWindow):
         group = Adw.PreferencesGroup(title=self._("Media folders"))
         media.add(group)
 
-        for attr, title in [
-            ("photos_dir", "Photos folder"),
-            ("pictures_dir", "Overview folder"),
-            ("videos_dir", "Videos folder"),
-            ("screenshots_dir", "Screenshots folder"),
-        ]:
-            group.add(self._folder_row(attr, title))
+        # Folder specs by category key (the same key used in Settings.categories()).
+        self._media_folder_specs: dict[str, tuple[str, str]] = {
+            "pictures":    ("pictures_dir",    "Overview folder"),
+            "photos":      ("photos_dir",      "Photos folder"),
+            "videos":      ("videos_dir",      "Videos folder"),
+            "screenshots": ("screenshots_dir", "Screenshots folder"),
+        }
+        self._media_listbox = Gtk.ListBox()
+        self._media_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._media_listbox.add_css_class("boxed-list")
+        # The PreferencesGroup wraps non-row children automatically; we add the
+        # whole listbox as one group child so the rounded card style applies.
+        group.add(self._media_listbox)
+        self._populate_media_listbox()
+
+        # When Nextcloud is active, surface the NC Photos folder here too —
+        # convenience mirror of the same setting on the Nextcloud page.
+        self._media_nc_path_row: Adw.EntryRow | None = None
+        if self.settings.nextcloud_enabled:
+            nc_row = Adw.EntryRow(title=self._("Photos folder on Nextcloud"))
+            nc_row.set_text(self.settings.nextcloud_photos_path or "Photos")
+            nc_row.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
+            nc_row.set_show_apply_button(True)
+            nc_row.connect("apply", self._media_nc_path_apply)
+            group.add(nc_row)
+            self._media_nc_path_row = nc_row
 
         extra = Adw.PreferencesGroup(title=self._("Optional locations"))
         media.add(extra)
@@ -531,6 +550,146 @@ class SettingsWindow(Adw.PreferencesWindow):
         row.add_suffix(choose)
         return row
 
+    # ── Media folder reorder via drag handles ───────────────────────────────
+    def _media_order(self) -> list[str]:
+        """Return the saved order, padded with any missing built-in keys so a
+        legacy settings.json upgrade doesn't lose folders."""
+        order = list(self.settings.media_folder_order or [])
+        for key in self._media_folder_specs:
+            if key not in order:
+                order.append(key)
+        return [k for k in order if k in self._media_folder_specs]
+
+    def _populate_media_listbox(self) -> None:
+        # Remove existing children (used by reorder code that rebuilds the list).
+        child = self._media_listbox.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            self._media_listbox.remove(child)
+            child = nxt
+        for key in self._media_order():
+            attr, title = self._media_folder_specs[key]
+            self._media_listbox.append(self._build_media_row(key, attr, title))
+
+    def _build_media_row(self, key: str, attr: str, title: str) -> Gtk.ListBoxRow:
+        row = Gtk.ListBoxRow()
+        row.set_activatable(False)
+        # Stash the category key on the widget so the drop handler can
+        # reorder by key without an extra dict lookup.
+        row.media_key = key  # type: ignore[attr-defined]
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.set_margin_top(8)
+        box.set_margin_bottom(8)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        grip = Gtk.Image.new_from_icon_name("list-drag-handle-symbolic")
+        grip.add_css_class("dim-label")
+        grip.set_tooltip_text(self._("Drag to reorder"))
+        # The cursor changes to indicate that this part of the row initiates a
+        # drag. (`grab` is the standard cursor name.)
+        grip.set_cursor(Gdk.Cursor.new_from_name("grab", None))
+        box.append(grip)
+
+        title_lbl = Gtk.Label(label=self._(title), xalign=0)
+        title_lbl.add_css_class("body")
+        path_lbl = Gtk.Label(label=getattr(self.settings, attr), xalign=0)
+        path_lbl.add_css_class("caption")
+        path_lbl.add_css_class("dim-label")
+        path_lbl.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        path_lbl.set_max_width_chars(30)
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_box.set_hexpand(True)
+        text_box.set_valign(Gtk.Align.CENTER)
+        text_box.append(title_lbl)
+        text_box.append(path_lbl)
+        box.append(text_box)
+
+        choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
+        choose.add_css_class("flat")
+        choose.set_valign(Gtk.Align.CENTER)
+        choose.set_tooltip_text(self._("Choose folder"))
+        choose.connect("clicked", self._choose_folder_for_key, attr, path_lbl)
+        box.append(choose)
+
+        row.set_child(box)
+
+        # Drag source attached to the grip widget so dragging only initiates
+        # when the user grabs the handle, not when interacting with the chooser.
+        drag = Gtk.DragSource()
+        drag.set_actions(Gdk.DragAction.MOVE)
+        drag.connect("prepare", self._on_media_drag_prepare, row)
+        drag.connect("drag-begin", self._on_media_drag_begin, row)
+        grip.add_controller(drag)
+
+        # Drop target on each row so the drop position is unambiguous.
+        drop = Gtk.DropTarget.new(Gtk.ListBoxRow, Gdk.DragAction.MOVE)
+        drop.connect("drop", self._on_media_drop, row)
+        row.add_controller(drop)
+
+        return row
+
+    def _on_media_drag_prepare(self, _src, _x, _y, row):
+        return Gdk.ContentProvider.new_for_value(row)
+
+    def _on_media_drag_begin(self, src, _drag, row):
+        # Use the row's own snapshot as the drag image so it's visually obvious
+        # which element is moving.
+        try:
+            paintable = Gtk.WidgetPaintable.new(row)
+            src.set_icon(paintable, 0, 0)
+        except Exception:
+            pass
+
+    def _on_media_drop(self, _target, value, _x, _y, target_row):
+        if not isinstance(value, Gtk.ListBoxRow) or value is target_row:
+            return False
+        src_key = getattr(value, "media_key", None)
+        dst_key = getattr(target_row, "media_key", None)
+        if src_key is None or dst_key is None or src_key == dst_key:
+            return False
+        order = self._media_order()
+        try:
+            order.remove(src_key)
+            insert_at = order.index(dst_key)
+        except ValueError:
+            return False
+        order.insert(insert_at, src_key)
+        # Persist + propagate
+        self.settings.media_folder_order = order
+        self.parent_window.settings.media_folder_order = order
+        self.parent_window.settings.save()
+        # Rebuild the listbox so visual order matches state.
+        self._populate_media_listbox()
+        # Mirror to the gallery's category nav.
+        self.parent_window._rebuild_categories()
+        return True
+
+    def _choose_folder_for_key(self, _btn: Gtk.Button, attr: str, path_lbl: Gtk.Label) -> None:
+        chooser = Gtk.FileChooserNative(
+            title=self._("Choose folder"), transient_for=self,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        chooser.connect("response", self._media_folder_chosen, attr, path_lbl)
+        chooser.show()
+
+    def _media_folder_chosen(
+        self, chooser: Gtk.FileChooserNative, response: int,
+        attr: str, path_lbl: Gtk.Label,
+    ) -> None:
+        if response == Gtk.ResponseType.ACCEPT:
+            file = chooser.get_file()
+            if file is not None:
+                path = file.get_path() or ""
+                setattr(self.settings, attr, path)
+                setattr(self.parent_window.settings, attr, path)
+                path_lbl.set_label(path)
+                self.parent_window.settings.save()
+                self.parent_window._rebuild_categories()
+                self.parent_window.refresh(scan=True)
+        chooser.destroy()
+
     def _combo_row(self, attr: str, title: str, values: list[tuple[str, str]]) -> Adw.ComboRow:
         store = Gtk.StringList()
         active = 0
@@ -551,6 +710,15 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _entry_apply(self, row: Adw.EntryRow, attr: str) -> None:
         setattr(self.settings, attr, row.get_text())
         self.parent_window.apply_settings(self.settings)
+
+    def _media_nc_path_apply(self, row: Adw.EntryRow) -> None:
+        value = row.get_text().strip() or "Photos"
+        self.settings.nextcloud_photos_path = value
+        self.parent_window.settings.nextcloud_photos_path = value
+        self.parent_window.settings.save()
+        # Mirror into the NC-tab entry so both rows agree without a reopen.
+        if getattr(self, "_nc_path_row", None) is not None:
+            self._nc_path_row.set_text(value)
 
     def _columns_changed(self, row: Adw.SpinRow, _param) -> None:
         self.settings.grid_columns = int(row.get_value())

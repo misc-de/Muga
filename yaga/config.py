@@ -45,6 +45,13 @@ class Settings:
     grid_columns: int = 4
     last_category: str = ""
 
+    # User-defined ordering of the four built-in media folders. Items not in
+    # the list (e.g. legacy upgrades that didn't write the field) fall back to
+    # the natural order.
+    media_folder_order: list = field(default_factory=lambda: [
+        "pictures", "photos", "videos", "screenshots",
+    ])
+
     # Disk cache budget for thumbnails + downloaded NC originals (MB).
     # 0 means "unlimited"; any positive value triggers LRU eviction.
     cache_max_mb: int = 0
@@ -90,14 +97,29 @@ class Settings:
         return self.sort_modes.get(category, default)
 
     def categories(self) -> list[tuple[str, str, str]]:
-        cats: list[tuple[str, str, str]] = [
-            ("pictures",    "Overview",    self.pictures_dir),
-            ("photos",      "Photos",      self.photos_dir),
-            ("videos",      "Videos",      self.videos_dir),
-            ("screenshots", "Screenshots", self.screenshots_dir),
-            *[(f"location:{i}", Path(p).name or "Locations", p)
-              for i, p in enumerate(self.extra_locations)],
-        ]
+        cat_map = {
+            "pictures":    ("Overview",    self.pictures_dir),
+            "photos":      ("Photos",      self.photos_dir),
+            "videos":      ("Videos",      self.videos_dir),
+            "screenshots": ("Screenshots", self.screenshots_dir),
+        }
+        order = list(self.media_folder_order or [])
+        # Append any built-in keys missing from the saved order so they don't
+        # disappear after a settings.json upgrade.
+        for key in cat_map:
+            if key not in order:
+                order.append(key)
+        cats: list[tuple[str, str, str]] = []
+        for key in order:
+            spec = cat_map.get(key)
+            if spec is None:
+                continue
+            label, path = spec
+            cats.append((key, label, path))
+        cats.extend(
+            (f"location:{i}", Path(p).name or "Locations", p)
+            for i, p in enumerate(self.extra_locations)
+        )
         if self.nextcloud_enabled and self.nextcloud_url and self.nextcloud_user:
             cats.append(("nextcloud", "Nextcloud", self.nextcloud_photos_path or "Photos"))
         return cats
