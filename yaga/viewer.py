@@ -288,7 +288,7 @@ class ViewerWindow(Adw.ApplicationWindow):
 
         from .nextcloud import is_nc_path
         if is_nc_path(item.path):
-            if not self.parent_window.settings.nextcloud_enabled:
+            if not self.parent_window.is_nc_active():
                 self._show_nc_blocked(item)
                 return
             self.info_button.set_visible(True)
@@ -379,9 +379,11 @@ class ViewerWindow(Adw.ApplicationWindow):
             response = "cancel"
         if response == "cancel":
             return
-        # Both options enable NC in memory; "permanent" also persists to disk.
-        self.parent_window.settings.nextcloud_enabled = True
+        # User consent in hand: open the runtime gate.
+        self.parent_window._nc_session_active = True
+        # "Dauerhaft" additionally persists; "Einmalig" stays session-local.
         if response == "permanent":
+            self.parent_window.settings.nextcloud_enabled = True
             self.parent_window.settings.save()
         # Reset the shared NC client so workers reconnect with current creds.
         old_client = self.parent_window._nc_thumb_shared_client

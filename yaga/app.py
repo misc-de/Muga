@@ -130,6 +130,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._nc_thumb_active_workers = 0
         self._nc_thumb_worker_target = 4  # parallel HTTPS thumb fetchers
         self._nc_thumb_shared_client = None  # lazily built, reused across workers
+        # Runtime gate: True only when the user has *actively* allowed NC for
+        # this session. Scripts must NEVER flip this to True; only explicit UI
+        # actions (Settings toggle/Connect button, viewer Einmalig/Dauerhaft)
+        # may. Initialized from the persistent setting so a launch with
+        # nextcloud_enabled=True comes up active.
+        self._nc_session_active = bool(self.settings.nextcloud_enabled)
         # Coalesced thumbnail updates from the worker → batched on the main loop
         self._pending_thumb_updates: dict[str, str] = {}
         self._pending_thumb_lock = threading.Lock()
@@ -164,11 +170,22 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.status.set_text(text)
         self.status.set_visible(bool(text))
 
+    def is_nc_active(self) -> bool:
+        """The single authoritative check for "may this code touch Nextcloud?"
+        Combines the persistent setting with the runtime session flag and the
+        presence of credentials. Scripts must use this — not the raw
+        nextcloud_enabled — to ensure the user's manual disconnect is honored."""
+        return (
+            self._nc_session_active
+            and bool(self.settings.nextcloud_url)
+            and bool(self.settings.nextcloud_user)
+        )
+
     def _should_merge_nc(self) -> bool:
         """True when NC items should be folded into the current Pictures view."""
         return (
             self.category == "pictures"
-            and self.settings.nextcloud_enabled
+            and self.is_nc_active()
             and getattr(self.settings, "nextcloud_show_in_pictures", False)
         )
 
@@ -396,8 +413,21 @@ class GalleryWindow(Adw.ApplicationWindow):
         _dark = Adw.StyleManager.get_default().get_dark()
         self._nc_spinner = None
         self._nc_broken_img = None
-        for category, label, path in self.settings.categories():
+        cats = list(self.settings.categories())
+        # If the user activated NC just for this session ("Einmalig" in the
+        # viewer), the persistent settings still have nextcloud_enabled=False
+        # and so categories() omits Nextcloud. Patch it back in for the nav.
+        if self.is_nc_active() and not any(c[0] == "nextcloud" for c in cats):
+            cats.append((
+                "nextcloud", "Nextcloud",
+                self.settings.nextcloud_photos_path or "Photos",
+            ))
+        for category, label, path in cats:
             if not path:
+                continue
+            # Hide the NC entry while the session is paused (manual disconnect
+            # without flipping the master toggle). It re-appears on Connect.
+            if category == "nextcloud" and not self.is_nc_active():
                 continue
             if category == "nextcloud":
                 img = self._make_nc_icon(_nc_icon_dir, _dark)
@@ -481,9 +511,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         only_current = scope == "current"
         # Touch NC for full scans, when NC is the active category, or when the
         # current Pictures view is configured to fold in Nextcloud entries —
-        # but ONLY if the user has Nextcloud actively enabled. We never bring
-        # the connection back up automatically; that requires explicit consent.
-        need_nc = self.settings.nextcloud_enabled and (
+        # but ONLY if the user has actively allowed NC for this session
+        # (is_nc_active() respects manual disconnects too).
+        need_nc = self.is_nc_active() and (
             (not only_current)
             or self.category == "nextcloud"
             or self._should_merge_nc()
@@ -1029,10 +1059,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         """Queue a NC thumbnail fetch for *item_path*. Thread-safe; idempotent
         per path. Spawns workers up to the configured pool size on demand.
 
-        Bails out silently when the user has Nextcloud disabled — we never
-        re-establish the connection on our own; that requires explicit consent
-        (Settings toggle or the viewer's "Einmalig/Dauerhaft" prompt)."""
-        if not self.settings.nextcloud_enabled:
+        Bails out silently when NC isn't actively allowed for this session —
+        we never re-establish the connection on our own; that requires explicit
+        consent (Settings toggle/Connect button or the viewer's "Einmalig/
+        Dauerhaft" prompt)."""
+        if not self.is_nc_active():
             return
         with self._nc_thumb_lock:
             if item_path in self._nc_thumb_pending:
@@ -1505,6 +1536,10 @@ class GalleryWindow(Adw.ApplicationWindow):
                 old_client.close()
             except Exception:
                 pass
+        # Resync the runtime gate with the persisted preference. Settings is
+        # the source of truth here — anything else would re-enable NC behind
+        # the user's back when applying settings after a manual disconnect.
+        self._nc_session_active = bool(self.settings.nextcloud_enabled)
         self._apply_theme()
         self._build_ui()
         self.refresh(scan=True)

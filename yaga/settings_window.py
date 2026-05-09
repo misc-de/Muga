@@ -275,6 +275,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         # Runtime mirrors the toggle. When deactivating, also drop the shared
         # client so no scripted call can sneak through with stale credentials.
         self._nc_runtime_connected = active
+        self.parent_window._nc_session_active = active
         if not active:
             old_client = self.parent_window._nc_thumb_shared_client
             self.parent_window._nc_thumb_shared_client = None
@@ -387,6 +388,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.settings.nextcloud_enabled = True
             self.settings.save()
             self._nc_runtime_connected = True
+            # User-initiated → runtime gate may open.
+            self.parent_window._nc_session_active = True
             # Setup button is now obsolete; full UI may also have been hidden if
             # this was the very first connect.
             self._nc_manual_setup_unlocked = True
@@ -402,9 +405,10 @@ class SettingsWindow(Adw.PreferencesWindow):
             )
 
     def _nc_disconnect(self, _btn: Gtk.Button) -> None:
-        # "Disconnect" is a soft action: it drops the runtime NC client so the
-        # next user-initiated reconnect starts fresh. It deliberately does NOT
-        # touch the persistent "Nextcloud aktiv" preference (toggle stays).
+        # "Disconnect" is a soft action: it stops every NC operation in this
+        # session by flipping the runtime gate (parent._nc_session_active).
+        # The persistent "Nextcloud aktiv" preference stays untouched, so a
+        # reconnect (Connect button) doesn't require credential re-entry.
         old_client = self.parent_window._nc_thumb_shared_client
         self.parent_window._nc_thumb_shared_client = None
         if old_client is not None:
@@ -412,6 +416,11 @@ class SettingsWindow(Adw.PreferencesWindow):
                 old_client.close()
             except Exception:
                 pass
+        # Flip the runtime gate so workers/scans bail out immediately and the
+        # NC tab disappears from the gallery.
+        self.parent_window._nc_session_active = False
+        self.parent_window._rebuild_categories()
+        self.parent_window.refresh(scan=False)
         self._nc_runtime_connected = False
         self._nc_update_buttons()
         self._nc_set_status(self._("Disconnected"), ok=False)
