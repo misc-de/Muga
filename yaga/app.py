@@ -457,10 +457,14 @@ class GalleryWindow(Adw.ApplicationWindow):
 
         # Swipe gesture on the nav bar itself: switch categories along the bar's
         # main axis (left/right swipe on a horizontal nav, up/down on a side
-        # rail). Bubble phase so a tap on a category button still wins as a
-        # click; only a real motion-driven swipe gets consumed here.
+        # rail). CAPTURE phase so the gesture watches presses *before* the
+        # category buttons' click handlers claim them — without this, a swipe
+        # that starts on a button never reaches the gesture (the ToggleButton's
+        # internal click gesture eats the sequence). Capture only steals the
+        # sequence when actual swipe motion is detected; a stationary tap
+        # falls through to the button as a normal click.
         nav_swipe = Gtk.GestureSwipe()
-        nav_swipe.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        nav_swipe.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         nav_swipe.connect("swipe", self._on_nav_swipe)
         self.nav_box.add_controller(nav_swipe)
 

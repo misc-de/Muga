@@ -1325,6 +1325,21 @@ def _make_nav_swipe_fake(category: str, cats: list[str], orientation):
     return fake, activated
 
 
+def test_nav_swipe_uses_capture_phase_so_it_works_over_buttons() -> None:
+    """Regression: BUBBLE phase let each ToggleButton's internal click gesture
+    claim the press first, so a swipe that started on a category icon never
+    reached the swipe gesture. CAPTURE means the gesture watches the press
+    at the nav-box level first; it only steals the sequence when actual
+    swipe motion is detected, so a stationary tap still falls through to
+    the button as a normal click."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    swipe_def = src.index("nav_swipe = Gtk.GestureSwipe()")
+    add_ctrl  = src.index("self.nav_box.add_controller(nav_swipe)", swipe_def)
+    block     = src[swipe_def:add_ctrl]
+    assert "Gtk.PropagationPhase.CAPTURE" in block
+    assert "Gtk.PropagationPhase.BUBBLE" not in block
+
+
 def test_nav_swipe_horizontal_right_advances_to_next_category() -> None:
     from yaga.app import GalleryWindow
     from gi.repository import Gtk
