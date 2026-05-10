@@ -195,8 +195,14 @@ class GalleryWindow(Adw.ApplicationWindow):
         page = getattr(app, "_reopen_settings_page", None) if app is not None else None
         if page:
             app._reopen_settings_page = None
-            GLib.idle_add(self._reopen_settings_on_page, page,
-                          priority=GLib.PRIORITY_DEFAULT_IDLE)
+            # Use a short timeout instead of idle_add so the destroys of the
+            # old gallery and its transient settings dialog have time to
+            # fully propagate through GTK's main loop before we present a
+            # new modal dialog. With a plain idle_add the new dialog could
+            # establish its modal grab while GTK was still finalising the
+            # old grab's release, leaving inputs receiving hover/focus
+            # feedback but never firing signal handlers.
+            GLib.timeout_add(80, self._reopen_settings_on_page, page)
 
     def _reopen_settings_on_page(self, page: str) -> bool:
         SettingsWindow(self, initial_page=page).present()
@@ -2216,9 +2222,28 @@ class GalleryWindow(Adw.ApplicationWindow):
         app._reopen_settings_page = "appearance"
         new_window = GalleryWindow(app)
         new_window.present()
-        # Destroy after present so the app has a window at all times — Adw
-        # quits the main loop when the last window goes away, which would
-        # take the new window down with it on certain WMs.
+        # Tear down our transient children (the modal settings dialog the
+        # user was in) explicitly before destroying ourselves. Letting the
+        # destroy cascade through parent → children leaves GTK's modal-grab
+        # tracker pointing at the already-destroyed dialog: the newly
+        # reopened dialog is rendered and reacts visually (hover, focus
+        # rings), but every action handler routes to the stale grab and
+        # silently no-ops. Explicit destroy on each child runs the normal
+        # close path and releases the grab cleanly.
+        for child in list(app.get_windows()):
+            if child is self or child is new_window:
+                continue
+            try:
+                if child.get_transient_for() is self:
+                    child.destroy()
+            except Exception:
+                # Some platforms/widgets may not implement get_transient_for
+                # via the same C-side getter; ignore and move on rather than
+                # leaving the destroy half-done.
+                pass
+        # Destroy after present + child cleanup so the app has a window at
+        # all times — Adw quits the main loop when the last window goes
+        # away, which would take the new window down with it on certain WMs.
         self.destroy()
 
     # ------------------------------------------------------------------

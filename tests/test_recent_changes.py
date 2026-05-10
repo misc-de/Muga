@@ -1449,6 +1449,34 @@ def test_recreate_window_destroys_old_after_new_is_presented() -> None:
     assert new_idx < present_idx < destroy_idx
 
 
+def test_recreate_destroys_transient_children_before_self() -> None:
+    """Regression: parent-destroy cascading to a transient settings dialog
+    leaves GTK's modal-grab tracker pointing at the destroyed dialog. The
+    reopened dialog renders and reacts visually but its action handlers
+    silently no-op. Fix: walk transient children and destroy() each
+    explicitly before destroy()ing self."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    fn_def = src.index("def _recreate_window_for_layout_change")
+    fn_end = src.index("\n    def ", fn_def + 1)
+    fn_body = src[fn_def:fn_end]
+    new_idx        = fn_body.index("new_window = GalleryWindow(app)")
+    present_idx    = fn_body.index("new_window.present()", new_idx)
+    children_loop  = fn_body.index("for child in list(app.get_windows())", present_idx)
+    child_destroy  = fn_body.index("child.destroy()", children_loop)
+    self_destroy   = fn_body.index("self.destroy()", child_destroy)
+    # Children get torn down before we destroy ourselves.
+    assert new_idx < present_idx < children_loop < child_destroy < self_destroy
+    # The loop must skip self and the new_window so we don't accidentally
+    # tear down the freshly-presented gallery.
+    skip_self = fn_body.index("child is self", children_loop)
+    skip_new  = fn_body.index("child is new_window", children_loop)
+    assert children_loop < skip_self
+    assert children_loop < skip_new
+    # The transient_for filter is what selects only modal/dialog children.
+    transient_check = fn_body.index("get_transient_for() is self", children_loop)
+    assert children_loop < transient_check < child_destroy
+
+
 def test_recreate_stashes_reopen_hint_before_creating_new_window() -> None:
     """The hint must be set on the Application BEFORE the new GalleryWindow
     is constructed, so its __init__ can pick the hint up via get_application()
@@ -1465,15 +1493,19 @@ def test_recreate_stashes_reopen_hint_before_creating_new_window() -> None:
 def test_gallery_window_init_consumes_reopen_hint_once() -> None:
     """The hint is one-shot: __init__ must clear it before scheduling the
     reopen so a later legitimate window-recreate without a hint won't
-    accidentally re-pop the dialog."""
+    accidentally re-pop the dialog. The reopen itself is a *timeout*, not
+    an idle, so the destroys of the old window + dialog have time to
+    propagate before the new modal grabs input."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
     init_def = src.index("def __init__(self, app: GalleryApplication)")
     init_end = src.index("\n    def ", init_def + 1)
     init_body = src[init_def:init_end]
     read_idx  = init_body.index('"_reopen_settings_page"')
     clear_idx = init_body.index("app._reopen_settings_page = None", read_idx)
-    sched_idx = init_body.index("GLib.idle_add(self._reopen_settings_on_page", clear_idx)
+    sched_idx = init_body.index("GLib.timeout_add(", clear_idx)
     assert read_idx < clear_idx < sched_idx
+    # Confirm the timeout target is the reopen handler, not something else.
+    assert "_reopen_settings_on_page" in init_body[sched_idx:sched_idx + 200]
 
 
 def test_settings_pages_have_stable_names() -> None:
