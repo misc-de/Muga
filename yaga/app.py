@@ -438,6 +438,15 @@ class GalleryWindow(Adw.ApplicationWindow):
             self.toolbar.add_bottom_bar(self.nav_box)
         # For "left" / "right" the nav_box is parented below as part of the content row.
 
+        # Swipe gesture on the nav bar itself: switch categories along the bar's
+        # main axis (left/right swipe on a horizontal nav, up/down on a side
+        # rail). Bubble phase so a tap on a category button still wins as a
+        # click; only a real motion-driven swipe gets consumed here.
+        nav_swipe = Gtk.GestureSwipe()
+        nav_swipe.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        nav_swipe.connect("swipe", self._on_nav_swipe)
+        self.nav_box.add_controller(nav_swipe)
+
         # Status label (hidden when empty)
         self.status = Gtk.Label(xalign=0)
         self.status.set_hexpand(True)
@@ -1962,6 +1971,39 @@ class GalleryWindow(Adw.ApplicationWindow):
             return
         if velocity_x > 0:
             self._go_back_folder()
+
+    def _on_nav_swipe(self, _gesture: Gtk.GestureSwipe, velocity_x: float, velocity_y: float) -> None:
+        """Swipe on the nav bar to step through categories along its main axis.
+
+        Horizontal nav (top/bottom): velocity_x picks the direction, swipe
+        right (positive x) jumps to the next category, left to the previous.
+        Vertical nav (left/right side rail): velocity_y instead, down = next,
+        up = previous. The same 350 px/s threshold the folder-back swipe uses
+        keeps stray finger drags from triggering a category jump. No wrap at
+        the ends — silent no-op so the user can't accidentally lap past the
+        last category back to the first.
+        """
+        if self._selection_mode:
+            return
+        is_vertical = (
+            self.nav_box.get_orientation() == Gtk.Orientation.VERTICAL
+        )
+        if is_vertical:
+            primary, secondary = velocity_y, velocity_x
+        else:
+            primary, secondary = velocity_x, velocity_y
+        if abs(primary) < 350 or abs(primary) <= abs(secondary):
+            return
+        cats = [cat for cat, _label, _path in self.settings.categories()]
+        if not cats or self.category not in cats:
+            return
+        idx = cats.index(self.category)
+        new_idx = idx + (1 if primary > 0 else -1)
+        if not (0 <= new_idx < len(cats)):
+            return
+        target = self.category_buttons.get(cats[new_idx])
+        if target is not None:
+            target.set_active(True)  # fires _on_category_toggled
 
     def _open_settings(self, _button: Gtk.Button) -> None:
         SettingsWindow(self).present()

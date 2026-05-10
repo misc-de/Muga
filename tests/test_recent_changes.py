@@ -1303,6 +1303,115 @@ def test_apply_settings_defers_rebuild_to_idle() -> None:
     assert "self.refresh(scan=True)" in rebuild_body
 
 
+def _make_nav_swipe_fake(category: str, cats: list[str], orientation):
+    """Build a SimpleNamespace standing in for GalleryWindow with just the
+    attributes _on_nav_swipe touches, so we can call it as an unbound method."""
+    activated: list[str] = []
+    buttons: dict[str, SimpleNamespace] = {}
+    for c in cats:
+        # set_active triggers the toggled handler in real GTK; we only record
+        # which button got activated — the test asserts on category, not on
+        # the toggled-handler side effects.
+        buttons[c] = SimpleNamespace(set_active=lambda _v, _c=c: activated.append(_c))
+    nav_box = SimpleNamespace(get_orientation=lambda: orientation)
+    settings = SimpleNamespace(categories=lambda: [(c, c.title(), f"/p/{c}") for c in cats])
+    fake = SimpleNamespace(
+        _selection_mode=False,
+        category=category,
+        nav_box=nav_box,
+        settings=settings,
+        category_buttons=buttons,
+    )
+    return fake, activated
+
+
+def test_nav_swipe_horizontal_right_advances_to_next_category() -> None:
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    fake, activated = _make_nav_swipe_fake(
+        "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
+    )
+    GalleryWindow._on_nav_swipe(fake, None, 800.0, 10.0)
+    assert activated == ["videos"]
+
+
+def test_nav_swipe_horizontal_left_goes_to_previous_category() -> None:
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    fake, activated = _make_nav_swipe_fake(
+        "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
+    )
+    GalleryWindow._on_nav_swipe(fake, None, -800.0, 10.0)
+    assert activated == ["pictures"]
+
+
+def test_nav_swipe_vertical_uses_y_axis_for_direction() -> None:
+    """On a side rail (vertical nav), only y-axis swipes count and they map
+    to next/previous along the vertical stack."""
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    fake, activated = _make_nav_swipe_fake(
+        "photos", ["pictures", "photos", "videos"], Gtk.Orientation.VERTICAL,
+    )
+    # Strong horizontal velocity on a vertical nav must be ignored.
+    GalleryWindow._on_nav_swipe(fake, None, 800.0, 10.0)
+    assert activated == []
+    # Strong downward velocity advances to the next category.
+    GalleryWindow._on_nav_swipe(fake, None, 10.0, 800.0)
+    assert activated == ["videos"]
+
+
+def test_nav_swipe_below_velocity_threshold_is_ignored() -> None:
+    """Stray finger drags shouldn't jump categories — match the 350 px/s
+    threshold the folder-back swipe already uses."""
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    fake, activated = _make_nav_swipe_fake(
+        "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
+    )
+    GalleryWindow._on_nav_swipe(fake, None, 200.0, 10.0)
+    assert activated == []
+
+
+def test_nav_swipe_dominant_off_axis_velocity_is_ignored() -> None:
+    """A diagonal-but-mostly-vertical swipe on a horizontal nav must NOT
+    switch categories. Pin the abs(primary) <= abs(secondary) bail."""
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    fake, activated = _make_nav_swipe_fake(
+        "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
+    )
+    GalleryWindow._on_nav_swipe(fake, None, 600.0, 800.0)
+    assert activated == []
+
+
+def test_nav_swipe_at_first_or_last_category_does_not_wrap() -> None:
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    cats = ["pictures", "photos", "videos"]
+    # At the first category, a "previous" swipe is a no-op.
+    fake, activated = _make_nav_swipe_fake("pictures", cats, Gtk.Orientation.HORIZONTAL)
+    GalleryWindow._on_nav_swipe(fake, None, -800.0, 10.0)
+    assert activated == []
+    # At the last category, a "next" swipe is a no-op.
+    fake, activated = _make_nav_swipe_fake("videos", cats, Gtk.Orientation.HORIZONTAL)
+    GalleryWindow._on_nav_swipe(fake, None, 800.0, 10.0)
+    assert activated == []
+
+
+def test_nav_swipe_in_selection_mode_is_disabled() -> None:
+    """Multi-select uses long-press + drag on tiles; a swipe on the nav while
+    in selection mode mustn't tear the user out of their selection."""
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+    fake, activated = _make_nav_swipe_fake(
+        "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
+    )
+    fake._selection_mode = True
+    GalleryWindow._on_nav_swipe(fake, None, 800.0, 10.0)
+    assert activated == []
+
+
 def test_apply_settings_coalesces_repeated_calls() -> None:
     """Rapid combo changes shouldn't queue N rebuilds — pin the dedupe flag."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
