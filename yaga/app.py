@@ -185,6 +185,22 @@ class GalleryWindow(Adw.ApplicationWindow):
             "notify::dark", self._on_system_theme_changed,
         )
         self.refresh(scan=True)
+        # If the previous window left us a one-shot reopen hint (set by
+        # _recreate_window_for_layout_change before destroying itself),
+        # reopen the settings dialog on the same page so the nav-position
+        # change doesn't kick the user out of where they were working.
+        # Defer to idle so the new window has finished its initial layout
+        # pass before the modal dialog grabs focus.
+        app = self.get_application()
+        page = getattr(app, "_reopen_settings_page", None) if app is not None else None
+        if page:
+            app._reopen_settings_page = None
+            GLib.idle_add(self._reopen_settings_on_page, page,
+                          priority=GLib.PRIORITY_DEFAULT_IDLE)
+
+    def _reopen_settings_on_page(self, page: str) -> bool:
+        SettingsWindow(self, initial_page=page).present()
+        return GLib.SOURCE_REMOVE
 
     def _(self, text: str) -> str:
         return self.translator.gettext(text)
@@ -2179,6 +2195,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         same __init__ path as a normal app launch, so its Settings.load()
         picks up nav_position (already persisted by apply_settings) and the
         new layout is built once, cleanly, with no in-place tree mutation.
+
+        We stash a one-shot hint on the Adw.Application — which survives the
+        window swap — telling the new window to reopen the settings dialog
+        on the same page the user was just looking at. Without this the user
+        would be kicked out to the bare gallery after every nav-position
+        change, even though they were mid-flow in Settings/Appearance.
         """
         app = self.get_application()
         if app is None:
@@ -2188,6 +2210,10 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._build_ui()
             self.refresh(scan=True)
             return
+        # The nav-position option lives on the "appearance" page; that's
+        # where the user just was. If we ever recreate for a non-Appearance
+        # reason, set this to the matching page name first.
+        app._reopen_settings_page = "appearance"
         new_window = GalleryWindow(app)
         new_window.present()
         # Destroy after present so the app has a window at all times — Adw

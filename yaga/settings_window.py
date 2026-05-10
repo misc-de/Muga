@@ -13,12 +13,21 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 from .config import Settings
 
 class SettingsWindow(Adw.PreferencesWindow):
-    def __init__(self, parent: GalleryWindow) -> None:
+    def __init__(self, parent: GalleryWindow, initial_page: str | None = None) -> None:
         super().__init__(transient_for=parent, modal=True, title=parent._("Settings"))
         self.set_search_enabled(False)
         self.parent_window = parent
         self.settings = Settings(**parent.settings.__dict__)
         self._build()
+        if initial_page:
+            # Switch to the named page (e.g. after a nav-position change
+            # recreates the window and reopens settings to where the user was).
+            # Falls back to the default first page if the name doesn't exist —
+            # set_visible_page_name is forgiving with unknown names.
+            try:
+                self.set_visible_page_name(initial_page)
+            except Exception:
+                pass
         # Suppress GTK's default "focus the first focusable widget" so opening
         # settings doesn't pop up the on-screen keyboard on a SpinRow / Entry.
         GLib.idle_add(lambda: (self.set_focus(None), GLib.SOURCE_REMOVE)[1])
@@ -28,6 +37,9 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _build(self) -> None:
         media = Adw.PreferencesPage(title=self._("Folders"), icon_name="folder-pictures-symbolic")
+        # Stable name (independent of the translated title) so callers can
+        # jump to a specific page via set_visible_page_name().
+        media.set_name("folders")
         self.add(media)
         group = Adw.PreferencesGroup(title=self._("Folders"))
         media.add(group)
@@ -62,6 +74,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         group.add(add_btn)
 
         app = Adw.PreferencesPage(title=self._("Appearance"), icon_name="preferences-desktop-appearance-symbolic")
+        app.set_name("appearance")
         self.add(app)
         theme_group = Adw.PreferencesGroup(title=self._("Appearance"))
         app.add(theme_group)
@@ -128,6 +141,7 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _build_nextcloud_page(self) -> None:
         page = Adw.PreferencesPage(title="Nextcloud", icon_name="folder-remote-symbolic")
+        page.set_name("nextcloud")
         self.add(page)
 
         # Track whether the user explicitly chose "manual" in the setup dialog —

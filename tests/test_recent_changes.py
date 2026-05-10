@@ -1449,6 +1449,57 @@ def test_recreate_window_destroys_old_after_new_is_presented() -> None:
     assert new_idx < present_idx < destroy_idx
 
 
+def test_recreate_stashes_reopen_hint_before_creating_new_window() -> None:
+    """The hint must be set on the Application BEFORE the new GalleryWindow
+    is constructed, so its __init__ can pick the hint up via get_application()
+    on the very same idle tick — no race window."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    fn_def = src.index("def _recreate_window_for_layout_change")
+    fn_end = src.index("\n    def ", fn_def + 1)
+    fn_body = src[fn_def:fn_end]
+    hint_idx = fn_body.index('app._reopen_settings_page = "appearance"')
+    new_idx  = fn_body.index("new_window = GalleryWindow(app)", hint_idx)
+    assert hint_idx < new_idx
+
+
+def test_gallery_window_init_consumes_reopen_hint_once() -> None:
+    """The hint is one-shot: __init__ must clear it before scheduling the
+    reopen so a later legitimate window-recreate without a hint won't
+    accidentally re-pop the dialog."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    init_def = src.index("def __init__(self, app: GalleryApplication)")
+    init_end = src.index("\n    def ", init_def + 1)
+    init_body = src[init_def:init_end]
+    read_idx  = init_body.index('"_reopen_settings_page"')
+    clear_idx = init_body.index("app._reopen_settings_page = None", read_idx)
+    sched_idx = init_body.index("GLib.idle_add(self._reopen_settings_on_page", clear_idx)
+    assert read_idx < clear_idx < sched_idx
+
+
+def test_settings_pages_have_stable_names() -> None:
+    """set_visible_page_name needs a name that doesn't depend on the
+    translated title. Pin all three pages so a future translation change
+    doesn't silently break the reopen-after-recreate flow."""
+    src = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    assert 'media.set_name("folders")' in src
+    assert 'app.set_name("appearance")' in src
+    assert 'page.set_name("nextcloud")' in src
+
+
+def test_settings_window_initial_page_argument() -> None:
+    """The initial_page kwarg must be honoured before the dialog is presented
+    so the user lands on the requested page without a flash of page 1."""
+    src = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    init_def = src.index("def __init__(self, parent: GalleryWindow")
+    init_end = src.index("\n    def ", init_def + 1)
+    init_body = src[init_def:init_end]
+    sig_idx   = init_body.index("initial_page: str | None = None")
+    build_idx = init_body.index("self._build()", sig_idx)
+    set_idx   = init_body.index("self.set_visible_page_name(initial_page)", build_idx)
+    # _build must run first (creates the pages); only then can set_visible_page_name find them.
+    assert sig_idx < build_idx < set_idx
+
+
 def test_apply_settings_coalesces_repeated_calls() -> None:
     """Rapid combo changes shouldn't queue N rebuilds — pin the dedupe flag."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
