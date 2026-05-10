@@ -185,28 +185,14 @@ class GalleryWindow(Adw.ApplicationWindow):
             "notify::dark", self._on_system_theme_changed,
         )
         self.refresh(scan=True)
-        # If the previous window left us a one-shot reopen hint (set by
-        # _recreate_window_for_layout_change before destroying itself),
-        # reopen the settings dialog on the same page so the nav-position
-        # change doesn't kick the user out of where they were working.
-        # Defer to idle so the new window has finished its initial layout
-        # pass before the modal dialog grabs focus.
-        app = self.get_application()
-        page = getattr(app, "_reopen_settings_page", None) if app is not None else None
-        if page:
-            app._reopen_settings_page = None
-            # Use a short timeout instead of idle_add so the destroys of the
-            # old gallery and its transient settings dialog have time to
-            # fully propagate through GTK's main loop before we present a
-            # new modal dialog. With a plain idle_add the new dialog could
-            # establish its modal grab while GTK was still finalising the
-            # old grab's release, leaving inputs receiving hover/focus
-            # feedback but never firing signal handlers.
-            GLib.timeout_add(80, self._reopen_settings_on_page, page)
-
-    def _reopen_settings_on_page(self, page: str) -> bool:
-        SettingsWindow(self, initial_page=page).present()
-        return GLib.SOURCE_REMOVE
+        # Note: a previous iteration auto-reopened the settings dialog on the
+        # appearance page after a nav-position-driven window recreate, but
+        # however we sequenced the destroys/timeouts the just-torn-down old
+        # modal dialog left a stale grab in GTK's tracker. The reopened
+        # dialog rendered and reacted visually but every action handler was
+        # silent. Without auto-reopen the recreation works reliably; the
+        # user reopens settings via the header gear button if they want to
+        # make further changes.
 
     def _(self, text: str) -> str:
         return self.translator.gettext(text)
@@ -2216,10 +2202,6 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._build_ui()
             self.refresh(scan=True)
             return
-        # The nav-position option lives on the "appearance" page; that's
-        # where the user just was. If we ever recreate for a non-Appearance
-        # reason, set this to the matching page name first.
-        app._reopen_settings_page = "appearance"
         new_window = GalleryWindow(app)
         new_window.present()
         # Tear down our transient children (the modal settings dialog the

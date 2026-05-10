@@ -1477,35 +1477,20 @@ def test_recreate_destroys_transient_children_before_self() -> None:
     assert children_loop < transient_check < child_destroy
 
 
-def test_recreate_stashes_reopen_hint_before_creating_new_window() -> None:
-    """The hint must be set on the Application BEFORE the new GalleryWindow
-    is constructed, so its __init__ can pick the hint up via get_application()
-    on the very same idle tick — no race window."""
+def test_recreate_does_not_auto_reopen_settings() -> None:
+    """Regression: the auto-reopen-on-appearance feature was removed because
+    every sequencing variant left a stale modal grab from the just-destroyed
+    old dialog. The reopened dialog rendered and reacted visually but its
+    action handlers silently no-opped. Pin the absence of the reopen path
+    so a future "convenience" patch doesn't reintroduce the bug."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
-    fn_def = src.index("def _recreate_window_for_layout_change")
-    fn_end = src.index("\n    def ", fn_def + 1)
-    fn_body = src[fn_def:fn_end]
-    hint_idx = fn_body.index('app._reopen_settings_page = "appearance"')
-    new_idx  = fn_body.index("new_window = GalleryWindow(app)", hint_idx)
-    assert hint_idx < new_idx
-
-
-def test_gallery_window_init_consumes_reopen_hint_once() -> None:
-    """The hint is one-shot: __init__ must clear it before scheduling the
-    reopen so a later legitimate window-recreate without a hint won't
-    accidentally re-pop the dialog. The reopen itself is a *timeout*, not
-    an idle, so the destroys of the old window + dialog have time to
-    propagate before the new modal grabs input."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    # Neither the recreate path nor __init__ should write/read the hint.
+    assert "_reopen_settings_page" not in src
+    # And no timeout/idle path should auto-construct a SettingsWindow.
     init_def = src.index("def __init__(self, app: GalleryApplication)")
     init_end = src.index("\n    def ", init_def + 1)
     init_body = src[init_def:init_end]
-    read_idx  = init_body.index('"_reopen_settings_page"')
-    clear_idx = init_body.index("app._reopen_settings_page = None", read_idx)
-    sched_idx = init_body.index("GLib.timeout_add(", clear_idx)
-    assert read_idx < clear_idx < sched_idx
-    # Confirm the timeout target is the reopen handler, not something else.
-    assert "_reopen_settings_on_page" in init_body[sched_idx:sched_idx + 200]
+    assert "SettingsWindow(" not in init_body
 
 
 def test_settings_pages_have_stable_names() -> None:
