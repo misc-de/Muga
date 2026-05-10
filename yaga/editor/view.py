@@ -162,6 +162,15 @@ class EditorView(Gtk.Box):
         # ── Nav bar (orientation flipped on landscape vs portrait) ──
         self._nav_box = Gtk.Box(spacing=0)
         self._nav_box.add_css_class("toolbar")
+        self._nav_box.add_css_class("editor-nav")
+        # Wrap the nav in a ScrolledWindow so it can scroll on narrow viewports
+        # rather than clipping the buttons. Policy is flipped together with the
+        # orientation in _apply_orientation.
+        self._nav_scroller = Gtk.ScrolledWindow()
+        self._nav_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        self._nav_scroller.set_propagate_natural_width(False)
+        self._nav_scroller.set_propagate_natural_height(False)
+        self._nav_scroller.set_child(self._nav_box)
 
         self._nav_btns: dict[str, Gtk.ToggleButton] = {}
         # Labels we hide on landscape (icon-only, ~50px strip).
@@ -220,7 +229,7 @@ class EditorView(Gtk.Box):
             return
         self._is_landscape = landscape
         # Detach current children (a widget can only have one parent in GTK4).
-        for child in (self._image_overlay, self._panel_revealer, self._nav_box):
+        for child in (self._image_overlay, self._panel_revealer, self._nav_scroller):
             parent = child.get_parent()
             if parent is self:
                 self.remove(child)
@@ -237,6 +246,9 @@ class EditorView(Gtk.Box):
             # Icon-only narrow strip (~50 px). Tooltips already carry the label.
             for lbl in self._nav_labels:
                 lbl.set_visible(False)
+            self._nav_scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            self._nav_scroller.set_hexpand(False)
+            self._nav_scroller.set_vexpand(True)
             self._panel_revealer.set_transition_type(
                 Gtk.RevealerTransitionType.SLIDE_RIGHT
             )
@@ -257,7 +269,7 @@ class EditorView(Gtk.Box):
             # Sticker category buttons become a vertical sub-menu strip too.
             if hasattr(self, "_sticker_cat_box"):
                 self._sticker_cat_box.set_orientation(Gtk.Orientation.VERTICAL)
-            self.append(self._nav_box)
+            self.append(self._nav_scroller)
             self.append(self._panel_revealer)
             self.append(self._image_overlay)
         else:
@@ -266,15 +278,19 @@ class EditorView(Gtk.Box):
             self._nav_box.set_orientation(Gtk.Orientation.HORIZONTAL)
             self._nav_box.set_hexpand(True)
             self._nav_box.set_vexpand(False)
-            # Equal-width buttons across the toolbar — keeps the portrait
-            # nav looking the way the original (pre-landscape-refactor)
-            # implementation did.
-            self._nav_box.set_homogeneous(True)
+            # Drop the homogeneous distribution so each button uses its
+            # natural width; on narrow viewports the row exceeds the viewport
+            # and the wrapping ScrolledWindow scrolls horizontally instead of
+            # clipping the labels.
+            self._nav_box.set_homogeneous(False)
             for btn in self._nav_btns.values():
                 btn.set_hexpand(True)
                 btn.set_vexpand(False)
             for lbl in self._nav_labels:
                 lbl.set_visible(True)
+            self._nav_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+            self._nav_scroller.set_hexpand(True)
+            self._nav_scroller.set_vexpand(False)
             self._panel_revealer.set_transition_type(
                 Gtk.RevealerTransitionType.SLIDE_UP
             )
@@ -297,7 +313,7 @@ class EditorView(Gtk.Box):
                 self._sticker_cat_box.set_orientation(Gtk.Orientation.HORIZONTAL)
             self.append(self._image_overlay)
             self.append(self._panel_revealer)
-            self.append(self._nav_box)
+            self.append(self._nav_scroller)
 
     # ── Panel builders ──
 

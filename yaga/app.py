@@ -173,7 +173,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._apply_theme()
         self._load_css()
         self._build_ui()
-        Adw.StyleManager.get_default().connect("notify::dark", self._on_system_theme_changed)
+        self._theme_handler_id = Adw.StyleManager.get_default().connect(
+            "notify::dark", self._on_system_theme_changed,
+        )
         self.refresh(scan=True)
 
     def _(self, text: str) -> str:
@@ -844,7 +846,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             if grouped:
                 self._append_date_grouped(item)
             else:
-                self.gallery_grid.append_media(item, item.path in self._selected_paths)
+                self.gallery_grid.append_media(item)
         self._set_status("")
         self._set_empty_state(visible=not self.current_items)
 
@@ -911,7 +913,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._current_offset = len(page)
         self._has_more_items = self._current_offset < self._total_count
         for item in page:
-            self.gallery_grid.append_media(item, item.path in self._selected_paths)
+            self.gallery_grid.append_media(item)
         self._set_status("")
         self._set_empty_state(visible=not self.current_items)
 
@@ -935,7 +937,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._current_offset = len(page)
         self._has_more_items = self._current_offset < self._total_count
         for item in page:
-            self.gallery_grid.append_media(item, item.path in self._selected_paths)
+            self.gallery_grid.append_media(item)
         total = len(folders) + len(self.current_items)
         self._set_empty_state(visible=total == 0)
         self._set_status("")
@@ -965,7 +967,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         if key != self._date_last_key:
             self.gallery_grid.append_header(self._month_header_markup(dt))
             self._date_last_key = key
-        self.gallery_grid.append_media(item, item.path in self._selected_paths)
+        self.gallery_grid.append_media(item)
 
     def _month_header_markup(self, dt: datetime) -> str:
         # Two-line month/year header (locale-aware month name); the year is sized
@@ -1064,7 +1066,7 @@ class GalleryWindow(Adw.ApplicationWindow):
                 if grouped:
                     self._append_date_grouped(item)
                 else:
-                    self.gallery_grid.append_media(item, item.path in self._selected_paths)
+                    self.gallery_grid.append_media(item)
             self.gallery_grid.finish()
 
             self._current_offset += len(next_items)
@@ -1321,6 +1323,22 @@ class GalleryWindow(Adw.ApplicationWindow):
             threading.Thread(target=self._nc_thumb_worker, daemon=True).start()
         self._nc_thumb_event.set()
 
+    def _cancel_nc_thumb_queue(self) -> None:
+        """Drop every queued NC thumbnail fetch. Workers currently mid-HTTP
+        run to completion (the requests library has no cheap interrupt),
+        but no new fetches start. Call this on every navigation that
+        changes ``current_folder`` so rapid folder hopping doesn't keep
+        the previous folder's thumbnails downloading in the background."""
+        with self._nc_thumb_lock:
+            if not self._nc_thumb_queue:
+                return
+            for path in self._nc_thumb_queue:
+                self._nc_thumb_pending.discard(path)
+            self._nc_thumb_queue.clear()
+        # Wake idle workers so they re-evaluate the now-empty queue and
+        # fall through to their idle-timeout path instead of blocking.
+        self._nc_thumb_event.set()
+
     def _ensure_nc_thumb_client(self):
         """Lazily build a single NextcloudClient that all worker threads share.
         The client uses thread-local persistent HTTPS connections, so each
@@ -1391,6 +1409,10 @@ class GalleryWindow(Adw.ApplicationWindow):
                 self._nc_thumb_active_workers = max(0, self._nc_thumb_active_workers - 1)
 
     def _open_folder(self, _button, folder: str) -> None:
+        # Drop the previous folder's queued thumbnail fetches before we
+        # change views — bind on the new folder will re-queue whatever
+        # actually scrolls into the new viewport.
+        self._cancel_nc_thumb_queue()
         self.current_folder = folder
         self._render()
         # No bulk thumbnail pre-fetch on folder open: the gallery requests each
@@ -1457,6 +1479,10 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_move_btn.set_visible(True)
         self.header.set_title_widget(self._sel_title)
         self._update_sel_title()
+        # Force every materialised tile to re-bind so the checkbox overlay
+        # appears across the visible viewport instead of only on the tile
+        # that was just long-pressed.
+        self.gallery_grid.refresh_selection_state()
 
     def _exit_selection_mode(self) -> None:
         self._selection_mode = False
@@ -1473,28 +1499,26 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.refresh_button.set_visible(True)
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)
-        self._render()
+        # Splice every visible row back so check-mark overlays disappear,
+        # without re-querying the database or losing the scroll position.
+        self.gallery_grid.refresh_selection_state()
 
     def _toggle_selection(self, path: str) -> None:
         if self._sel_busy:
             return
         if path in self._selected_paths:
             self._selected_paths.discard(path)
-            new_selected = False
         else:
             self._selected_paths.add(path)
-            new_selected = True
         if not self._selected_paths:
-            # Clearing the last item exits selection mode (and full-renders
-            # to remove every checkbox).
+            # Clearing the last item exits selection mode entirely.
             self._exit_selection_mode()
             return
         self._update_sel_title()
-        # Surgical update — flips the checkbox on this one tile only, no DB
-        # requery, no scroll jump. Falls back to a full render when the tile
-        # isn't in the materialised window (e.g. a path that hasn't been
-        # lazy-loaded yet).
-        if not self.gallery_grid.update_tile_selected(path, new_selected):
+        # Re-bind just this tile so the checkbox visual catches up. Falls
+        # back to a full render when the path isn't in the materialised
+        # window (lazy-loaded paths land here on first toggle).
+        if not self.gallery_grid.update_tile_for_path(path):
             self._render()
 
     def _update_sel_title(self) -> None:
@@ -1708,9 +1732,11 @@ class GalleryWindow(Adw.ApplicationWindow):
                 button.handler_block_by_func(self._on_category_toggled)
                 button.set_active(True)
                 button.handler_unblock_by_func(self._on_category_toggled)
+                self._cancel_nc_thumb_queue()
                 self.current_folder = None
                 self._render()
             return
+        self._cancel_nc_thumb_queue()
         self.category = category
         self.current_folder = None
         for other_category, other_button in self.category_buttons.items():
@@ -1724,6 +1750,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._go_back_folder()
 
     def _go_back_folder(self) -> None:
+        # Stop fetching the now-leaving folder's thumbnails; the parent view
+        # re-queues whatever it actually shows.
+        self._cancel_nc_thumb_queue()
         if not self.current_folder or "/" not in self.current_folder:
             self.current_folder = None
         else:
@@ -1852,7 +1881,20 @@ class GalleryWindow(Adw.ApplicationWindow):
             self.settings.nextcloud_enabled
             and getattr(self.settings, "nextcloud_session_active", True)
         )
-        self._apply_theme()
+        # Block our own notify::dark handler while we tear down and rebuild —
+        # otherwise set_color_scheme synchronously triggers _rebuild_categories
+        # on the nav_box that _build_ui is about to discard, which on rapid
+        # back-and-forth theme switches deadlocks GTK's layout pass (the
+        # observed dark→light→dark freeze).
+        mgr = Adw.StyleManager.get_default()
+        handler_id = getattr(self, "_theme_handler_id", 0)
+        if handler_id:
+            mgr.handler_block(handler_id)
+        try:
+            self._apply_theme()
+        finally:
+            if handler_id:
+                mgr.handler_unblock(handler_id)
         self._build_ui()
         self.refresh(scan=True)
 
@@ -1939,8 +1981,8 @@ class GalleryWindow(Adw.ApplicationWindow):
             .date-header {
                 min-height: 120px;
                 padding: 16px 8px;
-                background: #202020;
-                color: white;
+                background: transparent;
+                color: @window_fg_color;
                 font-size: 32px;
             }
             .folder-label {
@@ -1988,6 +2030,19 @@ class GalleryWindow(Adw.ApplicationWindow):
                 background: rgba(0,0,0,0.55);
                 color: white;
                 border-radius: 14px;
+            }
+            /* Editor toolbar: icons follow the standard window foreground so
+               they stay legible in both light and dark themes (the viewer
+               window's fullscreen black backdrop would otherwise tint the
+               toolbar dark and make the symbolic icons disappear). */
+            .editor-nav,
+            .editor-nav button,
+            .editor-nav image,
+            .editor-nav label {
+                color: @window_fg_color;
+            }
+            .editor-nav {
+                background-color: @headerbar_bg_color;
             }
             """
             + rotation_css

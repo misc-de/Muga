@@ -209,8 +209,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_perf_group.add(thumb_row)
 
         merge_row = Adw.SwitchRow(
-            title=self._("Show in Pictures"),
-            subtitle=self._("Merge Nextcloud items into the Pictures view (thumbnails load on demand)"),
+            title=self._("Show in Overview"),
+            subtitle=self._("Merge Nextcloud items into the Overview (thumbnails load on demand)"),
         )
         merge_row.set_active(self.settings.nextcloud_show_in_pictures)
         merge_row.connect("notify::active", self._nc_show_in_pictures_changed)

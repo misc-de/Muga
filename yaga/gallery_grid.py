@@ -22,7 +22,12 @@ _MAX_COLS = 10  # maximum supported grid columns
 
 
 class MediaRow(GObject.Object):
-    """One cell in the gallery grid: either a folder or a media item."""
+    """One cell in the gallery grid: either a folder or a media item.
+
+    Selection state intentionally lives on the GalleryWindow (`_selected_paths`)
+    rather than on the row — bind reads it from there at draw time, so the
+    visible check-mark always tracks the live set even when the row was
+    materialized before selection mode was entered."""
 
     __gtype_name__ = "YagaMediaRow"
 
@@ -32,13 +37,11 @@ class MediaRow(GObject.Object):
         self.folder_path: str | None = None
         self.folder_count: int = 0
         self.folder_thumbs: list[str] = []
-        self.selected: bool = False
 
     @classmethod
-    def from_media(cls, item: MediaItem, selected: bool = False) -> "MediaRow":
+    def from_media(cls, item: MediaItem) -> "MediaRow":
         row = cls()
         row.media_item = item
-        row.selected = selected
         return row
 
     @classmethod
@@ -173,8 +176,8 @@ class GalleryGrid(Gtk.Overlay):
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
 
-    def append_media(self, item: MediaItem, selected: bool = False) -> None:
-        self._building_row.append(MediaRow.from_media(item, selected))
+    def append_media(self, item: MediaItem) -> None:
+        self._building_row.append(MediaRow.from_media(item))
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
 
@@ -199,38 +202,48 @@ class GalleryGrid(Gtk.Overlay):
                 if not row.is_folder and row.media_item and row.media_item.path == path:
                     new_tiles = gallery_row.tiles[:]
                     updated = dataclasses.replace(row.media_item, thumb_path=thumb_path)
-                    new_tiles[j] = MediaRow.from_media(updated, row.selected)
+                    new_tiles[j] = MediaRow.from_media(updated)
                     self.row_store.splice(pos, 1, [GalleryRow.from_tiles(new_tiles)])
                     return True
         return False
 
-    def update_tile_selected(self, path: str, selected: bool) -> bool:
-        """Flip the selected flag on a single tile in place.
-
-        Surgical replacement of one row in the row_store — cheap (no DB
-        requery, scroll position preserved) and the natural shape for
-        toggling selection. Returns True if the path was visible and
-        updated, False if the tile is not in the currently materialised
-        rows (caller should fall back to a full re-render so the
-        eventually-bound tile picks up the right state)."""
+    def update_tile_for_path(self, path: str) -> bool:
+        """Force a re-bind of the tile that holds *path* by splicing its
+        row back into the store. Used after toggling selection so the
+        check-mark visual catches up. Returns True if the path is in the
+        materialized window, False if the caller should fall back to a
+        full re-render."""
         n = self.row_store.get_n_items()
         for pos in range(n):
             gallery_row = self.row_store.get_item(pos)
             if gallery_row.is_header:
                 continue
-            for j, tile in enumerate(gallery_row.tiles):
+            for tile in gallery_row.tiles:
                 if (
                     not tile.is_folder
                     and tile.media_item is not None
                     and tile.media_item.path == path
                 ):
-                    if tile.selected == selected:
-                        return True
-                    new_tiles = gallery_row.tiles[:]
-                    new_tiles[j] = MediaRow.from_media(tile.media_item, selected)
-                    self.row_store.splice(pos, 1, [GalleryRow.from_tiles(new_tiles)])
+                    self.row_store.splice(
+                        pos, 1, [GalleryRow.from_tiles(list(gallery_row.tiles))],
+                    )
                     return True
         return False
+
+    def refresh_selection_state(self) -> None:
+        """Re-bind every materialized tile row so checkbox visibility and
+        the per-tile check state catch up with the owner's current
+        ``_selection_mode`` / ``_selected_paths``. No DB requery, no
+        scroll change — splice emits items-changed which causes the
+        ListView to re-run the bind handler on each affected row."""
+        n = self.row_store.get_n_items()
+        for pos in range(n):
+            gallery_row = self.row_store.get_item(pos)
+            if gallery_row.is_header:
+                continue
+            self.row_store.splice(
+                pos, 1, [GalleryRow.from_tiles(list(gallery_row.tiles))],
+            )
 
     def update_folder_thumb(self, folder_path: str, thumb_path: str) -> bool:
         n = self.row_store.get_n_items()
@@ -363,13 +376,32 @@ class GalleryGrid(Gtk.Overlay):
 
         button.connect("clicked", self._on_tile_clicked, list_item)
 
-        gesture = Gtk.GestureClick(button=3)
-        gesture.connect("pressed", self._on_tile_right_click, list_item, tile_index)
-        button.add_controller(gesture)
+        right_click = Gtk.GestureClick(button=3)
+        right_click.connect("pressed", self._on_tile_right_click, list_item, tile_index)
+        button.add_controller(right_click)
 
-        long_press = Gtk.GestureLongPress()
-        long_press.connect("pressed", self._on_tile_long_press, list_item, tile_index)
-        button.add_controller(long_press)
+        # 2-second long-press → enter selection mode. GtkGestureLongPress is
+        # hard-capped at delay_factor 2.0 (≤ 1 s on a 500 ms system default),
+        # so we roll our own with a GLib timeout. The press detector runs in
+        # CAPTURE phase so set_state(CLAIMED) on fire propagates to the
+        # button's built-in click gesture and suppresses the trailing
+        # release-click. The timestamp guard in _on_tile_clicked is a belt-
+        # and-suspenders fallback for any GTK routing edge cases.
+        press_g = Gtk.GestureClick.new()
+        press_g.set_button(1)  # primary mouse + touch (touch reports as 1)
+        press_g.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        press_g.set_exclusive(False)
+        press_g.connect("pressed", self._on_tile_press, list_item, tile_index)
+        press_g.connect("released", self._on_tile_release_or_cancel)
+        press_g.connect("cancel", self._on_tile_press_cancel)
+        button.add_controller(press_g)
+
+        # Cancel the pending long-press if the pointer drifts beyond a small
+        # threshold — typical of a scroll gesture or a drag, neither of which
+        # should trigger selection mode.
+        motion = Gtk.EventControllerMotion()
+        motion.connect("motion", self._on_tile_motion, press_g)
+        button.add_controller(motion)
 
         swipe = Gtk.GestureSwipe()
         swipe.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -487,7 +519,7 @@ class GalleryGrid(Gtk.Overlay):
         folder_label.set_visible(False)
         if self.owner._selection_mode:
             check.set_visible(True)
-            if row.selected:
+            if item.path in self.owner._selected_paths:
                 check.set_from_icon_name("checkbox-checked-symbolic")
                 check.add_css_class("checked")
             else:
@@ -495,6 +527,7 @@ class GalleryGrid(Gtk.Overlay):
                 check.remove_css_class("checked")
         else:
             check.set_visible(False)
+            check.remove_css_class("checked")
         button.set_sensitive(True)
 
     def _on_item_unbind(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
@@ -550,27 +583,91 @@ class GalleryGrid(Gtk.Overlay):
         widget = gesture.get_widget()
         self.owner._show_context_menu(gesture, 1, x, y, row.media_item, widget)
 
-    def _on_tile_long_press(
+    # ── Custom 2-second long-press ───────────────────────────────────
+    # GtkGestureLongPress maxes out around 1 s; we want a slower, more
+    # deliberate hold before entering selection mode (the user explicitly
+    # asked for "after holding two seconds"). Per-press state lives on the
+    # gesture object so multiple touch sequences across tiles don't
+    # clobber each other.
+
+    _LONG_PRESS_HOLD_MS = 2000
+    _LONG_PRESS_MOVE_THRESHOLD_SQ = 16.0 * 16.0  # ~16 px before we abort
+
+    def _on_tile_press(
         self,
-        gesture: Gtk.GestureLongPress,
-        _x,
-        _y,
+        gesture: Gtk.GestureClick,
+        _n_press: int,
+        x: float,
+        y: float,
         list_item: Gtk.ListItem,
         tile_index: int,
     ) -> None:
-        row = self._get_tile_item(list_item, tile_index)
-        if row is None or row.is_folder or row.media_item is None:
+        self._abort_long_press(gesture)
+        gesture._press_x = x       # type: ignore[attr-defined]
+        gesture._press_y = y       # type: ignore[attr-defined]
+        gesture._long_press_timer_id = GLib.timeout_add(  # type: ignore[attr-defined]
+            self._LONG_PRESS_HOLD_MS,
+            self._fire_long_press,
+            gesture,
+            list_item,
+            tile_index,
+        )
+
+    def _on_tile_release_or_cancel(
+        self,
+        gesture: Gtk.GestureClick,
+        _n_press: int,
+        _x: float,
+        _y: float,
+    ) -> None:
+        self._abort_long_press(gesture)
+
+    def _on_tile_press_cancel(self, gesture: Gtk.GestureClick, _seq) -> None:
+        self._abort_long_press(gesture)
+
+    def _on_tile_motion(
+        self,
+        _ctrl: Gtk.EventControllerMotion,
+        x: float,
+        y: float,
+        gesture: Gtk.GestureClick,
+    ) -> None:
+        timer_id = getattr(gesture, "_long_press_timer_id", 0)
+        if not timer_id:
             return
-        # Stamp the timestamp BEFORE entering selection mode so the click
-        # handler on the same release-event short-circuits early.
+        dx = x - getattr(gesture, "_press_x", 0.0)
+        dy = y - getattr(gesture, "_press_y", 0.0)
+        if dx * dx + dy * dy > self._LONG_PRESS_MOVE_THRESHOLD_SQ:
+            self._abort_long_press(gesture)
+
+    def _abort_long_press(self, gesture: Gtk.GestureClick) -> None:
+        timer_id = getattr(gesture, "_long_press_timer_id", 0)
+        if timer_id:
+            GLib.source_remove(timer_id)
+        gesture._long_press_timer_id = 0  # type: ignore[attr-defined]
+
+    def _fire_long_press(
+        self,
+        gesture: Gtk.GestureClick,
+        list_item: Gtk.ListItem,
+        tile_index: int,
+    ) -> bool:
+        gesture._long_press_timer_id = 0  # type: ignore[attr-defined]
+        row = self._get_tile_item(list_item, tile_index)
+        # Folders and empty cells aren't selectable — bail without entering
+        # selection mode so a stale tile that recycled into a folder slot
+        # doesn't surprise the user.
+        if row is None or row.is_folder or row.media_item is None:
+            return GLib.SOURCE_REMOVE
         self._last_long_press_at = time.monotonic()
-        # Claim the gesture sequence so the button's built-in click gesture
-        # doesn't also fire on release. CLAIMED is the GTK4-native way to
-        # tell sibling gestures "I handled this, leave it alone".
-        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        try:
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        except Exception:
+            pass
         if not self.owner._selection_mode:
             self.owner._enter_selection_mode()
         self.owner._toggle_selection(row.media_item.path)
+        return GLib.SOURCE_REMOVE
 
     def _on_tile_swipe(self, gesture: Gtk.GestureSwipe, velocity_x: float, velocity_y: float) -> None:
         self.owner._on_folder_swipe(gesture, velocity_x, velocity_y)

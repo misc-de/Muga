@@ -174,6 +174,9 @@ TRANSLATIONS = {
         "Performance": "Performance",
         "Load thumbnails only": "Load thumbnails only",
         "Skip downloading full files during sync": "Skip downloading full files during sync",
+        "Show in Overview": "Show in Overview",
+        "Merge Nextcloud items into the Overview (thumbnails load on demand)":
+            "Merge Nextcloud items into the Overview (thumbnails load on demand)",
         "Connect": "Connect",
         "Disconnect": "Disconnect",
         "Connected ✓": "Connected ✓",
@@ -387,6 +390,9 @@ TRANSLATIONS = {
         "Performance": "Performance",
         "Load thumbnails only": "Nur Vorschaubilder laden",
         "Skip downloading full files during sync": "Beim Abgleich keine vollständigen Dateien herunterladen",
+        "Show in Overview": "In Übersicht anzeigen",
+        "Merge Nextcloud items into the Overview (thumbnails load on demand)":
+            "Nextcloud-Inhalte in die Übersicht einblenden (Vorschaubilder werden bei Bedarf geladen)",
         "Connect": "Verbinden",
         "Disconnect": "Trennen",
         "Connected ✓": "Verbunden ✓",
