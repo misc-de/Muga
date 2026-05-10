@@ -2390,15 +2390,25 @@ class GalleryWindow(Adw.ApplicationWindow):
             }
             /* Up/down arrows pinned to the right edge of every month header.
                Subtle by default (low opacity), full opacity on hover so they
-               stay discoverable without competing with the date typography. */
+               stay discoverable without competing with the date typography.
+               Hit-area sized for touch (~44px square per Apple HIG / Material
+               minimum); padding rather than icon scaling does the work, so
+               the icon glyph itself stays at its default symbolic 16px. */
             .date-header-nav {
                 opacity: 0.45;
-                min-width: 24px;
-                min-height: 24px;
-                padding: 2px 4px;
+                min-width: 44px;
+                min-height: 44px;
+                padding: 12px;
             }
             .date-header-nav:hover {
                 opacity: 1.0;
+            }
+            /* Pin the icon glyph at the default symbolic size: without this,
+               some themes scale the icon proportionally with the button's
+               padding/min-size, which would defeat the "big button, small
+               icon" intent. */
+            .date-header-nav image {
+                -gtk-icon-size: 16px;
             }
             .folder-label {
                 background: rgba(0,0,0,0.55);

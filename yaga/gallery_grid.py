@@ -344,60 +344,102 @@ class GalleryGrid(Gtk.Overlay):
         +1 for the down arrow (next header in row order). Sort-direction
         independent — the arrows always navigate by visible row order.
 
-        Instead of Gtk.ListView.scroll_to (which only guarantees visibility,
-        positioning is implementation-defined), we compute the pixel delta
-        between the two headers' row offsets and add that to the vertical
-        adjustment. The new header therefore lands at the exact screen Y
-        the old one was at, putting the next arrow button right under the
-        cursor for rapid click-through.
+        Robust alignment strategy: rather than estimating the inter-row
+        delta via constant heights (which drifts when the cell size doesn't
+        match the assumed value, or when ListView injects internal
+        per-row padding), we measure the actual on-screen geometry of both
+        headers via Gtk.Widget.compute_bounds against the listview's
+        scrollable coord space. The source is rendered (the click just
+        landed on it), so its Y is known exactly. We scroll_to the target
+        to force a bind, then on the next idle tick (after GTK's layout
+        pass) measure the target's actual Y and set the vadjustment so the
+        target lands at exactly the screen Y the source was at. Rapid
+        click-through then keeps every consecutive arrow under the cursor.
         """
         list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
         if list_item is None:
             return
-        current_pos = list_item.get_position()
-        n = self.row_store.get_n_items()
-        pos = current_pos + direction
-        target_pos: int | None = None
-        while 0 <= pos < n:
-            row: GalleryRow | None = self.row_store.get_item(pos)
-            if row is not None and row.is_header:
-                target_pos = pos
-                break
-            pos += direction
+        target_pos = self._find_adjacent_header_pos(list_item.get_position(), direction)
         if target_pos is None:
             # No adjacent header (top/bottom of list, or single-month range).
             return
-
-        # Reference heights:
-        # - the current header_box is on screen, so its allocated height is
-        #   exactly accurate (catches font scaling / padding tweaks).
-        # - tile rows: cell_size (set in app._update_tile_size's CSS), which
-        #   tracks scroller width / column count; falls back to a sane default
-        #   if the scroller hasn't been measured yet.
-        header_h = header_box.get_allocated_height() or 152
-        scroller_width = self.scroller.get_width() or 800
-        cols = self._cols or 4
-        tile_h = max(32, scroller_width // cols)
-
-        start = min(current_pos, target_pos)
-        end   = max(current_pos, target_pos)
-        delta_y = 0.0
-        for i in range(start, end):
-            row = self.row_store.get_item(i)
-            if row is None:
-                continue
-            delta_y += header_h if row.is_header else tile_h
-        if target_pos < current_pos:
-            delta_y = -delta_y
-
+        src_widget = list_item.get_child()
+        if src_widget is None:
+            return
+        src_y = self._content_y_of(src_widget)
+        if src_y is None:
+            return
         vadj = self.scroller.get_vadjustment()
-        new_value = vadj.get_value() + delta_y
-        # Clamp into the adjustment's valid range so we don't request a value
-        # past the end (which the adjustment silently ignores anyway, but
-        # being explicit avoids subtle off-by-one drift on the boundaries).
+        # The screen Y the user just clicked at — what we want the new header
+        # to land on.
+        target_screen_y = src_y - vadj.get_value()
+
+        # Make sure the target gets bound so we can measure it. ListView's
+        # scroll_to brings it into view but the precise Y typically isn't
+        # what we want — we'll override below.
+        self.grid_view.scroll_to(target_pos, Gtk.ListScrollFlags.NONE, None)
+
+        # Layout hasn't run yet at this point, so measuring inline would give
+        # the *pre-scroll* coordinates. Defer until idle, when the layout
+        # pass kicked off by scroll_to has settled, then align precisely.
+        GLib.idle_add(
+            self._align_target_header, target_pos, target_screen_y,
+            priority=GLib.PRIORITY_HIGH_IDLE,
+        )
+
+    def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
+        """Walk row_store from *current_pos* in *direction* until a header
+        row is found. Returns the row index, or None if the boundary is hit
+        without an adjacent header."""
+        n = self.row_store.get_n_items()
+        pos = current_pos + direction
+        while 0 <= pos < n:
+            row: GalleryRow | None = self.row_store.get_item(pos)
+            if row is not None and row.is_header:
+                return pos
+            pos += direction
+        return None
+
+    def _content_y_of(self, widget: Gtk.Widget) -> float | None:
+        """Y of *widget* within the listview's scrollable content coord
+        space. Independent of current scroll value — that's exactly what we
+        need to translate back into a vadjustment offset."""
+        ok, bounds = widget.compute_bounds(self.grid_view)
+        if not ok:
+            return None
+        return bounds.get_y()
+
+    def _bound_widget_at(self, pos: int) -> Gtk.Widget | None:
+        """Find the bound list_item widget for row *pos*, if any. ListView
+        recycles widgets, so the same Gtk.Stack pool entry can correspond
+        to different rows over time — list_item.get_position() resolves the
+        live mapping at lookup time."""
+        for li in list(self._bound_list_items):
+            try:
+                if li.get_position() == pos:
+                    return li.get_child()
+            except Exception:
+                continue
+        return None
+
+    def _align_target_header(self, target_pos: int, target_screen_y: float) -> bool:
+        """Idle callback: place the target header at the same screen Y the
+        source header was at. If the target widget didn't get bound by
+        scroll_to (rare — overscan should cover it), silently bail; the
+        scroll_to has at least made it visible, and the user can click
+        again from the new header for a precise re-alignment."""
+        target_widget = self._bound_widget_at(target_pos)
+        if target_widget is None:
+            return GLib.SOURCE_REMOVE
+        tgt_y = self._content_y_of(target_widget)
+        if tgt_y is None:
+            return GLib.SOURCE_REMOVE
+        vadj = self.scroller.get_vadjustment()
+        new_value = tgt_y - target_screen_y
         upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
         new_value = max(0.0, min(new_value, upper))
         vadj.set_value(new_value)
+        return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
     # Factory callbacks

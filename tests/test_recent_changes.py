@@ -1355,109 +1355,118 @@ def test_nav_swipe_uses_drag_with_explicit_claim_to_steal_from_button_click() ->
     assert "_NAV_SWIPE_CLAIM_PX" in update_body
 
 
-def test_date_header_nav_offsets_vadjustment_by_inter_header_distance() -> None:
-    """The up/down arrows compute the pixel distance between the current
-    header and the target header, then add that delta to the scrolled
-    window's vadjustment. This puts the target header at the exact screen
-    Y the current one was at — so the arrow lands right under the cursor
-    and rapid click-through works."""
+def test_find_adjacent_header_pos_walks_row_store() -> None:
+    """Pure scan helper: skip tile rows, return the first header in the
+    requested direction, or None at the boundary."""
     from yaga.gallery_grid import GalleryGrid, GalleryRow
-
-    # Layout: [Header Mar][Tile][Tile][Header Feb][Tile][Header Jan]
-    # With header_h=150, tile_h=200:
-    # Mar header starts at y=0, Feb at y=150 + 200 + 200 = 550,
-    # Jan at y=550 + 150 + 200 = 900.
     rows = [
-        GalleryRow.header("Mar 2026", year=2026, month=3),
+        GalleryRow.header("Mar"),
         GalleryRow.from_tiles([]),
         GalleryRow.from_tiles([]),
-        GalleryRow.header("Feb 2026", year=2026, month=2),
+        GalleryRow.header("Feb"),
         GalleryRow.from_tiles([]),
-        GalleryRow.header("Jan 2026", year=2026, month=1),
+        GalleryRow.header("Jan"),
     ]
     store = SimpleNamespace(
         get_n_items=lambda: len(rows),
         get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
     )
+    fake = SimpleNamespace(row_store=store)
+    assert GalleryGrid._find_adjacent_header_pos(fake, 0, +1) == 3
+    assert GalleryGrid._find_adjacent_header_pos(fake, 3, -1) == 0
+    assert GalleryGrid._find_adjacent_header_pos(fake, 3, +1) == 5
+    assert GalleryGrid._find_adjacent_header_pos(fake, 5, +1) is None
+    assert GalleryGrid._find_adjacent_header_pos(fake, 0, -1) is None
 
+
+def test_align_target_header_uses_actual_widget_bounds() -> None:
+    """The robust alignment path: read the target widget's actual content-Y
+    from compute_bounds, then set vadjustment so the target lands at the
+    same screen-Y the source header was at. Pin the math via fakes that
+    return known coordinates — no estimation drift, no constants for the
+    test to hard-code."""
+    from yaga.gallery_grid import GalleryGrid
+
+    # target widget reports content_y = 1234 in scrollable space.
+    fake_bounds = SimpleNamespace(get_y=lambda: 1234.0)
+    target_widget = SimpleNamespace(
+        compute_bounds=lambda _grid: (True, fake_bounds),
+    )
+    fake_li = SimpleNamespace(
+        get_position=lambda: 7,
+        get_child=lambda: target_widget,
+    )
     set_values: list[float] = []
     vadj = SimpleNamespace(
-        get_value=lambda: 100.0,
-        get_upper=lambda: 10000.0,
-        get_page_size=lambda: 600.0,
+        get_value=lambda: 600.0,
+        get_upper=lambda: 5000.0,
+        get_page_size=lambda: 800.0,
         set_value=lambda v: set_values.append(v),
     )
-    scroller = SimpleNamespace(
-        get_width=lambda: 800,
-        get_vadjustment=lambda: vadj,
-    )
     fake = SimpleNamespace(
-        row_store=store,
-        scroller=scroller,
+        _bound_list_items=[fake_li],
+        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
         grid_view=SimpleNamespace(),
-        _cols=4,  # 800/4 = 200 → tile_h = 200
     )
+    fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
+    fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    # Source was at screen_y = 250 (some click-target Y the user hit).
+    GalleryGrid._align_target_header(fake, 7, 250.0)
+    # New vadj so target_content_y(1234) - new_vadj == target_screen_y(250)
+    # → new_vadj = 1234 - 250 = 984. Clamped against [0, 5000-800=4200]: 984.
+    assert set_values == [984.0]
 
-    # Standing on Mar (pos 0), header_box reports allocated height 150.
-    header_box_mar = SimpleNamespace(
-        _list_item=SimpleNamespace(get_position=lambda: 0),
-        get_allocated_height=lambda: 150,
+
+def test_align_target_header_clamps_to_adjustment_range() -> None:
+    """If the math would request a value past the lower or upper bound of
+    the vadjustment, clamp into range so we never sit at a partially-
+    scrolled position the user can't reach with the scroll bar."""
+    from yaga.gallery_grid import GalleryGrid
+
+    target_widget = SimpleNamespace(
+        compute_bounds=lambda _grid: (True, SimpleNamespace(get_y=lambda: 50.0)),
     )
-    GalleryGrid._on_header_nav(fake, header_box_mar, +1)
-    # Down to Feb (pos 3): sum heights for rows[0..2] = 150 + 200 + 200 = 550.
-    # New vadj = 100 + 550 = 650.
-    assert set_values == [650.0]
-
-    # Standing on Feb (pos 3), navigate back up to Mar (pos 0).
-    header_box_feb = SimpleNamespace(
-        _list_item=SimpleNamespace(get_position=lambda: 3),
-        get_allocated_height=lambda: 150,
-    )
-    GalleryGrid._on_header_nav(fake, header_box_feb, -1)
-    # Sum heights for rows[0..2] = 550, direction is up → -550.
-    # New vadj = max(0, 100 - 550) = 0 (clamped to lower bound).
-    assert set_values == [650.0, 0.0]
-
-
-def test_date_header_nav_at_boundary_is_no_op() -> None:
-    from yaga.gallery_grid import GalleryGrid, GalleryRow
-
-    rows = [
-        GalleryRow.header("Mar 2026", year=2026, month=3),
-        GalleryRow.from_tiles([]),
-        GalleryRow.header("Feb 2026", year=2026, month=2),
-    ]
-    store = SimpleNamespace(
-        get_n_items=lambda: len(rows),
-        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
-    )
+    fake_li = SimpleNamespace(get_position=lambda: 0, get_child=lambda: target_widget)
     set_values: list[float] = []
     vadj = SimpleNamespace(
-        get_value=lambda: 100.0, get_upper=lambda: 1000.0,
-        get_page_size=lambda: 400.0,
+        get_value=lambda: 500.0, get_upper=lambda: 1000.0, get_page_size=lambda: 400.0,
         set_value=lambda v: set_values.append(v),
     )
     fake = SimpleNamespace(
-        row_store=store,
-        scroller=SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj),
-        grid_view=SimpleNamespace(), _cols=4,
+        _bound_list_items=[fake_li],
+        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
+        grid_view=SimpleNamespace(),
     )
+    fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
+    fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    # tgt_y(50) - target_screen_y(500) = -450, which would be a negative
+    # vadjustment value — clamp to 0.
+    GalleryGrid._align_target_header(fake, 0, 500.0)
+    assert set_values == [0.0]
 
-    # At first header (pos 0), up arrow finds no previous header.
-    box_first = SimpleNamespace(
-        _list_item=SimpleNamespace(get_position=lambda: 0),
-        get_allocated_height=lambda: 150,
-    )
-    GalleryGrid._on_header_nav(fake, box_first, -1)
-    assert set_values == []
 
-    # At last header (pos 2), down arrow finds no next header.
-    box_last = SimpleNamespace(
-        _list_item=SimpleNamespace(get_position=lambda: 2),
-        get_allocated_height=lambda: 150,
+def test_align_target_header_bails_when_target_not_bound() -> None:
+    """If scroll_to didn't manage to bind the target row in time (rare —
+    overscan usually covers it), the alignment idle callback must just
+    bail rather than crashing or moving the scroll position randomly."""
+    from yaga.gallery_grid import GalleryGrid
+    set_values: list[float] = []
+    vadj = SimpleNamespace(
+        get_value=lambda: 100.0, get_upper=lambda: 1000.0, get_page_size=lambda: 400.0,
+        set_value=lambda v: set_values.append(v),
     )
-    GalleryGrid._on_header_nav(fake, box_last, +1)
+    fake = SimpleNamespace(
+        _bound_list_items=[],  # nothing bound at the target pos
+        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
+        grid_view=SimpleNamespace(),
+    )
+    fake._bound_widget_at = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
+    fake._content_y_of    = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    result = GalleryGrid._align_target_header(fake, 42, 250.0)
     assert set_values == []
+    # Returns SOURCE_REMOVE so it's not retried (the idle is one-shot).
+    from gi.repository import GLib
+    assert result == GLib.SOURCE_REMOVE
 
 
 def test_date_header_nav_box_spacing_is_at_least_20px() -> None:
@@ -1486,6 +1495,26 @@ def test_date_header_arrow_buttons_are_subtle() -> None:
     m = re.search(r"opacity:\s*(0?\.\d+|0|1)", block)
     assert m is not None
     assert float(m.group(1)) <= 0.6
+
+
+def test_date_header_arrow_buttons_have_touch_sized_hit_area() -> None:
+    """User asked to make the buttons bigger for touch without growing the
+    icon. Pin a hit area >= 44px (Apple HIG / Material minimum) on the
+    button rule plus an explicit icon size cap on the descendant image so
+    themes can't scale the glyph alongside the button."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    rule_idx = src.index(".date-header-nav {")
+    block = src[rule_idx:src.index("}", rule_idx)]
+    import re
+    min_w = re.search(r"min-width:\s*(\d+)", block)
+    min_h = re.search(r"min-height:\s*(\d+)", block)
+    assert min_w is not None and int(min_w.group(1)) >= 44
+    assert min_h is not None and int(min_h.group(1)) >= 44
+    # The icon glyph stays at the default symbolic size — pinned via a
+    # separate descendant rule so button growth doesn't pull it along.
+    icon_rule_idx = src.index(".date-header-nav image {")
+    icon_block = src[icon_rule_idx:src.index("}", icon_rule_idx)]
+    assert "-gtk-icon-size: 16px" in icon_block
 
 
 def test_gallery_row_header_carries_year_and_month() -> None:
