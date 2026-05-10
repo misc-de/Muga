@@ -342,23 +342,62 @@ class GalleryGrid(Gtk.Overlay):
         """Jump to the next/previous header row from *header_box*'s row.
         direction = -1 for the up arrow (previous header in row order),
         +1 for the down arrow (next header in row order). Sort-direction
-        independent — the arrows always navigate by visible row order."""
+        independent — the arrows always navigate by visible row order.
+
+        Instead of Gtk.ListView.scroll_to (which only guarantees visibility,
+        positioning is implementation-defined), we compute the pixel delta
+        between the two headers' row offsets and add that to the vertical
+        adjustment. The new header therefore lands at the exact screen Y
+        the old one was at, putting the next arrow button right under the
+        cursor for rapid click-through.
+        """
         list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
         if list_item is None:
             return
         current_pos = list_item.get_position()
         n = self.row_store.get_n_items()
         pos = current_pos + direction
+        target_pos: int | None = None
         while 0 <= pos < n:
             row: GalleryRow | None = self.row_store.get_item(pos)
             if row is not None and row.is_header:
-                # NONE: bring the row into view without grabbing focus, so the
-                # user's keyboard focus stays where it was.
-                self.grid_view.scroll_to(pos, Gtk.ListScrollFlags.NONE, None)
-                return
+                target_pos = pos
+                break
             pos += direction
-        # No adjacent header found — silently no-op (top/bottom of the list,
-        # or single-month range).
+        if target_pos is None:
+            # No adjacent header (top/bottom of list, or single-month range).
+            return
+
+        # Reference heights:
+        # - the current header_box is on screen, so its allocated height is
+        #   exactly accurate (catches font scaling / padding tweaks).
+        # - tile rows: cell_size (set in app._update_tile_size's CSS), which
+        #   tracks scroller width / column count; falls back to a sane default
+        #   if the scroller hasn't been measured yet.
+        header_h = header_box.get_allocated_height() or 152
+        scroller_width = self.scroller.get_width() or 800
+        cols = self._cols or 4
+        tile_h = max(32, scroller_width // cols)
+
+        start = min(current_pos, target_pos)
+        end   = max(current_pos, target_pos)
+        delta_y = 0.0
+        for i in range(start, end):
+            row = self.row_store.get_item(i)
+            if row is None:
+                continue
+            delta_y += header_h if row.is_header else tile_h
+        if target_pos < current_pos:
+            delta_y = -delta_y
+
+        vadj = self.scroller.get_vadjustment()
+        new_value = vadj.get_value() + delta_y
+        # Clamp into the adjustment's valid range so we don't request a value
+        # past the end (which the adjustment silently ignores anyway, but
+        # being explicit avoids subtle off-by-one drift on the boundaries).
+        upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
+        new_value = max(0.0, min(new_value, upper))
+        vadj.set_value(new_value)
 
     # ------------------------------------------------------------------
     # Factory callbacks

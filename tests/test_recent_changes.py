@@ -1355,13 +1355,18 @@ def test_nav_swipe_uses_drag_with_explicit_claim_to_steal_from_button_click() ->
     assert "_NAV_SWIPE_CLAIM_PX" in update_body
 
 
-def test_date_header_nav_jumps_to_adjacent_header_in_row_store() -> None:
-    """The up/down arrows on a month header navigate by visible row order
-    (sort-direction independent): up = previous header in row store, down =
-    next header. Skips intervening tile rows, no-ops at the boundaries."""
+def test_date_header_nav_offsets_vadjustment_by_inter_header_distance() -> None:
+    """The up/down arrows compute the pixel distance between the current
+    header and the target header, then add that delta to the scrolled
+    window's vadjustment. This puts the target header at the exact screen
+    Y the current one was at — so the arrow lands right under the cursor
+    and rapid click-through works."""
     from yaga.gallery_grid import GalleryGrid, GalleryRow
 
-    # Build a row_store with a realistic mix of headers and tile rows.
+    # Layout: [Header Mar][Tile][Tile][Header Feb][Tile][Header Jan]
+    # With header_h=150, tile_h=200:
+    # Mar header starts at y=0, Feb at y=150 + 200 + 200 = 550,
+    # Jan at y=550 + 150 + 200 = 900.
     rows = [
         GalleryRow.header("Mar 2026", year=2026, month=3),
         GalleryRow.from_tiles([]),
@@ -1374,28 +1379,85 @@ def test_date_header_nav_jumps_to_adjacent_header_in_row_store() -> None:
         get_n_items=lambda: len(rows),
         get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
     )
-    scroll_calls: list[int] = []
-    grid_view = SimpleNamespace(scroll_to=lambda pos, *_a, **_kw: scroll_calls.append(pos))
-    fake = SimpleNamespace(row_store=store, grid_view=grid_view)
 
-    # Standing on the Mar 2026 header (pos 0); down arrow → next header at 3.
-    header_box_mar = SimpleNamespace(_list_item=SimpleNamespace(get_position=lambda: 0))
+    set_values: list[float] = []
+    vadj = SimpleNamespace(
+        get_value=lambda: 100.0,
+        get_upper=lambda: 10000.0,
+        get_page_size=lambda: 600.0,
+        set_value=lambda v: set_values.append(v),
+    )
+    scroller = SimpleNamespace(
+        get_width=lambda: 800,
+        get_vadjustment=lambda: vadj,
+    )
+    fake = SimpleNamespace(
+        row_store=store,
+        scroller=scroller,
+        grid_view=SimpleNamespace(),
+        _cols=4,  # 800/4 = 200 → tile_h = 200
+    )
+
+    # Standing on Mar (pos 0), header_box reports allocated height 150.
+    header_box_mar = SimpleNamespace(
+        _list_item=SimpleNamespace(get_position=lambda: 0),
+        get_allocated_height=lambda: 150,
+    )
     GalleryGrid._on_header_nav(fake, header_box_mar, +1)
-    assert scroll_calls == [3]
+    # Down to Feb (pos 3): sum heights for rows[0..2] = 150 + 200 + 200 = 550.
+    # New vadj = 100 + 550 = 650.
+    assert set_values == [650.0]
 
-    # Standing on Feb 2026 (pos 3); up arrow → Mar 2026 at 0.
-    header_box_feb = SimpleNamespace(_list_item=SimpleNamespace(get_position=lambda: 3))
+    # Standing on Feb (pos 3), navigate back up to Mar (pos 0).
+    header_box_feb = SimpleNamespace(
+        _list_item=SimpleNamespace(get_position=lambda: 3),
+        get_allocated_height=lambda: 150,
+    )
     GalleryGrid._on_header_nav(fake, header_box_feb, -1)
-    assert scroll_calls == [3, 0]
+    # Sum heights for rows[0..2] = 550, direction is up → -550.
+    # New vadj = max(0, 100 - 550) = 0 (clamped to lower bound).
+    assert set_values == [650.0, 0.0]
 
-    # At first header, up arrow is a no-op (no previous header).
-    GalleryGrid._on_header_nav(fake, header_box_mar, -1)
-    assert scroll_calls == [3, 0]
 
-    # At last header, down arrow is a no-op.
-    header_box_jan = SimpleNamespace(_list_item=SimpleNamespace(get_position=lambda: 5))
-    GalleryGrid._on_header_nav(fake, header_box_jan, +1)
-    assert scroll_calls == [3, 0]
+def test_date_header_nav_at_boundary_is_no_op() -> None:
+    from yaga.gallery_grid import GalleryGrid, GalleryRow
+
+    rows = [
+        GalleryRow.header("Mar 2026", year=2026, month=3),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Feb 2026", year=2026, month=2),
+    ]
+    store = SimpleNamespace(
+        get_n_items=lambda: len(rows),
+        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
+    )
+    set_values: list[float] = []
+    vadj = SimpleNamespace(
+        get_value=lambda: 100.0, get_upper=lambda: 1000.0,
+        get_page_size=lambda: 400.0,
+        set_value=lambda v: set_values.append(v),
+    )
+    fake = SimpleNamespace(
+        row_store=store,
+        scroller=SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj),
+        grid_view=SimpleNamespace(), _cols=4,
+    )
+
+    # At first header (pos 0), up arrow finds no previous header.
+    box_first = SimpleNamespace(
+        _list_item=SimpleNamespace(get_position=lambda: 0),
+        get_allocated_height=lambda: 150,
+    )
+    GalleryGrid._on_header_nav(fake, box_first, -1)
+    assert set_values == []
+
+    # At last header (pos 2), down arrow finds no next header.
+    box_last = SimpleNamespace(
+        _list_item=SimpleNamespace(get_position=lambda: 2),
+        get_allocated_height=lambda: 150,
+    )
+    GalleryGrid._on_header_nav(fake, box_last, +1)
+    assert set_values == []
 
 
 def test_date_header_nav_box_spacing_is_at_least_20px() -> None:
