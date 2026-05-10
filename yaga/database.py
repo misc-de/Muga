@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 import time
@@ -7,6 +8,8 @@ from pathlib import Path
 
 from .config import DB_PATH
 from .models import MediaItem
+
+LOGGER = logging.getLogger(__name__)
 
 
 SCHEMA_V1 = """
@@ -57,6 +60,29 @@ ALTER TABLE media ADD COLUMN exif_data TEXT DEFAULT NULL;
 PRAGMA user_version = 2;
 """
 
+# v3 introduces an FTS5 trigram index over `media.name`. Trigram preserves
+# the substring-match UX users expect ("ach" still finds "Bachstrasse"),
+# while turning a full-table LIKE scan into an index probe — the dominant
+# cost on libraries with >10k items, masked today by the search debounce.
+# Stored as an external-content shadow table; AFTER triggers keep it in
+# sync with media without code-side bookkeeping.
+_FTS_CREATE_SQL = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5("
+    "name, content='media', content_rowid='id', tokenize='trigram')"
+)
+_FTS_TRIGGERS_SQL = """
+CREATE TRIGGER IF NOT EXISTS media_ai AFTER INSERT ON media BEGIN
+    INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
+END;
+CREATE TRIGGER IF NOT EXISTS media_ad AFTER DELETE ON media BEGIN
+    INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
+END;
+CREATE TRIGGER IF NOT EXISTS media_au AFTER UPDATE ON media BEGIN
+    INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
+    INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
+END;
+"""
+
 
 class Database:
     def __init__(self, path: Path = DB_PATH) -> None:
@@ -93,6 +119,33 @@ class Database:
             except sqlite3.OperationalError:
                 # Column already exists
                 pass
+        # FTS5 trigram index for substring search on `name`. Behind a
+        # try/except because older SQLite builds (or builds compiled
+        # without FTS5/trigram) would otherwise refuse to open the DB.
+        # Search falls back to LIKE when the table isn't there.
+        self._has_fts = False
+        try:
+            self.conn.execute(_FTS_CREATE_SQL)
+            if version < 3:
+                # SQLite-recommended way to (re)populate an external-
+                # content FTS5 index from scratch. An equivalent
+                # `INSERT … SELECT … WHERE id NOT IN (SELECT rowid
+                # FROM media_fts)` looked clever but the subquery
+                # against the empty FTS5 table during the same
+                # statement actually corrupts the trigram index — MATCH
+                # silently returns nothing afterward, even though the
+                # rows are visible via `SELECT rowid, name FROM
+                # media_fts`. The 'rebuild' command is the documented
+                # initial-population path and idempotent on its own.
+                self.conn.execute("INSERT INTO media_fts(media_fts) VALUES('rebuild')")
+                self.conn.executescript(_FTS_TRIGGERS_SQL)
+                self.conn.execute("PRAGMA user_version = 3")
+                self.conn.commit()
+            self._has_fts = True
+        except sqlite3.OperationalError as exc:
+            LOGGER.warning(
+                "FTS5 trigram index unavailable; search uses LIKE fallback: %s", exc,
+            )
 
     def upsert_media(self, *, path: Path, category: str, media_type: str, folder: str, thumb_path: str | None) -> None:
         stat = path.stat()
@@ -282,8 +335,7 @@ class Database:
         "dezember": 12, "december": 12, "dec": 12, "dez": 12,
     }
 
-    @staticmethod
-    def _build_search_clause(query: str) -> tuple[str, list]:
+    def _build_search_clause(self, query: str) -> tuple[str, list]:
         """Build a SQL OR-clause that matches the query against name, exif
         text, year, year-month or month-name. Returns ('1=1', []) for an
         empty query so the caller can drop it back into a WHERE."""
@@ -295,9 +347,25 @@ class Database:
         clauses: list[str] = []
         args: list = []
         like = f"%{q}%"
-        # Filename
-        clauses.append("name LIKE ? COLLATE NOCASE")
-        args.append(like)
+        # Filename. With the FTS5 trigram index this is an index probe
+        # instead of a full-table LIKE scan; fall back to LIKE when the
+        # index isn't there or the query is too short for trigram (it
+        # tokenises as 3-grams and silently returns no rows for 1-2 char
+        # queries — substring LIKE preserves the user's mental model in
+        # those edge cases).
+        if getattr(self, "_has_fts", False) and len(q) >= 3:
+            # Wrap in double quotes so FTS5 special syntax (`OR`, `NEAR`,
+            # parentheses, …) inside a filename can't be reinterpreted as
+            # a query operator. Embedded double-quotes get the FTS5-spec
+            # `""` escape.
+            phrase = '"' + q.replace('"', '""') + '"'
+            clauses.append(
+                "id IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?)"
+            )
+            args.append(phrase)
+        else:
+            clauses.append("name LIKE ? COLLATE NOCASE")
+            args.append(like)
         # EXIF blob — LIKE on a JSON text column is a full-table scan; only
         # bother when the user has typed enough that a hit is realistic.
         if len(q) >= 3:
@@ -439,7 +507,11 @@ class Database:
                 remainder = folder[len(parent_prefix):]
             else:
                 continue
-            if not remainder or "/" not in remainder and folder == parent:
+            # Skip empty remainders (stray trailing slashes). The previous
+            # `"/" not in remainder and folder == parent` clause was dead
+            # after the startswith check — parent_prefix is parent + "/",
+            # so a remainder ever existing implies folder != parent.
+            if not remainder:
                 continue
             child_name = remainder.split("/", 1)[0]
             child_path = child_name if parent in (None, "/") else f"{parent}/{child_name}"

@@ -106,6 +106,16 @@ class GalleryGrid(Gtk.Overlay):
         # button uses it to ignore the release that follows a long-press.
         self._last_long_press_at = 0.0
 
+        # Per-bind stat cache: Path.exists() on every thumbnail fires once
+        # per visible tile and dominates scroll latency on slow disks (a
+        # 6×20 viewport = 120 syscalls per layout pass). Cache for a short
+        # TTL — long enough to coalesce a single layout/scroll burst, short
+        # enough that newly-arrived thumbs and evictions are picked up by
+        # the next bind without explicit invalidation.
+        self._exists_cache: dict[str, tuple[float, bool]] = {}
+        self._EXISTS_TTL = 5.0
+        self._EXISTS_CACHE_MAX = 4096
+
         # Currently-bound list items, tracked so refresh_selection_state can
         # reach into the live widgets and re-run _bind_tile on each. Going
         # through Gio.ListStore.splice + items-changed proved unreliable —
@@ -200,17 +210,50 @@ class GalleryGrid(Gtk.Overlay):
         return self.scroller.get_vadjustment()
 
     def update_item_thumb(self, path: str, thumb_path: str) -> bool:
+        # A fresh thumb just landed on disk — drop any stale "doesn't
+        # exist" cache entry so the next bind sees the file.
+        self._exists_cache.pop(thumb_path, None)
+        # Hot path: NC sync of a folder fans out as a thumb-arrival storm.
+        # The previous version spliced the entire GalleryRow on every
+        # arrival, which forced ListView to re-bind every tile in that
+        # row's widget — O(cols) work per arrival times N arrivals.
+        # Instead we mutate the MediaRow's frozen MediaItem in place
+        # (replacing it with a new instance — MediaRow is mutable) and
+        # only re-bind the affected list_item's widget. Because
+        # row_store and _bound_list_items reference the same MediaRow
+        # objects, the mutation is visible to a later re-bind too if the
+        # tile scrolls out and back.
+        for list_item in self._bound_list_items:
+            gallery_row = list_item.get_item()
+            if gallery_row is None or gallery_row.is_header:
+                continue
+            for tile in gallery_row.tiles:
+                if (
+                    not tile.is_folder
+                    and tile.media_item is not None
+                    and tile.media_item.path == path
+                ):
+                    tile.media_item = dataclasses.replace(
+                        tile.media_item, thumb_path=thumb_path,
+                    )
+                    self._apply_binding(list_item)
+                    return True
+        # Not currently bound but still in the model — mutate so the
+        # next bind picks up the new thumb_path.
         n = self.row_store.get_n_items()
         for pos in range(n):
             gallery_row = self.row_store.get_item(pos)
             if gallery_row.is_header:
                 continue
-            for j, row in enumerate(gallery_row.tiles):
-                if not row.is_folder and row.media_item and row.media_item.path == path:
-                    new_tiles = gallery_row.tiles[:]
-                    updated = dataclasses.replace(row.media_item, thumb_path=thumb_path)
-                    new_tiles[j] = MediaRow.from_media(updated)
-                    self.row_store.splice(pos, 1, [GalleryRow.from_tiles(new_tiles)])
+            for tile in gallery_row.tiles:
+                if (
+                    not tile.is_folder
+                    and tile.media_item is not None
+                    and tile.media_item.path == path
+                ):
+                    tile.media_item = dataclasses.replace(
+                        tile.media_item, thumb_path=thumb_path,
+                    )
                     return True
         return False
 
@@ -233,6 +276,25 @@ class GalleryGrid(Gtk.Overlay):
                     return True
         return False
 
+    def _thumb_exists(self, path: str) -> bool:
+        """Cached Path.exists() for thumbnail paths, scoped to the visible
+        bind hot path. Falls back to a real stat after TTL expiry."""
+        if not path:
+            return False
+        now = time.monotonic()
+        cached = self._exists_cache.get(path)
+        if cached is not None and now - cached[0] < self._EXISTS_TTL:
+            return cached[1]
+        ok = Path(path).exists()
+        if len(self._exists_cache) >= self._EXISTS_CACHE_MAX:
+            # Crude bulk eviction — drop half the entries to avoid an O(n²)
+            # spiral on long scroll sessions. Keeps recency loosely via
+            # insertion order (Python 3.7+ dict ordering).
+            for k in list(self._exists_cache)[: self._EXISTS_CACHE_MAX // 2]:
+                self._exists_cache.pop(k, None)
+        self._exists_cache[path] = (now, ok)
+        return ok
+
     def refresh_selection_state(self) -> None:
         """Re-render every currently-bound list item so checkbox visibility
         and per-tile check state catch up with the owner's current
@@ -245,6 +307,7 @@ class GalleryGrid(Gtk.Overlay):
             self._apply_binding(list_item)
 
     def update_folder_thumb(self, folder_path: str, thumb_path: str) -> bool:
+        self._exists_cache.pop(thumb_path, None)
         n = self.row_store.get_n_items()
         for pos in range(n):
             gallery_row = self.row_store.get_item(pos)
@@ -472,7 +535,7 @@ class GalleryGrid(Gtk.Overlay):
         check: Gtk.Image = button._check
 
         if row.is_folder:
-            valid_thumbs = [t for t in row.folder_thumbs if t and Path(t).exists()]
+            valid_thumbs = [t for t in row.folder_thumbs if self._thumb_exists(t)]
             if len(valid_thumbs) >= 2:
                 single_pic.set_visible(False)
                 pic_grid.set_visible(True)
@@ -509,7 +572,7 @@ class GalleryGrid(Gtk.Overlay):
         assert item is not None
         single_pic.set_visible(True)
         pic_grid.set_visible(False)
-        if item.thumb_path and Path(item.thumb_path).exists():
+        if item.thumb_path and self._thumb_exists(item.thumb_path):
             single_pic.set_filename(item.thumb_path)
         elif is_nc_path(item.path):
             single_pic.set_paintable(

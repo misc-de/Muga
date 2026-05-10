@@ -1189,6 +1189,22 @@ class EditorView(Gtk.Box):
     # Undo/Redo
     # ------------------------------------------------------------------
 
+    def set_history_changed_callback(self, callback) -> None:
+        """Register a callback fired whenever the undo/redo stacks change.
+        The host (ViewerWindow) uses this to keep its toolbar buttons'
+        sensitivity in sync without polling."""
+        self._history_changed_cb = callback
+        # Fire once so the host picks up the initial (empty) state.
+        callback()
+
+    def _emit_history_changed(self) -> None:
+        cb = getattr(self, "_history_changed_cb", None)
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                LOGGER.debug("history-changed callback raised", exc_info=True)
+
     def _snapshot_state(self) -> None:
         """Save current working image to undo stack (call after each edit)."""
         # Clear redo stack when new edit is made
@@ -1198,6 +1214,7 @@ class EditorView(Gtk.Box):
         # Limit history size to prevent memory bloat
         if len(self._history_undo) > self._history_max_steps:
             self._history_undo.pop(0)
+        self._emit_history_changed()
 
     def can_undo(self) -> bool:
         """Check if undo is available."""
@@ -1217,6 +1234,7 @@ class EditorView(Gtk.Box):
         self._working = self._history_undo.pop()
         # Trigger preview update
         self._schedule_update()
+        self._emit_history_changed()
 
     def redo(self) -> None:
         """Redo last undone edit."""
@@ -1228,6 +1246,7 @@ class EditorView(Gtk.Box):
         self._working = self._history_redo.pop()
         # Trigger preview update
         self._schedule_update()
+        self._emit_history_changed()
 
     # ------------------------------------------------------------------
     # Save

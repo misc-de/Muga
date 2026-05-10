@@ -155,6 +155,23 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.cancel_edit_button.set_visible(False)
         header.pack_start(self.cancel_edit_button)
 
+        # Edit-mode-only undo/redo. Sensitivity is driven by the editor's
+        # history-changed callback (see _enter_edit_mode), so the buttons
+        # grey out the moment the corresponding stack empties.
+        self.undo_button = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
+        self.undo_button.set_tooltip_text(parent._("Undo"))
+        self.undo_button.connect("clicked", self._on_editor_undo)
+        self.undo_button.set_visible(False)
+        self.undo_button.set_sensitive(False)
+        header.pack_start(self.undo_button)
+
+        self.redo_button = Gtk.Button.new_from_icon_name("edit-redo-symbolic")
+        self.redo_button.set_tooltip_text(parent._("Redo"))
+        self.redo_button.connect("clicked", self._on_editor_redo)
+        self.redo_button.set_visible(False)
+        self.redo_button.set_sensitive(False)
+        header.pack_start(self.redo_button)
+
         self.save_edit_button = Gtk.Button.new_with_label(parent._("Save"))
         self.save_edit_button.add_css_class("suggested-action")
         self.save_edit_button.connect("clicked", self._save_edit)
@@ -800,10 +817,24 @@ class ViewerWindow(Adw.ApplicationWindow):
     def next(self) -> None:
         self._check_rotation_before_action(self._do_next)
 
-    def _on_key(self, _controller: Gtk.EventControllerKey, keyval: int, _keycode: int, _state: Gdk.ModifierType) -> bool:
+    def _on_key(self, _controller: Gtk.EventControllerKey, keyval: int, _keycode: int, state: Gdk.ModifierType) -> bool:
         if self._editor is not None:
             if keyval == Gdk.KEY_Escape:
                 self._exit_edit_mode()
+                return True
+            # Ctrl+Z = undo, Ctrl+Shift+Z / Ctrl+Y = redo. Match the
+            # GIMP/Inkscape convention rather than the OS default so users
+            # don't get a different shortcut depending on the desktop.
+            ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+            shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            if ctrl and keyval in (Gdk.KEY_z, Gdk.KEY_Z):
+                if shift:
+                    self._on_editor_redo()
+                else:
+                    self._on_editor_undo()
+                return True
+            if ctrl and keyval in (Gdk.KEY_y, Gdk.KEY_Y):
+                self._on_editor_redo()
                 return True
             return False
         if keyval in (Gdk.KEY_Left, Gdk.KEY_Up):
@@ -969,6 +1000,12 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.share_button.set_visible(False)
         self.cancel_edit_button.set_visible(True)
         self.save_edit_button.set_visible(True)
+        self.undo_button.set_visible(True)
+        self.redo_button.set_visible(True)
+        # Initial sensitivity reflects an empty history; the editor's
+        # callback (registered below) keeps it in sync after each edit.
+        self.undo_button.set_sensitive(False)
+        self.redo_button.set_sensitive(False)
         # In landscape, fold the filename + date into the title bar so the
         # editor gets every available pixel. In portrait the title bar would
         # truncate aggressively, so we instead float the filename at the *top*
@@ -1010,8 +1047,27 @@ class ViewerWindow(Adw.ApplicationWindow):
             self._set_view_gestures_enabled(True)
             self.show_item()
             return
+        # Drive the toolbar buttons' sensitivity from editor history events.
+        # The callback fires once on registration so initial state is correct
+        # without a follow-up call here.
+        self._editor.set_history_changed_callback(self._sync_editor_history_buttons)
         self.stack.add_child(self._editor)
         self.stack.set_visible_child(self._editor)
+
+    def _sync_editor_history_buttons(self) -> None:
+        editor = self._editor
+        if editor is None:
+            return
+        self.undo_button.set_sensitive(editor.can_undo())
+        self.redo_button.set_sensitive(editor.can_redo())
+
+    def _on_editor_undo(self, _btn: Gtk.Button = None) -> None:
+        if self._editor is not None:
+            self._editor.undo()
+
+    def _on_editor_redo(self, _btn: Gtk.Button = None) -> None:
+        if self._editor is not None:
+            self._editor.redo()
 
     def _exit_edit_mode(self, _button=None) -> None:
         self._editor = None
@@ -1021,6 +1077,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.close_button.set_visible(True)
         self.cancel_edit_button.set_visible(False)
         self.save_edit_button.set_visible(False)
+        self.undo_button.set_visible(False)
+        self.redo_button.set_visible(False)
         # Restore the filename pill back to its default bottom position; the
         # editor may have moved it to the top in portrait mode.
         self.filename_revealer.set_valign(Gtk.Align.END)
@@ -1146,23 +1204,29 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.index = min(self.index, len(self.items) - 1)
         self.show_item()
 
-    def _get_cached_exif(self, item: MediaItem) -> dict[str, str]:
-        """Get EXIF data from cache (DB) or parse and cache if missing."""
+    def _get_cached_exif_only(self, item: MediaItem) -> dict[str, str] | None:
+        """Return cached EXIF from the DB without ever parsing the file.
+        None means cache miss — caller decides whether to parse off-thread."""
         import json
-        # Try to get cached EXIF from database
         cached_json = self.parent_window.database.get_exif_data(item.path, item.category)
-        if cached_json:
-            try:
-                return json.loads(cached_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        
-        # If not cached or corrupted, parse and cache
+        if not cached_json:
+            return None
+        try:
+            return json.loads(cached_json)
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    def _parse_and_cache_exif(self, item: MediaItem) -> dict[str, str]:
+        """Parse EXIF off the main loop and persist to the DB cache.
+        Always called from a background thread."""
+        import json
         exif = _extract_exif(item.path)
         if exif:
             try:
                 exif_json = json.dumps(exif)
-                self.parent_window.database.set_exif_data(item.path, exif_json, item.category)
+                self.parent_window.database.set_exif_data(
+                    item.path, exif_json, item.category,
+                )
                 self.parent_window.database.commit()
             except Exception:
                 # If caching fails, still return the parsed EXIF
@@ -1173,20 +1237,38 @@ class ViewerWindow(Adw.ApplicationWindow):
         item = self.items[self.index]
         _ = self.parent_window._
 
+        # Cheap fields go in the popover synchronously so the user sees
+        # something immediately; dimensions + EXIF can take hundreds of ms
+        # on a 40 MP RAW/HEIC and used to freeze the main loop. Slot them
+        # in via idle_add when the worker thread finishes.
         rows: list[tuple[str, str]] = [
             (_("Name"), item.name),
             (_("Folder"), item.folder),
             (_("Size"), _fmt_size(item.size)),
             (_("Modified"), _fmt_date(item.mtime)),
         ]
+
+        cached_exif: dict[str, str] | None = None
         if not item.is_video:
-            dims = _image_dimensions(item.path)
-            if dims:
-                rows.append((_("Dimensions"), dims))
-            exif = self._get_cached_exif(item)
-            for key in ("Camera", "GPS"):
-                if key in exif:
-                    rows.append((_(key), exif[key]))
+            cached_exif = self._get_cached_exif_only(item)
+
+        loading_label = _("Loading…")
+        # Track which rows are placeholders so the worker can update them
+        # in place without rebuilding the grid.
+        placeholders: dict[str, Gtk.Label] = {}
+
+        def add_row(key: str, value: str) -> Gtk.Label:
+            i = grid_state["next_row"]
+            grid_state["next_row"] += 1
+            key_lbl = Gtk.Label(label=key, xalign=1.0)
+            key_lbl.add_css_class("dim-label")
+            val_lbl = Gtk.Label(label=value, xalign=0.0)
+            val_lbl.set_selectable(i != 0)
+            val_lbl.set_wrap(True)
+            val_lbl.set_max_width_chars(32)
+            grid.attach(key_lbl, 0, i, 1, 1)
+            grid.attach(val_lbl, 1, i, 1, 1)
+            return val_lbl
 
         grid = Gtk.Grid()
         grid.set_column_spacing(20)
@@ -1195,21 +1277,67 @@ class ViewerWindow(Adw.ApplicationWindow):
         grid.set_margin_bottom(14)
         grid.set_margin_start(16)
         grid.set_margin_end(16)
-        for i, (key, value) in enumerate(rows):
-            key_lbl = Gtk.Label(label=key, xalign=1.0)
-            key_lbl.add_css_class("dim-label")
-            val_lbl = Gtk.Label(label=value, xalign=0.0)
-            is_name = (i == 0)
-            val_lbl.set_selectable(not is_name)
-            val_lbl.set_wrap(True)
-            val_lbl.set_max_width_chars(32)
-            grid.attach(key_lbl, 0, i, 1, 1)
-            grid.attach(val_lbl, 1, i, 1, 1)
+        grid_state = {"next_row": 0}
+
+        for key, value in rows:
+            add_row(key, value)
+
+        if not item.is_video:
+            placeholders["Dimensions"] = add_row(_("Dimensions"), loading_label)
+            if cached_exif is not None:
+                # Cached: drop the placeholders and inline the values.
+                if "Camera" in cached_exif:
+                    add_row(_("Camera"), cached_exif["Camera"])
+                if "GPS" in cached_exif:
+                    add_row(_("GPS"), cached_exif["GPS"])
+            else:
+                # Reserve placeholders for the worker to fill in.
+                placeholders["Camera"] = add_row(_("Camera"), loading_label)
+                placeholders["GPS"] = add_row(_("GPS"), loading_label)
 
         popover = Gtk.Popover()
         popover.set_parent(self.info_button)
         popover.set_child(grid)
         popover.popup()
+
+        if item.is_video or not placeholders:
+            return
+
+        # Snapshot what the worker needs to know — popover may close (and
+        # placeholders disappear) before the result lands.
+        target_path = item.path
+        item_for_parse = item
+        skip_exif = cached_exif is not None
+
+        def _worker() -> None:
+            try:
+                dims = _image_dimensions(target_path)
+            except Exception:
+                LOGGER.debug("dimension probe failed for %s", target_path, exc_info=True)
+                dims = None
+            exif: dict[str, str] = {}
+            if not skip_exif:
+                try:
+                    exif = self._parse_and_cache_exif(item_for_parse)
+                except Exception:
+                    LOGGER.debug("exif parse failed for %s", target_path, exc_info=True)
+                    exif = {}
+            GLib.idle_add(_apply_result, dims, exif)
+
+        def _apply_result(dims, exif) -> bool:
+            # If the popover was already dismissed and the labels reparented,
+            # the set_label calls are no-ops on detached widgets — safe.
+            dim_label = placeholders.get("Dimensions")
+            if dim_label is not None:
+                dim_label.set_label(dims if dims else "—")
+            for key in ("Camera", "GPS"):
+                lbl = placeholders.get(key)
+                if lbl is None:
+                    continue
+                lbl.set_label(exif.get(key, "—"))
+            return GLib.SOURCE_REMOVE
+
+        threading.Thread(target=_worker, daemon=True, name="info-exif").start()
 
     def _toggle_slideshow(self, _button: Gtk.Button) -> None:
         """Toggle slideshow mode on/off."""
@@ -1244,17 +1372,25 @@ class ViewerWindow(Adw.ApplicationWindow):
         )
 
     def _on_slideshow_tick(self) -> bool:
-        """Called on slideshow timer tick. Advance to next image or loop."""
-        if not self._slideshow_active:
+        """Called on slideshow timer tick. Advance to the next *image*,
+        skipping video clips so the slideshow doesn't grind to a halt on a
+        long video. Stops the slideshow gracefully if every remaining item
+        is a video (nothing to play)."""
+        if not self._slideshow_active or not self.items:
             return GLib.SOURCE_REMOVE
-        
-        # If current item is video, skip it (show next static image)
-        if self._current_is_video:
-            self.index = (self.index + 1) % len(self.items)
+        n = len(self.items)
+        new_index = (self.index + 1) % n
+        for _ in range(n):
+            if not self.items[new_index].is_video:
+                break
+            new_index = (new_index + 1) % n
         else:
-            # Advance to next
-            self.index = (self.index + 1) % len(self.items)
-        
+            # All-video gallery — stop instead of looping forever on a
+            # placeholder. The user can re-trigger when they navigate to a
+            # mixed list.
+            self._stop_slideshow()
+            return GLib.SOURCE_REMOVE
+        self.index = new_index
         self.show_item()
         self._schedule_next_slide()
         return GLib.SOURCE_REMOVE

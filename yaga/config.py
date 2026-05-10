@@ -184,11 +184,33 @@ class Settings:
                 return True
         except Exception:
             pass
-        # Fallback: plain file with restricted permissions
+        # Fallback: plain file with restricted permissions.
+        # mkdir(mode=…) only applies on first create; for pre-existing 0755
+        # dirs we follow up with an explicit chmod so the secret's parent
+        # directory matches the secret's own 0600 file mode.
+        # Atomic write (tmp + os.replace) keeps a crash mid-write from
+        # truncating an existing password file to zero bytes.
         try:
-            self._CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
-            self._CRED_FILE.write_text(password, encoding="utf-8")
-            self._CRED_FILE.chmod(0o600)
+            parent = self._CRED_FILE.parent
+            parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                parent.chmod(0o700)
+            except OSError:
+                pass
+            tmp = self._CRED_FILE.with_suffix(".tmp")
+            try:
+                tmp.write_text(password, encoding="utf-8")
+                tmp.chmod(0o600)
+                os.replace(tmp, self._CRED_FILE)
+            finally:
+                # If os.replace already moved tmp into place this is a
+                # no-op; if anything else failed we don't want a partial
+                # password sitting around in cleartext.
+                if tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
             return True
         except Exception:
             return False

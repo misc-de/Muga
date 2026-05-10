@@ -62,18 +62,26 @@ def _enable_thread_dump_signal() -> None:
 
 
 def _cleanup_abandoned_temp_files() -> None:
-    """Clean up leftover _edit_*.jpg files from crashes or interrupted edits."""
+    """Clean up leftover _edit_*.* files from interrupted Nextcloud uploads.
+
+    Scoped to the NC cache directory only. Earlier versions rglob'd
+    ~/Pictures, ~/Photos and ~/Downloads, which would silently delete the
+    user's own permanent edit-saves (the in-app editor's "Save" path
+    writes <stem>_edit_<i>.<ext> next to the original on local items —
+    those are intentional user files, not temp artifacts). The genuine
+    temp-file shape only exists for NC uploads under CACHE_DIR/nextcloud,
+    where evict_cache also eventually reaps them by size budget."""
     try:
-        home = Path.home()
-        # Scan common photo directories for orphaned temp files
-        for pattern_dir in [home / "Pictures", home / "Photos", home / "Downloads"]:
-            if pattern_dir.exists():
-                for temp_file in pattern_dir.rglob("*_edit_*.jpg"):
-                    try:
-                        temp_file.unlink(missing_ok=True)
-                        LOGGER.debug("Cleaned up temp file: %s", temp_file)
-                    except OSError as e:
-                        LOGGER.debug("Could not remove temp file %s: %s", temp_file, e)
+        from .config import CACHE_DIR
+        nc_cache = CACHE_DIR / "nextcloud"
+        if not nc_cache.exists():
+            return
+        for temp_file in nc_cache.glob("*_edit_*.*"):
+            try:
+                temp_file.unlink(missing_ok=True)
+                LOGGER.debug("Cleaned up NC upload temp file: %s", temp_file)
+            except OSError as e:
+                LOGGER.debug("Could not remove temp file %s: %s", temp_file, e)
     except Exception as e:
         LOGGER.debug("Temp file cleanup failed: %s", e)
 
@@ -999,7 +1007,13 @@ class GalleryWindow(Adw.ApplicationWindow):
         if not item_folder.startswith(parent_prefix):
             return None
         remainder = item_folder[len(parent_prefix):]
-        if not remainder or "/" not in remainder and item_folder == parent:
+        # Empty remainder means item_folder == parent_prefix (a stray
+        # trailing slash); the item lives directly in `parent`, no child
+        # folder to surface. The previous version chained an "or `"/" not
+        # in remainder and item_folder == parent` clause whose second
+        # half was unreachable after the startswith check above (parent
+        # plus a slash can't equal parent). Dropped for clarity.
+        if not remainder:
             return None
         return f"{parent}/{remainder.split('/', 1)[0]}"
 
@@ -1288,11 +1302,39 @@ class GalleryWindow(Adw.ApplicationWindow):
             LOGGER.info("Evicted %.1f MB from disk cache", freed / 1024 / 1024)
         return freed
 
+    # Coalesces multiple back-to-back scan-completion calls into a single
+    # eviction pass — without these guards a user flipping fast between
+    # folders kicks off N parallel rglob walks of THUMB_DIR + _NC_CACHE.
+    _EVICT_MIN_INTERVAL_SEC = 60.0
+
     def evict_cache_async(self) -> None:
-        """Run eviction in a daemon thread so the main loop never blocks on it."""
+        """Run eviction in a daemon thread so the main loop never blocks on it.
+        Coalesces re-entry: while a worker is in flight, or a worker has
+        just finished within the throttle window, the call is dropped."""
         if getattr(self.settings, "cache_max_mb", 0) <= 0:
             return
-        threading.Thread(target=self.evict_cache, daemon=True).start()
+        # Lazily attach the re-entry guard so existing instances in tests
+        # that bypass __init__ keep working.
+        if not hasattr(self, "_evict_lock"):
+            self._evict_lock = threading.Lock()
+            self._evict_in_flight = False
+            self._evict_last_finished_at = 0.0
+        with self._evict_lock:
+            if self._evict_in_flight:
+                return
+            now = time.monotonic()
+            if now - self._evict_last_finished_at < self._EVICT_MIN_INTERVAL_SEC:
+                return
+            self._evict_in_flight = True
+        threading.Thread(target=self._evict_cache_worker, daemon=True).start()
+
+    def _evict_cache_worker(self) -> None:
+        try:
+            self.evict_cache()
+        finally:
+            with self._evict_lock:
+                self._evict_in_flight = False
+                self._evict_last_finished_at = time.monotonic()
 
     def clear_cache(self) -> None:
         """Wipe the entire on-disk cache (thumbnails + downloaded NC files).
@@ -1430,7 +1472,13 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _open_item(self, _button, item: MediaItem) -> None:
         if item.is_video and self.settings.external_video_player.strip():
-            subprocess.Popen(shlex.split(self.settings.external_video_player) + [item.path])
+            # `--` is an end-of-options marker so a hypothetical filename
+            # starting with '-' (we currently never emit one, but cheap
+            # defense) can't be reinterpreted as an option by the player.
+            # Matches the convention used in _open_externally below.
+            subprocess.Popen(
+                shlex.split(self.settings.external_video_player) + ["--", item.path],
+            )
             return
         items = self.current_items or self.database.list_media(
             item.category, self.settings.get_sort_mode(item.category, self.current_folder), self.current_folder
@@ -1567,15 +1615,18 @@ class GalleryWindow(Adw.ApplicationWindow):
 
         def _worker() -> None:
             errors: list[tuple[str, Exception]] = []
-            for path in paths:
-                try:
-                    Gio.File.new_for_path(path).trash(None)
-                    self.database.delete_path(path, category)
-                except GLib.Error as e:
-                    errors.append((path, e))
-                except Exception as e:
-                    errors.append((path, e))
-            GLib.idle_add(self._on_sel_delete_done, n, errors)
+            try:
+                for path in paths:
+                    try:
+                        Gio.File.new_for_path(path).trash(None)
+                        self.database.delete_path(path, category)
+                    except Exception as e:
+                        errors.append((path, e))
+            except Exception:
+                LOGGER.exception("Bulk delete worker crashed")
+            finally:
+                # Always unfreeze the toolbar via the done-handler.
+                GLib.idle_add(self._on_sel_delete_done, n, errors)
 
         threading.Thread(target=_worker, daemon=True, name="sel-delete").start()
 
@@ -1628,14 +1679,25 @@ class GalleryWindow(Adw.ApplicationWindow):
 
         def _worker() -> None:
             errors: list[tuple[str, Exception]] = []
-            for path in paths:
-                try:
-                    target = Path(folder) / Path(path).name
-                    Path(path).rename(target)
-                    self.database.delete_path(path, category)
-                except (OSError, PermissionError) as e:
-                    errors.append((path, e))
-            GLib.idle_add(self._on_sel_move_done, n, errors)
+            try:
+                for path in paths:
+                    # Catch every per-item failure (sqlite errors, weird
+                    # filesystems, …) so one bad file doesn't kill the loop
+                    # and leave _sel_busy stuck at True with the toolbar
+                    # frozen. Specific exception types were too narrow.
+                    try:
+                        target = Path(folder) / Path(path).name
+                        Path(path).rename(target)
+                        self.database.delete_path(path, category)
+                    except Exception as e:
+                        errors.append((path, e))
+            except Exception:
+                LOGGER.exception("Bulk move worker crashed")
+            finally:
+                # Always schedule the done-handler, even on catastrophic
+                # worker failure — _on_sel_move_done is what unfreezes the
+                # toolbar and exits selection mode.
+                GLib.idle_add(self._on_sel_move_done, n, errors)
 
         threading.Thread(target=_worker, daemon=True, name="sel-move").start()
 
@@ -1675,7 +1737,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         if status:
             self._set_status(status)
 
-    def _del_item(self, item: MediaItem) -> None:
+    def _delete_item(self, item: MediaItem) -> None:
         try:
             Gio.File.new_for_path(item.path).trash(None)
             if item.thumb_path:

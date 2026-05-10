@@ -133,6 +133,8 @@ TRANSLATIONS = {
         "The image has been rotated. Save the change?": "The image has been rotated. Save the change?",
         "Discard": "Discard",
         "Save": "Save",
+        "Undo": "Undo",
+        "Redo": "Redo",
         # Viewer
         "Could not load file": "Could not load file",
         # Settings UI
@@ -359,6 +361,8 @@ TRANSLATIONS = {
         "The image has been rotated. Save the change?": "Das Bild wurde gedreht. Änderung speichern?",
         "Discard": "Verwerfen",
         "Save": "Speichern",
+        "Undo": "Rückgängig",
+        "Redo": "Wiederherstellen",
         # Viewer
         "Could not load file": "Datei konnte nicht geladen werden",
         # Settings UI

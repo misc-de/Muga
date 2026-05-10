@@ -12,6 +12,17 @@ from .models import MediaItem
 
 LOGGER = logging.getLogger(__name__)
 
+# Sync the decompression-bomb cap with editor/_pil.py at import time so the
+# scanner thumbnail path is also protected — a hostile NC server could
+# otherwise feed us a multi-gigapixel PNG that OOMs the worker pool when a
+# folder of NC items scrolls into view. Best-effort: if Pillow isn't
+# installed we degrade to GdkPixbuf for thumbnails anyway.
+try:
+    from PIL import Image as _PILImageInit  # noqa: N812 — module init, not a use
+    _PILImageInit.MAX_IMAGE_PIXELS = 200_000_000
+except ImportError:
+    pass
+
 
 class Thumbnailer:
     def __init__(self) -> None:
@@ -83,6 +94,14 @@ class Thumbnailer:
                 img = img.convert("RGB")
             img.save(str(target), "JPEG", quality=85)
             return str(target)
+        except PILImage.DecompressionBombError:
+            # Refuse oversized images explicitly — a debug-level log buries
+            # this in noise, but the user (or admin) wants to know that a
+            # specific file was rejected for safety reasons.
+            LOGGER.warning(
+                "Skipping decompression-bomb image %s (exceeds %s pixels)",
+                path, PILImage.MAX_IMAGE_PIXELS,
+            )
         except Exception:
             LOGGER.debug("PIL thumbnail failed for %s", path, exc_info=True)
         
