@@ -167,6 +167,12 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.slideshow_button.set_visible(False)
         header.pack_end(self.slideshow_button)
 
+        self.share_button = Gtk.Button.new_from_icon_name("emblem-shared-symbolic")
+        self.share_button.set_tooltip_text(parent._("Share"))
+        self.share_button.connect("clicked", self._on_share_clicked)
+        self.share_button.set_visible(False)
+        header.pack_end(self.share_button)
+
         self._editor: EditorView | None = None
         self.toolbar.add_top_bar(header)
 
@@ -341,6 +347,19 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.edit_button.set_visible(visible and _PIL_OK and not self._current_is_video)
         self.rotate_button.set_visible(visible and not self._current_is_video)
         self.slideshow_button.set_visible(visible and not self._current_is_video)  # Slideshow only for images
+        # Share is image-only — videos can't be sent as e-mail attachments
+        # in any sane size, and the dialog uses xdg-email which only knows
+        # how to attach files (not stream videos).
+        self.share_button.set_visible(visible and not self._current_is_video)
+
+    def _on_share_clicked(self, _btn: Gtk.Button) -> None:
+        if not self.items:
+            return
+        item = self.items[self.index]
+        # Route through the gallery's shared dialog so the viewer share
+        # button and the selection-mode share button look identical and
+        # gain new methods (cloud, social, …) in lockstep later.
+        self.parent_window.open_share_dialog([item.path])
 
     def _set_view_gestures_enabled(self, enabled: bool) -> None:
         phase = Gtk.PropagationPhase.CAPTURE if enabled else Gtk.PropagationPhase.NONE
@@ -947,6 +966,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.info_button.set_visible(False)
         self.edit_button.set_visible(False)
         self.rotate_button.set_visible(False)
+        self.share_button.set_visible(False)
         self.cancel_edit_button.set_visible(True)
         self.save_edit_button.set_visible(True)
         # In landscape, fold the filename + date into the title bar so the

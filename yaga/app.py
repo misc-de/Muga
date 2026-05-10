@@ -336,27 +336,37 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.header.pack_end(self.sort_button)
 
         # ── Selection-mode header widgets (hidden until long-press activates) ──
-        self._sel_cancel_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        self._sel_cancel_btn.set_tooltip_text(self._("Cancel selection"))
-        self._sel_cancel_btn.set_visible(False)
-        self._sel_cancel_btn.connect("clicked", lambda _: self._exit_selection_mode())
-        self.header.pack_start(self._sel_cancel_btn)
-
-        self._sel_title = Adw.WindowTitle(title="", subtitle="")
-        self._sel_title.set_visible(False)
-
+        # Swapped layout: trash sits on the LEFT (start), close on the RIGHT
+        # (end). Mirrors how Files/Photos lay out destructive bulk actions on
+        # the same side as the leading title and keeps the cancel-X at the
+        # window-close position the user already reaches for.
         self._sel_delete_btn = Gtk.Button.new_from_icon_name("user-trash-symbolic")
         self._sel_delete_btn.set_tooltip_text(self._("Delete selected"))
         self._sel_delete_btn.add_css_class("destructive-action")
         self._sel_delete_btn.set_visible(False)
         self._sel_delete_btn.connect("clicked", lambda _: self._sel_delete_selected())
-        self.header.pack_end(self._sel_delete_btn)
+        self.header.pack_start(self._sel_delete_btn)
 
         self._sel_move_btn = Gtk.Button.new_from_icon_name("folder-move-symbolic")
         self._sel_move_btn.set_tooltip_text(self._("Move selected"))
         self._sel_move_btn.set_visible(False)
         self._sel_move_btn.connect("clicked", lambda _: self._sel_move_selected())
-        self.header.pack_end(self._sel_move_btn)
+        self.header.pack_start(self._sel_move_btn)
+
+        self._sel_share_btn = Gtk.Button.new_from_icon_name("emblem-shared-symbolic")
+        self._sel_share_btn.set_tooltip_text(self._("Share selected"))
+        self._sel_share_btn.set_visible(False)
+        self._sel_share_btn.connect("clicked", lambda _: self._sel_share_selected())
+        self.header.pack_start(self._sel_share_btn)
+
+        self._sel_title = Adw.WindowTitle(title="", subtitle="")
+        self._sel_title.set_visible(False)
+
+        self._sel_cancel_btn = Gtk.Button.new_from_icon_name("window-close-symbolic")
+        self._sel_cancel_btn.set_tooltip_text(self._("Cancel selection"))
+        self._sel_cancel_btn.set_visible(False)
+        self._sel_cancel_btn.connect("clicked", lambda _: self._exit_selection_mode())
+        self.header.pack_end(self._sel_cancel_btn)
 
         # Search bar (toggled via the magnifier in the header). Uses a
         # GtkSearchBar so the entry slides down as a top-bar and animates with
@@ -1477,6 +1487,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_cancel_btn.set_visible(True)
         self._sel_delete_btn.set_visible(True)
         self._sel_move_btn.set_visible(True)
+        self._sel_share_btn.set_visible(True)
         self.header.set_title_widget(self._sel_title)
         self._update_sel_title()
         # Force every materialised tile to re-bind so the checkbox overlay
@@ -1490,6 +1501,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_cancel_btn.set_visible(False)
         self._sel_delete_btn.set_visible(False)
         self._sel_move_btn.set_visible(False)
+        self._sel_share_btn.set_visible(False)
         # Restore normal header
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
@@ -1653,7 +1665,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         toolbar buttons while a worker thread runs and surfaces a status
         line so the user sees the operation is making progress."""
         self._sel_busy = busy
-        for btn in (self._sel_cancel_btn, self._sel_delete_btn, self._sel_move_btn):
+        for btn in (
+            self._sel_cancel_btn,
+            self._sel_delete_btn,
+            self._sel_move_btn,
+            self._sel_share_btn,
+        ):
             btn.set_sensitive(not busy)
         if status:
             self._set_status(status)
@@ -1707,14 +1724,73 @@ class GalleryWindow(Adw.ApplicationWindow):
         chooser.destroy()
 
     def _share_item(self, item: MediaItem) -> None:
-        if shutil.which("xdg-email"):
-            # xdg-email's --attach consumes the next argv as the file, so a
-            # '--' separator would itself be treated as the filename. We rely
-            # on item.path being an absolute path from the filesystem scan
-            # (always starts with '/') so it can't be misread as an option.
-            subprocess.Popen(["xdg-email", "--attach", item.path])
+        """Context-menu single-image share entry — opens the same dialog the
+        viewer/selection share buttons use, just with a one-element list."""
+        self.open_share_dialog([item.path])
+
+    def _sel_share_selected(self) -> None:
+        if self._sel_busy or not self._selected_paths:
             return
-        self._set_status(self._("Could not complete action"))
+        # Snapshot before the dialog runs — selection mode might be exited
+        # asynchronously (e.g. dialog close races with a long-press).
+        paths = list(self._selected_paths)
+        self.open_share_dialog(paths)
+
+    def open_share_dialog(self, paths: list[str]) -> None:
+        """Show the share-method picker for *paths*. Currently exposes only
+        an Email option (via xdg-email --attach), but the dialog shape is
+        ready for additional channels."""
+        from .nextcloud import is_nc_path
+        # NC items live under nextcloud:// — xdg-email can't attach those.
+        # Drop them with a status hint instead of silently ignoring.
+        local_paths = [p for p in paths if not is_nc_path(p)]
+        skipped_nc = len(paths) - len(local_paths)
+
+        n = len(local_paths)
+        if n == 0:
+            if skipped_nc:
+                self._set_status(self._(
+                    "Cannot share Nextcloud items directly — open them first to download."
+                ))
+            return
+
+        heading = (
+            self._("Share image")
+            if n == 1
+            else self._("Share %d images") % n
+        )
+        body = self._("Choose how to share:")
+        if skipped_nc:
+            body += "\n\n" + self._(
+                "%d Nextcloud item(s) skipped (not downloaded locally)."
+            ) % skipped_nc
+        dialog = Adw.AlertDialog(heading=heading, body=body)
+        dialog.add_response("cancel", self._("Cancel"))
+        if shutil.which("xdg-email"):
+            dialog.add_response("email", self._("Email"))
+            dialog.set_default_response("email")
+            dialog.set_response_appearance("email", Adw.ResponseAppearance.SUGGESTED)
+        else:
+            dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_share_dialog_response, local_paths)
+        dialog.present(self)
+
+    def _on_share_dialog_response(
+        self, _dialog, response: str, paths: list[str],
+    ) -> None:
+        if response != "email" or not paths:
+            return
+        # xdg-email reads --attach + filename pairs. Absolute paths from the
+        # scanner can't start with '-', so they can't be misread as options.
+        argv = ["xdg-email"]
+        for p in paths:
+            argv.extend(["--attach", p])
+        try:
+            subprocess.Popen(argv)
+        except OSError as exc:
+            LOGGER.exception("xdg-email failed: %s", exc)
+            self._set_status(self._("Could not complete action"))
 
     def _open_externally(self, item: MediaItem) -> None:
         # '--' is a real end-of-options marker in xdg-open: a hypothetical

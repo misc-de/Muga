@@ -601,7 +601,9 @@ class GalleryGrid(Gtk.Overlay):
     # gesture object so multiple touch sequences across tiles don't
     # clobber each other.
 
-    _LONG_PRESS_HOLD_MS = 2000
+    # 2000 ms feels like ~3 s in practice (event-routing latency on top of
+    # the timer); 1300 ms lands at the user's "two-ish seconds" mark.
+    _LONG_PRESS_HOLD_MS = 1300
     _LONG_PRESS_MOVE_THRESHOLD_SQ = 16.0 * 16.0  # ~16 px before we abort
 
     def _on_tile_press(

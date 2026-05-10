@@ -115,9 +115,19 @@ TRANSLATIONS = {
         "Cancel selection": "Cancel selection",
         "Delete selected": "Delete selected",
         "Move selected": "Move selected",
+        "Share selected": "Share selected",
         "selected": "selected",
         "Delete selection?": "Delete selection?",
         "Photos will be moved to trash.": "Photos will be moved to trash.",
+        # Share dialog
+        "Share image": "Share image",
+        "Share %d images": "Share %d images",
+        "Choose how to share:": "Choose how to share:",
+        "Email": "Email",
+        "Cannot share Nextcloud items directly — open them first to download.":
+            "Cannot share Nextcloud items directly — open them first to download.",
+        "%d Nextcloud item(s) skipped (not downloaded locally).":
+            "%d Nextcloud item(s) skipped (not downloaded locally).",
         # Rotation
         "Save rotation?": "Save rotation?",
         "The image has been rotated. Save the change?": "The image has been rotated. Save the change?",
@@ -331,9 +341,19 @@ TRANSLATIONS = {
         "Cancel selection": "Auswahl aufheben",
         "Delete selected": "Ausgewählte löschen",
         "Move selected": "Ausgewählte verschieben",
+        "Share selected": "Ausgewählte teilen",
         "selected": "ausgewählt",
         "Delete selection?": "Auswahl löschen?",
         "Photos will be moved to trash.": "Fotos werden in den Papierkorb verschoben.",
+        # Share dialog
+        "Share image": "Bild teilen",
+        "Share %d images": "%d Bilder teilen",
+        "Choose how to share:": "Übertragungsweg wählen:",
+        "Email": "E-Mail",
+        "Cannot share Nextcloud items directly — open them first to download.":
+            "Nextcloud-Elemente lassen sich nicht direkt teilen – bitte vorher öffnen, damit sie heruntergeladen werden.",
+        "%d Nextcloud item(s) skipped (not downloaded locally).":
+            "%d Nextcloud-Element(e) übersprungen (nicht lokal verfügbar).",
         # Rotation
         "Save rotation?": "Rotation speichern?",
         "The image has been rotated. Save the change?": "Das Bild wurde gedreht. Änderung speichern?",
