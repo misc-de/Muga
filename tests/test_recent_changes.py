@@ -1325,19 +1325,136 @@ def _make_nav_swipe_fake(category: str, cats: list[str], orientation):
     return fake, activated
 
 
-def test_nav_swipe_uses_capture_phase_so_it_works_over_buttons() -> None:
-    """Regression: BUBBLE phase let each ToggleButton's internal click gesture
-    claim the press first, so a swipe that started on a category icon never
-    reached the swipe gesture. CAPTURE means the gesture watches the press
-    at the nav-box level first; it only steals the sequence when actual
-    swipe motion is detected, so a stationary tap still falls through to
-    the button as a normal click."""
+def test_nav_swipe_uses_drag_with_explicit_claim_to_steal_from_button_click() -> None:
+    """Regression: GestureSwipe in either CAPTURE or BUBBLE didn't help because
+    the category buttons' internal Gtk.GestureClick claims the sequence on
+    press and doesn't release on mere in-bounds motion — so the swipe
+    gesture never saw motion or release events. The fix is GestureDrag in
+    CAPTURE that explicitly sets state to CLAIMED on a motion threshold,
+    cancelling the button's pending click and taking ownership of the
+    sequence. A stationary tap never crosses the threshold so clicks
+    still work."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
-    swipe_def = src.index("nav_swipe = Gtk.GestureSwipe()")
-    add_ctrl  = src.index("self.nav_box.add_controller(nav_swipe)", swipe_def)
-    block     = src[swipe_def:add_ctrl]
+    drag_def = src.index("nav_drag = Gtk.GestureDrag()")
+    add_ctrl = src.index("self.nav_box.add_controller(nav_drag)", drag_def)
+    block    = src[drag_def:add_ctrl]
     assert "Gtk.PropagationPhase.CAPTURE" in block
-    assert "Gtk.PropagationPhase.BUBBLE" not in block
+    # The three drag-* signals must all be wired so we can claim on motion
+    # and compute a velocity at release.
+    assert 'connect("drag-begin"' in block
+    assert 'connect("drag-update"' in block
+    assert 'connect("drag-end"' in block
+    # The explicit claim must live in drag-update, fired on the motion
+    # threshold being exceeded. Without the claim, the button click still
+    # owns the sequence and our handler sees no release.
+    update_fn = src.index("def _on_nav_drag_update")
+    update_end = src.index("\n    def ", update_fn + 1)
+    update_body = src[update_fn:update_end]
+    assert "Gtk.EventSequenceState.CLAIMED" in update_body
+    assert "set_state" in update_body
+    assert "_NAV_SWIPE_CLAIM_PX" in update_body
+
+
+def test_date_header_nav_jumps_to_adjacent_header_in_row_store() -> None:
+    """The up/down arrows on a month header navigate by visible row order
+    (sort-direction independent): up = previous header in row store, down =
+    next header. Skips intervening tile rows, no-ops at the boundaries."""
+    from yaga.gallery_grid import GalleryGrid, GalleryRow
+
+    # Build a row_store with a realistic mix of headers and tile rows.
+    rows = [
+        GalleryRow.header("Mar 2026", year=2026, month=3),
+        GalleryRow.from_tiles([]),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Feb 2026", year=2026, month=2),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Jan 2026", year=2026, month=1),
+    ]
+    store = SimpleNamespace(
+        get_n_items=lambda: len(rows),
+        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
+    )
+    scroll_calls: list[int] = []
+    grid_view = SimpleNamespace(scroll_to=lambda pos, *_a, **_kw: scroll_calls.append(pos))
+    fake = SimpleNamespace(row_store=store, grid_view=grid_view)
+
+    # Standing on the Mar 2026 header (pos 0); down arrow → next header at 3.
+    header_box_mar = SimpleNamespace(_list_item=SimpleNamespace(get_position=lambda: 0))
+    GalleryGrid._on_header_nav(fake, header_box_mar, +1)
+    assert scroll_calls == [3]
+
+    # Standing on Feb 2026 (pos 3); up arrow → Mar 2026 at 0.
+    header_box_feb = SimpleNamespace(_list_item=SimpleNamespace(get_position=lambda: 3))
+    GalleryGrid._on_header_nav(fake, header_box_feb, -1)
+    assert scroll_calls == [3, 0]
+
+    # At first header, up arrow is a no-op (no previous header).
+    GalleryGrid._on_header_nav(fake, header_box_mar, -1)
+    assert scroll_calls == [3, 0]
+
+    # At last header, down arrow is a no-op.
+    header_box_jan = SimpleNamespace(_list_item=SimpleNamespace(get_position=lambda: 5))
+    GalleryGrid._on_header_nav(fake, header_box_jan, +1)
+    assert scroll_calls == [3, 0]
+
+
+def test_date_header_nav_box_spacing_is_at_least_20px() -> None:
+    """User asked for 'min 20px auseinander' between the up and down arrows.
+    Pin the spacing constant so a future style refactor can't shrink it."""
+    src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    nav_box_def = src.index("nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL")
+    # The Gtk.Box constructor passes spacing as a kwarg; the kwarg value sets
+    # the gap between consecutive children.
+    line_end = src.index("\n", nav_box_def)
+    line = src[nav_box_def:line_end]
+    assert "spacing=20" in line
+
+
+def test_date_header_arrow_buttons_are_subtle() -> None:
+    """User asked for 'dezente farbe' — pinned via the .date-header-nav CSS
+    rule's opacity. Hover bumps to full opacity so the affordance is
+    discoverable without dominating the typography."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    rule_idx = src.index(".date-header-nav {")
+    block = src[rule_idx:src.index("}", rule_idx)]
+    assert "opacity:" in block
+    # Some opacity below 1.0 (the actual subtle look). Pinning the literal
+    # value would be too brittle, but anything > 0.6 isn't subtle.
+    import re
+    m = re.search(r"opacity:\s*(0?\.\d+|0|1)", block)
+    assert m is not None
+    assert float(m.group(1)) <= 0.6
+
+
+def test_gallery_row_header_carries_year_and_month() -> None:
+    """The arrow handler resolves adjacent headers via row_store position
+    rather than year/month, but the fields are still required so future
+    needs (e.g. "skip empty months", or a date jump-list) can use them
+    without re-parsing the markup."""
+    from yaga.gallery_grid import GalleryRow
+    row = GalleryRow.header("text", year=2026, month=5)
+    assert row.is_header is True
+    assert row.header_year == 2026
+    assert row.header_month == 5
+    # Backward-compat: year/month are optional and default to None.
+    plain = GalleryRow.header("text")
+    assert plain.header_year is None
+    assert plain.header_month is None
+
+
+def test_nav_drag_end_synthesises_px_per_second_velocity() -> None:
+    """drag-end gets total offsets, not velocity. To keep the existing
+    _on_nav_swipe handler (and its tests) unchanged, drag-end converts
+    offset/time into px/s and forwards it. Pin the conversion so a future
+    refactor can't silently drop the time scaling and turn every drag
+    into a 1-pixel/second non-event."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    end_fn  = src.index("def _on_nav_drag_end")
+    end_body_end = src.index("\n    def ", end_fn + 1)
+    body = src[end_fn:end_body_end]
+    assert "GLib.get_monotonic_time()" in body
+    assert "1_000_000" in body  # microseconds → seconds
+    assert "self._on_nav_swipe(None," in body
 
 
 def test_nav_swipe_horizontal_right_advances_to_next_category() -> None:

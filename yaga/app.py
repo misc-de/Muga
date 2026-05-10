@@ -456,17 +456,22 @@ class GalleryWindow(Adw.ApplicationWindow):
         # For "left" / "right" the nav_box is parented below as part of the content row.
 
         # Swipe gesture on the nav bar itself: switch categories along the bar's
-        # main axis (left/right swipe on a horizontal nav, up/down on a side
-        # rail). CAPTURE phase so the gesture watches presses *before* the
-        # category buttons' click handlers claim them — without this, a swipe
-        # that starts on a button never reaches the gesture (the ToggleButton's
-        # internal click gesture eats the sequence). Capture only steals the
-        # sequence when actual swipe motion is detected; a stationary tap
-        # falls through to the button as a normal click.
-        nav_swipe = Gtk.GestureSwipe()
-        nav_swipe.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        nav_swipe.connect("swipe", self._on_nav_swipe)
-        self.nav_box.add_controller(nav_swipe)
+        # main axis. We use Gtk.GestureDrag rather than Gtk.GestureSwipe so we
+        # can force-claim the event sequence on a motion threshold. The
+        # category buttons' internal Gtk.GestureClick claims the sequence on
+        # press and doesn't release it on mere motion inside the button bounds,
+        # which would otherwise lock the swipe out — even in CAPTURE phase.
+        # On drag-update we set the sequence state to CLAIMED once motion
+        # exceeds a small threshold; that cancels the button's pending click
+        # and lets us track velocity through to drag-end. A stationary tap
+        # never crosses the threshold, so the button's click still fires
+        # normally for a real category select.
+        nav_drag = Gtk.GestureDrag()
+        nav_drag.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        nav_drag.connect("drag-begin", self._on_nav_drag_begin)
+        nav_drag.connect("drag-update", self._on_nav_drag_update)
+        nav_drag.connect("drag-end", self._on_nav_drag_end)
+        self.nav_box.add_controller(nav_drag)
 
         # Status label (hidden when empty)
         self.status = Gtk.Label(xalign=0)
@@ -1071,7 +1076,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         dt = datetime.fromtimestamp(item.mtime)
         key = (dt.year, dt.month)
         if key != self._date_last_key:
-            self.gallery_grid.append_header(self._month_header_markup(dt))
+            self.gallery_grid.append_header(
+                self._month_header_markup(dt), year=dt.year, month=dt.month,
+            )
             self._date_last_key = key
         self.gallery_grid.append_media(item)
 
@@ -1993,7 +2000,44 @@ class GalleryWindow(Adw.ApplicationWindow):
         if velocity_x > 0:
             self._go_back_folder()
 
-    def _on_nav_swipe(self, _gesture: Gtk.GestureSwipe, velocity_x: float, velocity_y: float) -> None:
+    # Motion in px before we steal the sequence from a category button. Smaller
+    # than a pure click drift but large enough that a finger-down "settle" on
+    # a button doesn't count as a swipe.
+    _NAV_SWIPE_CLAIM_PX = 24
+
+    def _on_nav_drag_begin(self, _gesture: Gtk.GestureDrag, _x: float, _y: float) -> None:
+        # Record start time so drag-end can compute a px/s velocity matching
+        # what Gtk.GestureSwipe would have provided. monotonic time avoids
+        # NTP-jitter weirdness on long drags.
+        self._nav_drag_start_us = GLib.get_monotonic_time()
+        self._nav_drag_claimed = False
+
+    def _on_nav_drag_update(self, gesture: Gtk.GestureDrag, ox: float, oy: float) -> None:
+        if getattr(self, "_nav_drag_claimed", False):
+            return
+        is_vertical = (
+            self.nav_box.get_orientation() == Gtk.Orientation.VERTICAL
+        )
+        primary, secondary = (oy, ox) if is_vertical else (ox, oy)
+        if abs(primary) < self._NAV_SWIPE_CLAIM_PX:
+            return
+        if abs(primary) <= abs(secondary):
+            # Off-axis drag — likely the user is dragging in a direction
+            # the nav layout doesn't navigate. Don't steal the sequence so
+            # the button click still has a chance once they release.
+            return
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self._nav_drag_claimed = True
+
+    def _on_nav_drag_end(self, _gesture: Gtk.GestureDrag, ox: float, oy: float) -> None:
+        if not getattr(self, "_nav_drag_claimed", False):
+            return
+        elapsed_us = max(1, GLib.get_monotonic_time() - getattr(self, "_nav_drag_start_us", 0))
+        # px/s — matches the units the existing _on_nav_swipe handler expects.
+        scale = 1_000_000 / elapsed_us
+        self._on_nav_swipe(None, ox * scale, oy * scale)
+
+    def _on_nav_swipe(self, _gesture, velocity_x: float, velocity_y: float) -> None:
         """Swipe on the nav bar to step through categories along its main axis.
 
         Horizontal nav (top/bottom): velocity_x picks the direction, swipe
@@ -2343,6 +2387,18 @@ class GalleryWindow(Adw.ApplicationWindow):
                 background: transparent;
                 color: @window_fg_color;
                 font-size: 32px;
+            }
+            /* Up/down arrows pinned to the right edge of every month header.
+               Subtle by default (low opacity), full opacity on hover so they
+               stay discoverable without competing with the date typography. */
+            .date-header-nav {
+                opacity: 0.45;
+                min-width: 24px;
+                min-height: 24px;
+                padding: 2px 4px;
+            }
+            .date-header-nav:hover {
+                opacity: 1.0;
             }
             .folder-label {
                 background: rgba(0,0,0,0.55);

@@ -66,13 +66,20 @@ class GalleryRow(GObject.Object):
         super().__init__()
         self.is_header: bool = False
         self.header_text: str = ""
+        # Year / month carried alongside the header text so the per-header
+        # up/down arrows can find adjacent headers in the row store without
+        # re-parsing the markup.
+        self.header_year: int | None = None
+        self.header_month: int | None = None
         self.tiles: list[MediaRow] = []
 
     @classmethod
-    def header(cls, text: str) -> "GalleryRow":
+    def header(cls, text: str, year: int | None = None, month: int | None = None) -> "GalleryRow":
         row = cls()
         row.is_header = True
         row.header_text = text
+        row.header_year = year
+        row.header_month = month
         return row
 
     @classmethod
@@ -198,9 +205,9 @@ class GalleryGrid(Gtk.Overlay):
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
 
-    def append_header(self, text: str) -> None:
+    def append_header(self, text: str, year: int | None = None, month: int | None = None) -> None:
         self._flush_tile_row()
-        self.row_store.append(GalleryRow.header(text))
+        self.row_store.append(GalleryRow.header(text, year=year, month=month))
 
     def set_empty(self, text: str, visible: bool) -> None:
         self.empty_label.set_label(text)
@@ -331,19 +338,70 @@ class GalleryGrid(Gtk.Overlay):
             self.row_store.append(GalleryRow.from_tiles(self._building_row))
             self._building_row = []
 
+    def _on_header_nav(self, header_box: Gtk.Box, direction: int) -> None:
+        """Jump to the next/previous header row from *header_box*'s row.
+        direction = -1 for the up arrow (previous header in row order),
+        +1 for the down arrow (next header in row order). Sort-direction
+        independent — the arrows always navigate by visible row order."""
+        list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
+        if list_item is None:
+            return
+        current_pos = list_item.get_position()
+        n = self.row_store.get_n_items()
+        pos = current_pos + direction
+        while 0 <= pos < n:
+            row: GalleryRow | None = self.row_store.get_item(pos)
+            if row is not None and row.is_header:
+                # NONE: bring the row into view without grabbing focus, so the
+                # user's keyboard focus stays where it was.
+                self.grid_view.scroll_to(pos, Gtk.ListScrollFlags.NONE, None)
+                return
+            pos += direction
+        # No adjacent header found — silently no-op (top/bottom of the list,
+        # or single-month range).
+
     # ------------------------------------------------------------------
     # Factory callbacks
     # ------------------------------------------------------------------
 
     def _on_item_setup(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
         # ── Header widget ────────────────────────────────────────────
-        # Two-line month/year, centered (matches the viewer's date display style).
+        # Two-line month/year label centered in the row, with a stacked pair
+        # of up/down arrows pinned to the trailing edge. The arrows jump to
+        # the previous/next month header in the row store.
         header_lbl = Gtk.Label()
         header_lbl.set_halign(Gtk.Align.FILL)
         header_lbl.set_xalign(0.5)
         header_lbl.set_justify(Gtk.Justification.CENTER)
         header_lbl.set_hexpand(True)
         header_lbl.add_css_class("date-header")
+
+        nav_up = Gtk.Button.new_from_icon_name("go-up-symbolic")
+        nav_up.add_css_class("flat")
+        nav_up.add_css_class("date-header-nav")
+        nav_up.set_tooltip_text("Previous month")
+        nav_down = Gtk.Button.new_from_icon_name("go-down-symbolic")
+        nav_down.add_css_class("flat")
+        nav_down.add_css_class("date-header-nav")
+        nav_down.set_tooltip_text("Next month")
+
+        nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        nav_box.set_halign(Gtk.Align.END)
+        nav_box.set_valign(Gtk.Align.CENTER)
+        nav_box.set_margin_end(12)
+        nav_box.append(nav_up)
+        nav_box.append(nav_down)
+
+        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        header_box.set_hexpand(True)
+        header_box.append(header_lbl)
+        header_box.append(nav_box)
+
+        # Capture the list_item closures bind the click handler against — the
+        # bind step refreshes _header_list_item before each row is shown, so a
+        # recycled pool widget always navigates from its current row's date.
+        nav_up.connect("clicked", lambda _b: self._on_header_nav(header_box, -1))
+        nav_down.connect("clicked", lambda _b: self._on_header_nav(header_box, +1))
 
         # ── Tile row widget ──────────────────────────────────────────
         tile_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -359,10 +417,14 @@ class GalleryGrid(Gtk.Overlay):
         # ── Stack switching between header and tiles ─────────────────
         stack = Gtk.Stack()
         stack.set_transition_type(Gtk.StackTransitionType.NONE)
-        stack.add_named(header_lbl, "header")
+        stack.add_named(header_box, "header")
         stack.add_named(tile_box, "tiles")
         stack._header_lbl = header_lbl       # type: ignore[attr-defined]
+        stack._header_box = header_box       # type: ignore[attr-defined]
         stack._tile_buttons = tile_buttons   # type: ignore[attr-defined]
+        # Stamped fresh on every bind in _apply_binding so the recycled pool
+        # widget's arrow handlers always see the current row's list_item.
+        header_box._list_item = None         # type: ignore[attr-defined]
 
         list_item.set_child(stack)
 
@@ -490,6 +552,10 @@ class GalleryGrid(Gtk.Overlay):
             stack.set_visible_child_name("header")
             # header_text may include Pango markup (e.g. month/year two-liner)
             stack._header_lbl.set_markup(gallery_row.header_text)
+            # Stamp the current list_item so the arrow callbacks know which
+            # position to navigate from (pool widgets are recycled, so the
+            # closure captured at setup time has no row identity on its own).
+            stack._header_box._list_item = list_item
             return
 
         stack.set_visible_child_name("tiles")
