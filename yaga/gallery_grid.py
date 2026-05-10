@@ -106,6 +106,13 @@ class GalleryGrid(Gtk.Overlay):
         # button uses it to ignore the release that follows a long-press.
         self._last_long_press_at = 0.0
 
+        # Currently-bound list items, tracked so refresh_selection_state can
+        # reach into the live widgets and re-run _bind_tile on each. Going
+        # through Gio.ListStore.splice + items-changed proved unreliable —
+        # ListView only re-binds tiles that scroll back into view, leaving
+        # the currently-visible viewport stale until the user scrolls.
+        self._bound_list_items: list[Gtk.ListItem] = []
+
         self.row_store = Gio.ListStore(item_type=GalleryRow)
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._on_item_setup)
@@ -208,42 +215,34 @@ class GalleryGrid(Gtk.Overlay):
         return False
 
     def update_tile_for_path(self, path: str) -> bool:
-        """Force a re-bind of the tile that holds *path* by splicing its
-        row back into the store. Used after toggling selection so the
-        check-mark visual catches up. Returns True if the path is in the
-        materialized window, False if the caller should fall back to a
-        full re-render."""
-        n = self.row_store.get_n_items()
-        for pos in range(n):
-            gallery_row = self.row_store.get_item(pos)
-            if gallery_row.is_header:
+        """Re-render the tile that holds *path*. Returns True if the path
+        is in a currently-bound list item, False if the caller should
+        fall back to a full re-render (path is in the model but scrolled
+        out, or hasn't been lazy-loaded yet)."""
+        for list_item in self._bound_list_items:
+            row = list_item.get_item()
+            if row is None or row.is_header:
                 continue
-            for tile in gallery_row.tiles:
+            for tile in row.tiles:
                 if (
                     not tile.is_folder
                     and tile.media_item is not None
                     and tile.media_item.path == path
                 ):
-                    self.row_store.splice(
-                        pos, 1, [GalleryRow.from_tiles(list(gallery_row.tiles))],
-                    )
+                    self._apply_binding(list_item)
                     return True
         return False
 
     def refresh_selection_state(self) -> None:
-        """Re-bind every materialized tile row so checkbox visibility and
-        the per-tile check state catch up with the owner's current
-        ``_selection_mode`` / ``_selected_paths``. No DB requery, no
-        scroll change — splice emits items-changed which causes the
-        ListView to re-run the bind handler on each affected row."""
-        n = self.row_store.get_n_items()
-        for pos in range(n):
-            gallery_row = self.row_store.get_item(pos)
-            if gallery_row.is_header:
-                continue
-            self.row_store.splice(
-                pos, 1, [GalleryRow.from_tiles(list(gallery_row.tiles))],
-            )
+        """Re-render every currently-bound list item so checkbox visibility
+        and per-tile check state catch up with the owner's current
+        ``_selection_mode`` / ``_selected_paths``. Going through
+        Gio.ListStore.splice + items-changed didn't reliably re-bind the
+        already-visible viewport on GTK4 ListView (only newly-scrolled-in
+        rows picked up the change), so we touch the live widgets
+        directly."""
+        for list_item in list(self._bound_list_items):
+            self._apply_binding(list_item)
 
     def update_folder_thumb(self, folder_path: str, thumb_path: str) -> bool:
         n = self.row_store.get_n_items()
@@ -411,8 +410,18 @@ class GalleryGrid(Gtk.Overlay):
         return button
 
     def _on_item_bind(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
-        gallery_row: GalleryRow = list_item.get_item()
+        if list_item not in self._bound_list_items:
+            self._bound_list_items.append(list_item)
+        self._apply_binding(list_item)
+
+    def _apply_binding(self, list_item: Gtk.ListItem) -> None:
+        """Render *list_item* against its current model row. Pulled out of
+        _on_item_bind so refresh_selection_state can re-run it for every
+        already-bound list item without going through items-changed."""
+        gallery_row: GalleryRow | None = list_item.get_item()
         stack = list_item.get_child()
+        if gallery_row is None or stack is None:
+            return
 
         if gallery_row.is_header:
             stack.set_visible_child_name("header")
@@ -531,6 +540,8 @@ class GalleryGrid(Gtk.Overlay):
         button.set_sensitive(True)
 
     def _on_item_unbind(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
+        if list_item in self._bound_list_items:
+            self._bound_list_items.remove(list_item)
         stack = list_item.get_child()
         for btn in stack._tile_buttons:
             btn._single_pic.set_paintable(None)

@@ -103,7 +103,11 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._rotation: int = 0
         self._current_display_path: str | None = None
         self._current_is_video: bool = False
-        
+        # Chrome (header + date pill + filename pill) visibility persists
+        # across swipe-to-next so the user's tap-to-hide choice carries
+        # over to the next image instead of reverting on every show_item().
+        self._chrome_visible: bool = True
+
         # Slideshow state
         self._slideshow_active: bool = False
         self._slideshow_timeout_id: int | None = None
@@ -280,15 +284,18 @@ class ViewerWindow(Adw.ApplicationWindow):
         item = self.items[self.index]
         # Title bar stays empty; the filename floats at the bottom of the image.
         self.set_title("")
-        self._update_filename_label(item)
-        self._update_date_label(item)
         self._reset_zoom()
         self.zoom_view = None
         self.zoom_scroller = None
         self._rotation = 0
         self._current_display_path = None
         self._current_is_video = False
-        self.header.set_visible(True)
+        # Reapply the user's last chrome choice — show_item() runs on every
+        # swipe and on hard reloads (rotate save, edit exit, …); without
+        # this the header + pills snap back into view on every navigation.
+        self._apply_chrome_visibility()
+        self._update_filename_label(item)
+        self._update_date_label(item)
         self._set_view_actions_visible(False)
 
         from .nextcloud import is_nc_path
@@ -613,27 +620,59 @@ class ViewerWindow(Adw.ApplicationWindow):
         w = media_stream.get_intrinsic_width()
         h = media_stream.get_intrinsic_height()
         if w > 0 and h > 0 and w > h:
-            def _hide():
-                self.header.set_visible(False)
-                self.date_revealer.set_reveal_child(False)
-                self.filename_revealer.set_reveal_child(False)
-                return GLib.SOURCE_REMOVE
-            GLib.idle_add(_hide)
+            # Landscape video: auto-hide chrome, and route through the same
+            # helper so a subsequent swipe keeps the chrome hidden.
+            GLib.idle_add(
+                lambda: (self._set_chrome_visible(False), GLib.SOURCE_REMOVE)[1],
+            )
 
     def _update_date_label(self, item: MediaItem) -> None:
         try:
             dt = datetime.fromtimestamp(item.mtime)
         except (OverflowError, OSError, ValueError):
+            self._date_label_has_value = False
             self.date_revealer.set_reveal_child(False)
             return
         # Locale-aware day-month, e.g. "1 Mai" with LC_TIME=de_DE
         self.date_day_label.set_label(dt.strftime("%-d %B"))
         self.date_year_label.set_label(dt.strftime("%Y"))
-        self.date_revealer.set_reveal_child(not self._current_is_video)
+        self._date_label_has_value = True
+        self.date_revealer.set_reveal_child(
+            self._chrome_visible and not self._current_is_video
+        )
 
     def _update_filename_label(self, item: MediaItem) -> None:
         self.filename_label.set_label(item.name or "")
-        self.filename_revealer.set_reveal_child(bool(item.name) and not self._current_is_video)
+        self.filename_revealer.set_reveal_child(
+            self._chrome_visible
+            and bool(item.name)
+            and not self._current_is_video
+        )
+
+    def _apply_chrome_visibility(self) -> None:
+        """Push the current ``_chrome_visible`` flag onto the actual widgets.
+        Single source of truth so swipe → show_item → re-apply keeps the
+        user's "hide chrome" choice across image navigation."""
+        visible = self._chrome_visible
+        self.header.set_visible(visible)
+        # Pills follow chrome but only if there's something meaningful to
+        # show — videos don't get pills, and an item without a parsable
+        # mtime/name shouldn't pop a blank revealer either.
+        if self._current_is_video:
+            self.date_revealer.set_reveal_child(False)
+            self.filename_revealer.set_reveal_child(False)
+            return
+        if visible and getattr(self, "_date_label_has_value", False):
+            self.date_revealer.set_reveal_child(True)
+        else:
+            self.date_revealer.set_reveal_child(False)
+        item = self.items[self.index] if self.items else None
+        has_name = item is not None and bool(item.name)
+        self.filename_revealer.set_reveal_child(visible and has_name)
+
+    def _set_chrome_visible(self, visible: bool) -> None:
+        self._chrome_visible = visible
+        self._apply_chrome_visibility()
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -844,18 +883,9 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         if n_press == 1:
             # Single tap toggles the floating overlays (date pill, filename
-            # pill, header) — slides them out so the user can see the image
-            # uncluttered, slides them back in on the next tap.
-            visible = not self.header.get_visible()
-            self.header.set_visible(visible)
-            if not self._current_is_video:
-                self.date_revealer.set_reveal_child(visible)
-                self.filename_revealer.set_reveal_child(visible)
-            else:
-                # On videos the pills aren't shown anyway; only the header
-                # toggles so the user can hide playback chrome.
-                self.date_revealer.set_reveal_child(False)
-                self.filename_revealer.set_reveal_child(False)
+            # pill, header) — and the new state persists across swipe-to-
+            # next via _chrome_visible so the next image stays uncluttered.
+            self._set_chrome_visible(not self._chrome_visible)
         elif not self._current_is_video and n_press == 2:
             self._reset_zoom()
 
