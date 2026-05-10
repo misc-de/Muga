@@ -1281,3 +1281,41 @@ def test_settings_window_nav_option_sits_above_video_group() -> None:
     nav_group_idx   = src.index('"nav_position"')
     video_group_idx = src.index('title=self._("Video")')
     assert nav_group_idx < video_group_idx
+
+
+def test_apply_settings_defers_rebuild_to_idle() -> None:
+    """Regression: a synchronous _build_ui call from inside a settings-dialog
+    combo notify::selected was observed to freeze the app when the rebuild
+    changed the toolbar topology (top-bar nav → side-rail nav). The rebuild
+    must be queued via GLib.idle_add so the signal stack unwinds first."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    apply_idx   = src.index("def apply_settings(self, settings: Settings)")
+    rebuild_def = src.index("def _do_settings_rebuild", apply_idx)
+    apply_body  = src[apply_idx:rebuild_def]
+    # apply_settings must NOT call _build_ui or refresh directly anymore.
+    assert "self._build_ui()" not in apply_body
+    assert "self.refresh(scan=True)" not in apply_body
+    # It must schedule _do_settings_rebuild via GLib.idle_add.
+    assert "GLib.idle_add(self._do_settings_rebuild" in apply_body
+    # And the deferred handler is what actually rebuilds + refreshes.
+    rebuild_body = src[rebuild_def:src.index("\n    # ", rebuild_def)]
+    assert "self._build_ui()" in rebuild_body
+    assert "self.refresh(scan=True)" in rebuild_body
+
+
+def test_apply_settings_coalesces_repeated_calls() -> None:
+    """Rapid combo changes shouldn't queue N rebuilds — pin the dedupe flag."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    apply_idx = src.index("def apply_settings(self, settings: Settings)")
+    rebuild_def = src.index("def _do_settings_rebuild", apply_idx)
+    apply_body = src[apply_idx:rebuild_def]
+    # The flag-guard must wrap the idle_add call.
+    guard_idx = apply_body.index("_settings_rebuild_pending")
+    idle_idx  = apply_body.index("GLib.idle_add(self._do_settings_rebuild")
+    assert guard_idx < idle_idx
+    # And the handler must clear it before doing the work, so a fresh call
+    # arriving during the rebuild is allowed to schedule the next one.
+    rebuild_body = src[rebuild_def:src.index("\n    # ", rebuild_def)]
+    clear_idx   = rebuild_body.index("self._settings_rebuild_pending = False")
+    build_idx   = rebuild_body.index("self._build_ui()")
+    assert clear_idx < build_idx

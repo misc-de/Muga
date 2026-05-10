@@ -417,10 +417,19 @@ class GalleryWindow(Adw.ApplicationWindow):
             else Gtk.Orientation.HORIZONTAL
         )
         self.nav_box = Gtk.Box(orientation=nav_orientation, spacing=0)
-        self.nav_box.add_css_class("view-switcher")
         if nav_orientation == Gtk.Orientation.HORIZONTAL:
+            # Top/bottom: keep the view-switcher styling (border + padding,
+            # plus libadwaita's min-width on descendant buttons that fans
+            # them out evenly across the rail).
+            self.nav_box.add_css_class("view-switcher")
             self.nav_box.set_hexpand(True)
         else:
+            # Left/right side rail: skip view-switcher because libadwaita's
+            # min-width on toggle children makes the rail roughly twice as
+            # wide as the icon+label needs. Use a positional class instead so
+            # the rail sizes to its content (capped via .nav-sidebar CSS).
+            self.nav_box.add_css_class("nav-sidebar")
+            self.nav_box.add_css_class(f"nav-sidebar-{nav_position}")
             self.nav_box.set_vexpand(True)
 
         if nav_position == "top":
@@ -661,8 +670,10 @@ class GalleryWindow(Adw.ApplicationWindow):
                 button.set_child(vbox)
             button.add_css_class("flat")
             if is_vertical:
-                # Side rail: don't stretch buttons across the full height.
-                button.set_hexpand(True)  # share the rail's width uniformly
+                # Side rail: each button takes the rail's natural width
+                # automatically (vertical Gtk.Box gives every child the full
+                # cross-axis width). Anchor at the top so few categories
+                # don't get stretched into rectangles by the box's vexpand.
                 button.set_vexpand(False)
                 button.set_valign(Gtk.Align.START)
             else:
@@ -2080,8 +2091,23 @@ class GalleryWindow(Adw.ApplicationWindow):
         finally:
             if handler_id:
                 mgr.handler_unblock(handler_id)
+        # Defer the heavy widget-tree rebuild + scan so the GTK signal that
+        # delivered us here (typically Adw.ComboRow notify::selected from the
+        # settings dialog) can finish dispatching before we tear down the tree
+        # it's still operating on. Synchronous rebuilds from inside a child
+        # signal — especially ones that change the toolbar topology, e.g.
+        # moving the category nav between top-bar and side rail — have been
+        # observed to lock up GTK's layout pass. Coalesce duplicate requests
+        # so a quick succession of combo changes only rebuilds once.
+        if not getattr(self, "_settings_rebuild_pending", False):
+            self._settings_rebuild_pending = True
+            GLib.idle_add(self._do_settings_rebuild, priority=GLib.PRIORITY_HIGH)
+
+    def _do_settings_rebuild(self) -> bool:
+        self._settings_rebuild_pending = False
         self._build_ui()
         self.refresh(scan=True)
+        return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
     # CSS / theme
@@ -2179,6 +2205,27 @@ class GalleryWindow(Adw.ApplicationWindow):
             .view-switcher {
                 border-top: 1px solid @borders;
                 padding-top: 4px;
+            }
+            /* Side rail (nav at left/right). Sized to content, with a
+               separator border on the side facing the gallery, and a hard
+               cap so a long category label can't widen the rail past 140px. */
+            .nav-sidebar {
+                padding: 4px 2px;
+                min-width: 64px;
+                max-width: 140px;
+            }
+            .nav-sidebar button {
+                /* Cancel libadwaita's button min-width so the rail tracks the
+                   actual icon+label size rather than the toolbar-toggle width. */
+                min-width: 0;
+                padding: 6px 4px;
+                margin: 1px 2px;
+            }
+            .nav-sidebar-left {
+                border-right: 1px solid @borders;
+            }
+            .nav-sidebar-right {
+                border-left: 1px solid @borders;
             }
             .sel-check {
                 background: alpha(@window_bg_color, 0.75);
