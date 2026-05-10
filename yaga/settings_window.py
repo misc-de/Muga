@@ -76,6 +76,21 @@ class SettingsWindow(Adw.PreferencesWindow):
         columns.connect("notify::value", self._columns_changed)
         grid_group.add(columns)
 
+        nav_group = Adw.PreferencesGroup(
+            title=self._("Navigation"),
+            description=self._("Where the category bar is shown around the gallery."),
+        )
+        app.add(nav_group)
+        nav_group.add(self._combo_row(
+            "nav_position", "Position",
+            [
+                ("top",    "Top"),
+                ("right",  "Right"),
+                ("bottom", "Bottom"),
+                ("left",   "Left"),
+            ],
+        ))
+
         video_group = Adw.PreferencesGroup(
             title=self._("Video"),
             description=self._("Leave empty to use built-in playback"),

@@ -47,6 +47,9 @@ class Settings:
     external_video_player: str = ""
     grid_columns: int = 4
     last_category: str = ""
+    # Where to place the category nav bar relative to the gallery content.
+    # Valid values: "top" (default, preserves legacy layout), "bottom", "left", "right".
+    nav_position: str = "top"
 
     # User-defined ordering of the four built-in media folders. Items not in
     # the list (e.g. legacy upgrades that didn't write the field) fall back to
@@ -84,6 +87,10 @@ class Settings:
         known = {f.name for f in cls.__dataclass_fields__.values()}
         settings = cls(**{k: v for k, v in data.items() if k in known})
         settings.grid_columns = min(max(int(settings.grid_columns), 2), 10)
+        # Clamp legacy / hand-edited values to the four supported positions so a
+        # typo in settings.json doesn't crash the layout logic in _build_ui.
+        if settings.nav_position not in ("top", "bottom", "left", "right"):
+            settings.nav_position = "top"
         return settings
 
     def save(self) -> None:

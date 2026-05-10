@@ -1216,3 +1216,68 @@ def test_selection_mode_trash_packed_start_close_packed_end() -> None:
     trash_pack = src.index("self.header.pack_start(self._sel_delete_btn)")
     close_pack = src.index("self.header.pack_end(self._sel_cancel_btn)")
     assert trash_pack < close_pack
+
+
+# ---------------------------------------------------------------------------
+# 16.  Configurable nav-bar position (top / bottom / left / right)
+# ---------------------------------------------------------------------------
+
+def test_settings_nav_position_default_is_top() -> None:
+    from yaga.config import Settings
+    assert Settings().nav_position == "top"
+
+
+def test_settings_nav_position_round_trips_through_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Saving and reloading must preserve the chosen nav position."""
+    monkeypatch.setattr("yaga.config.CONFIG_DIR", tmp_path)
+    from yaga.config import Settings
+    s = Settings()
+    s.nav_position = "right"
+    s.save()
+    loaded = Settings.load()
+    assert loaded.nav_position == "right"
+
+
+@pytest.mark.parametrize("bad_value", ["", "north", "TOP", None, 0, "diagonal"])
+def test_settings_nav_position_rejects_invalid_values_on_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_value,
+) -> None:
+    """A typo in settings.json must not crash _build_ui — Settings.load()
+    clamps unknown values back to "top"."""
+    monkeypatch.setattr("yaga.config.CONFIG_DIR", tmp_path)
+    import json
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"nav_position": bad_value}), encoding="utf-8",
+    )
+    from yaga.config import Settings
+    assert Settings.load().nav_position == "top"
+
+
+def test_app_build_ui_routes_nav_box_per_position() -> None:
+    """Source-level pin: each position branch must wire the nav_box to the
+    right ToolbarView slot. Catches accidental swaps (e.g. left → top_bar)."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    top_idx    = src.index('if nav_position == "top":')
+    add_top    = src.index("self.toolbar.add_top_bar(self.nav_box)", top_idx)
+    bottom_idx = src.index('elif nav_position == "bottom":', add_top)
+    add_bottom = src.index("self.toolbar.add_bottom_bar(self.nav_box)", bottom_idx)
+    # top branch wires add_top_bar BEFORE the bottom branch does add_bottom_bar.
+    assert top_idx < add_top < bottom_idx < add_bottom
+
+    left_idx  = src.index('if nav_position == "left":')
+    right_idx = src.index('elif nav_position == "right":', left_idx)
+    # The left branch appends nav_box first, then content; right does the
+    # opposite. Pin both orders so a refactor can't silently flip them.
+    left_block  = src[left_idx:right_idx]
+    right_block = src[right_idx:src.index("else:", right_idx)]
+    assert left_block.index("row.append(self.nav_box)") < left_block.index("row.append(content)")
+    assert right_block.index("row.append(content)") < right_block.index("row.append(self.nav_box)")
+
+
+def test_settings_window_nav_option_sits_above_video_group() -> None:
+    """User explicitly asked for the option to be 'oberhalb von Video-Option'.
+    Pin the relative order so a future settings-page refactor doesn't move it."""
+    src = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    nav_group_idx   = src.index('"nav_position"')
+    video_group_idx = src.index('title=self._("Video")')
+    assert nav_group_idx < video_group_idx

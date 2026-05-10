@@ -404,11 +404,30 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._search_query: str = ""
         self._search_debounce_id: int = 0
 
-        # Category nav bar (styled like a bottom switcher bar)
-        self.nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.nav_box.set_hexpand(True)
+        # Category nav bar — orientation and placement come from settings.
+        # Adw.ToolbarView only knows top/bottom bars, so left/right wrap the
+        # gallery content in a horizontal Gtk.Box with the nav as a side rail.
+        nav_position = getattr(self.settings, "nav_position", "top")
+        if nav_position not in ("top", "bottom", "left", "right"):
+            nav_position = "top"
+        self._nav_position = nav_position
+        nav_orientation = (
+            Gtk.Orientation.VERTICAL
+            if nav_position in ("left", "right")
+            else Gtk.Orientation.HORIZONTAL
+        )
+        self.nav_box = Gtk.Box(orientation=nav_orientation, spacing=0)
         self.nav_box.add_css_class("view-switcher")
-        self.toolbar.add_top_bar(self.nav_box)
+        if nav_orientation == Gtk.Orientation.HORIZONTAL:
+            self.nav_box.set_hexpand(True)
+        else:
+            self.nav_box.set_vexpand(True)
+
+        if nav_position == "top":
+            self.toolbar.add_top_bar(self.nav_box)
+        elif nav_position == "bottom":
+            self.toolbar.add_bottom_bar(self.nav_box)
+        # For "left" / "right" the nav_box is parented below as part of the content row.
 
         # Status label (hidden when empty)
         self.status = Gtk.Label(xalign=0)
@@ -440,7 +459,23 @@ class GalleryWindow(Adw.ApplicationWindow):
         content.set_vexpand(True)
         content.append(self.status)
         content.append(self.gallery_grid)
-        self.toolbar.set_content(content)
+
+        if nav_position == "left":
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+            row.set_hexpand(True)
+            row.set_vexpand(True)
+            row.append(self.nav_box)
+            row.append(content)
+            self.toolbar.set_content(row)
+        elif nav_position == "right":
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+            row.set_hexpand(True)
+            row.set_vexpand(True)
+            row.append(content)
+            row.append(self.nav_box)
+            self.toolbar.set_content(row)
+        else:
+            self.toolbar.set_content(content)
         self._rebuild_categories()
 
     # ------------------------------------------------------------------
@@ -572,6 +607,12 @@ class GalleryWindow(Adw.ApplicationWindow):
             child = next_child
         self.category_buttons.clear()
 
+        # Horizontal nav (top/bottom): each button stretches to fill the row.
+        # Vertical nav (left/right): buttons take their natural width and stack
+        # at the start; the nav_box itself vexpands so the side rail spans the
+        # full window height even with few categories.
+        is_vertical = self.nav_box.get_orientation() == Gtk.Orientation.VERTICAL
+
         _icons = {
             "photos": "camera-photo-symbolic",
             "pictures": "image-x-generic-symbolic",
@@ -619,7 +660,13 @@ class GalleryWindow(Adw.ApplicationWindow):
             else:
                 button.set_child(vbox)
             button.add_css_class("flat")
-            button.set_hexpand(True)
+            if is_vertical:
+                # Side rail: don't stretch buttons across the full height.
+                button.set_hexpand(True)  # share the rail's width uniformly
+                button.set_vexpand(False)
+                button.set_valign(Gtk.Align.START)
+            else:
+                button.set_hexpand(True)
             button.set_tooltip_text(str(Path(path).expanduser()))
             button.set_active(category == self.category)
             button.connect("toggled", self._on_category_toggled, category)
