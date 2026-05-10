@@ -2147,40 +2147,53 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _do_settings_rebuild(self) -> bool:
         self._settings_rebuild_pending = False
-        # Detect nav-position changes specifically: those swap the toolbar
-        # topology (top/bottom-bar ↔ side rail in a horizontal Gtk.Box wrapper)
-        # and have been observed to deadlock GTK's layout pass when rebuilt
-        # in place. Compare current nav_box orientation against the new
-        # setting and, if they differ, hide the window across the rebuild so
-        # the active measure cycle on the old tree completes before the new
-        # tree is parented. For settings that don't reshape the tree (theme,
-        # grid columns, cache, etc.) keep the lighter in-place rebuild.
+        # Detect nav-position changes: those swap the toolbar topology
+        # (top/bottom-bar vs. side rail in a horizontal Gtk.Box wrapper) and
+        # cannot be safely rebuilt in place. The previous in-place attempt
+        # deadlocked GTK's layout pass; the hide/rebuild/show variant cleared
+        # the deadlock but left the still-open modal settings dialog with a
+        # broken input grab (window appeared visible but accepted no input).
+        # Recreating the GalleryWindow is the only fully robust path: every
+        # transient child (the settings dialog) gets cleanly destroyed with
+        # the old window, the new window starts with a fresh layout pass,
+        # and persisted settings (already saved by apply_settings above) are
+        # picked up by the new window's Settings.load() in __init__.
         new_position = getattr(self.settings, "nav_position", "top")
         if new_position not in ("top", "bottom", "left", "right"):
             new_position = "top"
         old_position = getattr(self, "_nav_position", "top")
-        topology_changed = (old_position != new_position) and (
-            (old_position in ("left", "right")) != (new_position in ("left", "right"))
-            or (old_position in ("top", "bottom")) != (new_position in ("top", "bottom"))
-            or old_position != new_position  # cover the same-axis flips too (top↔bottom, left↔right)
-        )
-        was_visible = self.get_visible() if topology_changed else False
-        if was_visible:
-            self.set_visible(False)
-        try:
-            self._build_ui()
-            self.refresh(scan=True)
-        finally:
-            if was_visible:
-                # Restore visibility on a follow-up tick so the new tree gets
-                # one full measure pass before the window comes back on screen.
-                GLib.idle_add(self._show_after_rebuild, priority=GLib.PRIORITY_DEFAULT_IDLE)
+        if old_position != new_position:
+            self._recreate_window_for_layout_change()
+            return GLib.SOURCE_REMOVE
+        # Lighter changes (theme, grid columns, cache budget, NC flags …) just
+        # rebuild the toolbar tree in place — no topology change, no deadlock.
+        self._build_ui()
+        self.refresh(scan=True)
         return GLib.SOURCE_REMOVE
 
-    def _show_after_rebuild(self) -> bool:
-        self.set_visible(True)
-        self.present()
-        return GLib.SOURCE_REMOVE
+    def _recreate_window_for_layout_change(self) -> None:
+        """Replace this window with a fresh GalleryWindow on the same app.
+
+        Any transient children (settings dialog) get destroyed with self when
+        ``self.destroy()`` runs at the end. The new window goes through the
+        same __init__ path as a normal app launch, so its Settings.load()
+        picks up nav_position (already persisted by apply_settings) and the
+        new layout is built once, cleanly, with no in-place tree mutation.
+        """
+        app = self.get_application()
+        if app is None:
+            # No application context — fall back to in-place rebuild rather
+            # than orphaning the window. Shouldn't happen for a presented
+            # window, but the guard keeps the path total.
+            self._build_ui()
+            self.refresh(scan=True)
+            return
+        new_window = GalleryWindow(app)
+        new_window.present()
+        # Destroy after present so the app has a window at all times — Adw
+        # quits the main loop when the last window goes away, which would
+        # take the new window down with it on certain WMs.
+        self.destroy()
 
     # ------------------------------------------------------------------
     # CSS / theme

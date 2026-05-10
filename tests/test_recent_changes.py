@@ -1412,6 +1412,43 @@ def test_nav_swipe_in_selection_mode_is_disabled() -> None:
     assert activated == []
 
 
+def test_do_settings_rebuild_recreates_window_on_nav_position_change() -> None:
+    """Regression: in-place rebuild of the toolbar across a top-bar↔side-rail
+    topology change either deadlocked GTK's layout pass or left the still-
+    open modal settings dialog with a broken input grab. The fix is to
+    recreate the entire GalleryWindow when nav_position changes — every
+    transient child gets cleanly destroyed with the old window, the new
+    window starts with a fresh layout pass, and persisted settings (saved
+    by apply_settings before scheduling the rebuild) are picked up by the
+    new window's __init__."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    rebuild_def  = src.index("def _do_settings_rebuild")
+    rebuild_end  = src.index("def _recreate_window_for_layout_change", rebuild_def)
+    rebuild_body = src[rebuild_def:rebuild_end]
+
+    # The position-change branch must call _recreate_window_for_layout_change
+    # — not _build_ui — and must early-return so the in-place fallback below
+    # doesn't also fire.
+    pos_change = rebuild_body.index("if old_position != new_position:")
+    recreate   = rebuild_body.index("self._recreate_window_for_layout_change()", pos_change)
+    early_ret  = rebuild_body.index("return GLib.SOURCE_REMOVE", recreate)
+    inplace    = rebuild_body.index("self._build_ui()", early_ret)
+    assert pos_change < recreate < early_ret < inplace
+
+
+def test_recreate_window_destroys_old_after_new_is_presented() -> None:
+    """Adw quits the main loop when the last window goes away. self.destroy()
+    must fire after new_window.present() so the app always has a window."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    fn_def = src.index("def _recreate_window_for_layout_change")
+    fn_end = src.index("\n    def ", fn_def + 1)
+    fn_body = src[fn_def:fn_end]
+    new_idx     = fn_body.index("new_window = GalleryWindow(app)")
+    present_idx = fn_body.index("new_window.present()", new_idx)
+    destroy_idx = fn_body.index("self.destroy()", present_idx)
+    assert new_idx < present_idx < destroy_idx
+
+
 def test_apply_settings_coalesces_repeated_calls() -> None:
     """Rapid combo changes shouldn't queue N rebuilds — pin the dedupe flag."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
