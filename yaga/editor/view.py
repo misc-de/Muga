@@ -83,11 +83,23 @@ class EditorView(Gtk.Box):
         self._obfuscate_brush_size: float = 0.08
         self._obfuscate_drag_origin: tuple[float, float] | None = None
 
-        # Undo/Redo history
-        self._history_undo: list["PILImage.Image"] = []
-        self._history_redo: list["PILImage.Image"] = []
+        # Undo/Redo history — snapshots are full state dicts, not just _working,
+        # because most edits (filter, brightness, stickers, frame, obfuscate) are
+        # parameters applied non-destructively in _apply_edits(); a working-only
+        # snapshot would leave those parameters intact and undo would do nothing.
+        self._history_undo: list[dict] = []
+        self._history_redo: list[dict] = []
         self._history_max_steps: int = 20  # Limit memory usage
-        self._slider_snapshot_id: int | None = None  # Debounce timer for slider changes
+        # Slider drag tracking: snapshot pre-change on first move in a drag,
+        # then suppress until the user pauses long enough to end the drag.
+        self._slider_drag_end_id: int | None = None
+        self._slider_drag_active: set[str] = set()
+        # Set during _restore_state to suppress snapshot side-effects in handlers
+        # that get fired by programmatic widget updates (sliders, toggles).
+        self._restoring: bool = False
+        # Slider widgets — populated in _build_panel_adjust, used by _restore_state
+        # to push restored values back into the UI.
+        self._adjust_sliders: dict[str, Gtk.Scale] = {}
 
         self._active_panel: str | None = None
         self._update_id: int | None = None
@@ -393,6 +405,7 @@ class EditorView(Gtk.Box):
             sc.set_hexpand(True)
             sc.set_draw_value(False)
             sc.connect("value-changed", self._on_slider, attr)
+            self._adjust_sliders[attr] = sc
             reset = Gtk.Button.new_from_icon_name("edit-undo-symbolic")
             reset.add_css_class("flat")
             reset.set_tooltip_text(self._("Reset"))
@@ -588,6 +601,16 @@ class EditorView(Gtk.Box):
             self._sticker_sub_revealer.set_reveal_child(False)
 
     def _on_frame_toggled(self, btn: Gtk.ToggleButton, theme) -> None:
+        if self._restoring:
+            return
+        if btn.get_active():
+            new_theme = theme
+        else:
+            new_theme = None
+        # Skip snapshot if theme isn't actually changing (prevents empty
+        # history entries when our own deselect-blocking logic re-fires the handler).
+        if new_theme != self._frame_theme:
+            self._snapshot_state()
         if btn.get_active():
             for k, b in self._frame_btns.items():
                 if k != (theme or "none") and b.get_active():
@@ -738,6 +761,8 @@ class EditorView(Gtk.Box):
     def _on_filter_toggled(self, btn: Gtk.ToggleButton, mode: str) -> None:
         if not btn.get_active():
             return
+        if self._restoring:
+            return
         self._snapshot_state()  # Save state before filter change
         self._filter_mode = mode
         for m, b in self._filter_btns.items():
@@ -791,23 +816,32 @@ class EditorView(Gtk.Box):
         self._schedule_update()
 
     def _on_slider(self, sc: Gtk.Scale, attr: str) -> None:
+        if self._restoring:
+            return
+        # Snapshot the *pre-change* state on the first move of a drag, so undo
+        # restores the value the slider had before this drag began. Suppress
+        # further snapshots until the drag-end debouncer fires.
+        if attr not in self._slider_drag_active:
+            self._snapshot_state()
+            self._slider_drag_active.add(attr)
         setattr(self, attr, sc.get_value())
         self._schedule_update()
-        self._schedule_slider_snapshot()
+        self._schedule_slider_drag_end()
 
-    def _schedule_slider_snapshot(self) -> None:
-        """Schedule a debounced snapshot for slider changes (500ms delay)."""
-        if self._slider_snapshot_id is not None:
-            GLib.source_remove(self._slider_snapshot_id)
-        self._slider_snapshot_id = GLib.timeout_add(500, self._slider_snapshot_cb)
+    def _schedule_slider_drag_end(self) -> None:
+        """Reset drag tracking 500ms after the user stops moving any slider."""
+        if self._slider_drag_end_id is not None:
+            GLib.source_remove(self._slider_drag_end_id)
+        self._slider_drag_end_id = GLib.timeout_add(500, self._slider_drag_end_cb)
 
-    def _slider_snapshot_cb(self) -> bool:
-        """Called after slider movement stops (debounce callback)."""
-        self._slider_snapshot_id = None
-        self._snapshot_state()
+    def _slider_drag_end_cb(self) -> bool:
+        self._slider_drag_end_id = None
+        self._slider_drag_active.clear()
         return GLib.SOURCE_REMOVE
 
     def _reset_slider(self, _button: Gtk.Button, attr: str, scale: Gtk.Scale) -> None:
+        if self._restoring:
+            return
         self._snapshot_state()  # Save state before reset
         setattr(self, attr, 1.0)
         scale.set_value(1.0)
@@ -836,6 +870,10 @@ class EditorView(Gtk.Box):
 
     def _on_sticker_zoom_begin(self, _g: Gtk.GestureZoom, _seq) -> None:
         self._sticker_zoom_start = self._sticker_size_frac
+        # Snapshot pre-resize state so the pinch is one undo step. Skip when
+        # there's nothing to resize — the scale handler bails on no source too.
+        if self._sticker_source is not None:
+            self._snapshot_state()
 
     def _on_sticker_zoom_scale(self, _g: Gtk.GestureZoom, scale_delta: float) -> None:
         if self._sticker_source is None:
@@ -870,6 +908,8 @@ class EditorView(Gtk.Box):
     def _on_drag_begin(self, _g: Gtk.GestureDrag, x: float, y: float) -> None:
         self._drag_sticker = False
         if self._obfuscate_mode:
+            # Snapshot before the first stroke is appended — one drag = one undo step.
+            self._snapshot_state()
             self._obfuscate_drag_origin = (x, y)
             self._add_obfuscate_stroke(x, y)
             return
@@ -888,6 +928,9 @@ class EditorView(Gtk.Box):
                 self._crop_start = (x, y)
                 self._crop_current = (x, y)
         elif self._stickers:
+            # Snapshot before the move/select changes _active_sticker and the
+            # sticker's rel position; one drag = one undo step.
+            self._snapshot_state()
             self._drag_sticker = True
             self._active_sticker = len(self._stickers) - 1
             self._sync_active_sticker()
@@ -1205,13 +1248,60 @@ class EditorView(Gtk.Box):
             except Exception:
                 LOGGER.debug("history-changed callback raised", exc_info=True)
 
+    def _capture_state(self) -> dict:
+        """Snapshot every field that affects the rendered image."""
+        return {
+            "working": self._working.copy(),
+            "filter_mode": self._filter_mode,
+            "brightness": self._brightness,
+            "contrast": self._contrast,
+            "red": self._red,
+            "green": self._green,
+            "blue": self._blue,
+            "stickers": [dict(s) for s in self._stickers],
+            "active_sticker": self._active_sticker,
+            "obfuscate_strokes": list(self._obfuscate_strokes),
+            "frame_theme": self._frame_theme,
+        }
+
+    def _restore_state(self, state: dict) -> None:
+        """Apply a snapshot and push the restored values back into the UI widgets.
+
+        The _restoring flag suppresses the snapshot side-effects that filter /
+        frame / slider handlers would otherwise trigger when we set their
+        widgets programmatically below.
+        """
+        self._restoring = True
+        try:
+            self._working = state["working"]
+            self._filter_mode = state["filter_mode"]
+            self._brightness = state["brightness"]
+            self._contrast = state["contrast"]
+            self._red = state["red"]
+            self._green = state["green"]
+            self._blue = state["blue"]
+            self._stickers = [dict(s) for s in state["stickers"]]
+            self._active_sticker = state["active_sticker"]
+            self._obfuscate_strokes = list(state["obfuscate_strokes"])
+            self._frame_theme = state["frame_theme"]
+            self._sync_active_sticker()
+
+            for attr, sc in self._adjust_sliders.items():
+                sc.set_value(getattr(self, attr))
+            for mode, btn in getattr(self, "_filter_btns", {}).items():
+                btn.set_active(mode == self._filter_mode)
+            target_frame = self._frame_theme or "none"
+            for theme_key, btn in getattr(self, "_frame_btns", {}).items():
+                btn.set_active(theme_key == target_frame)
+        finally:
+            self._restoring = False
+
     def _snapshot_state(self) -> None:
-        """Save current working image to undo stack (call after each edit)."""
-        # Clear redo stack when new edit is made
+        """Save full editor state to the undo stack and clear redo."""
+        if self._restoring:
+            return
         self._history_redo.clear()
-        # Save current state to undo stack
-        self._history_undo.append(self._working.copy())
-        # Limit history size to prevent memory bloat
+        self._history_undo.append(self._capture_state())
         if len(self._history_undo) > self._history_max_steps:
             self._history_undo.pop(0)
         self._emit_history_changed()
@@ -1228,24 +1318,20 @@ class EditorView(Gtk.Box):
         """Undo last edit."""
         if not self.can_undo():
             return
-        # Save current state to redo stack
-        self._history_redo.append(self._working.copy())
-        # Restore previous state
-        self._working = self._history_undo.pop()
-        # Trigger preview update
+        self._history_redo.append(self._capture_state())
+        self._restore_state(self._history_undo.pop())
         self._schedule_update()
+        self._draw_area.queue_draw()
         self._emit_history_changed()
 
     def redo(self) -> None:
         """Redo last undone edit."""
         if not self.can_redo():
             return
-        # Save current state to undo stack
-        self._history_undo.append(self._working.copy())
-        # Restore next state
-        self._working = self._history_redo.pop()
-        # Trigger preview update
+        self._history_undo.append(self._capture_state())
+        self._restore_state(self._history_redo.pop())
         self._schedule_update()
+        self._draw_area.queue_draw()
         self._emit_history_changed()
 
     # ------------------------------------------------------------------

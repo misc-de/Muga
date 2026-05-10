@@ -504,9 +504,26 @@ def test_editor_history_callback_fires_on_snapshot_undo_redo(tmp_path: Path) -> 
         _history_undo=[],
         _history_redo=[],
         _history_max_steps=5,
-        _slider_snapshot_id=None,
         _update_id=None,
         _schedule_update=lambda: None,
+        _restoring=False,
+        # Parameter state captured by _capture_state / restored by _restore_state.
+        _filter_mode="none",
+        _brightness=1.0,
+        _contrast=1.0,
+        _red=1.0,
+        _green=1.0,
+        _blue=1.0,
+        _stickers=[],
+        _active_sticker=None,
+        _obfuscate_strokes=[],
+        _frame_theme=None,
+        # UI control dicts that _restore_state re-syncs; empty is fine for this test.
+        _adjust_sliders={},
+        _filter_btns={},
+        _frame_btns={},
+        _sync_active_sticker=lambda: None,
+        _draw_area=SimpleNamespace(queue_draw=lambda: None),
     )
     fake._working = fake._original.copy()
     # Bind the helpers undo/redo/_snapshot_state lean on. _emit_history_changed
@@ -514,6 +531,8 @@ def test_editor_history_callback_fires_on_snapshot_undo_redo(tmp_path: Path) -> 
     fake._emit_history_changed = lambda: EditorView._emit_history_changed(fake)
     fake.can_undo = lambda: EditorView.can_undo(fake)
     fake.can_redo = lambda: EditorView.can_redo(fake)
+    fake._capture_state = lambda: EditorView._capture_state(fake)
+    fake._restore_state = lambda state: EditorView._restore_state(fake, state)
 
     fires: list[tuple[bool, bool]] = []
 
@@ -539,6 +558,226 @@ def test_editor_history_callback_fires_on_snapshot_undo_redo(tmp_path: Path) -> 
 
     EditorView.redo(fake)
     assert fires[-1] == (True, False)
+
+
+# ---------------------------------------------------------------------------
+# 7b. Editor undo really reverts parameter edits, not just _working pixels.
+#     Regression: snapshots used to capture only _working, so changing
+#     brightness/filter/frame/stickers and then calling undo() did nothing.
+# ---------------------------------------------------------------------------
+
+def test_editor_undo_reverts_parameter_edits(tmp_path: Path) -> None:
+    pil = pytest.importorskip("PIL")
+    from yaga.editor.view import EditorView
+    img_path = tmp_path / "tiny.png"
+    pil.Image.new("RGB", (16, 16), (200, 100, 50)).save(str(img_path))
+
+    fake = SimpleNamespace(
+        _original=pil.Image.open(str(img_path)).convert("RGB"),
+        _history_undo=[],
+        _history_redo=[],
+        _history_max_steps=5,
+        _update_id=None,
+        _schedule_update=lambda: None,
+        _restoring=False,
+        _filter_mode="none",
+        _brightness=1.0,
+        _contrast=1.0,
+        _red=1.0,
+        _green=1.0,
+        _blue=1.0,
+        _stickers=[],
+        _active_sticker=None,
+        _obfuscate_strokes=[],
+        _frame_theme=None,
+        _adjust_sliders={},
+        _filter_btns={},
+        _frame_btns={},
+        _sync_active_sticker=lambda: None,
+        _draw_area=SimpleNamespace(queue_draw=lambda: None),
+    )
+    fake._working = fake._original.copy()
+    fake._emit_history_changed = lambda: None
+    fake.can_undo = lambda: EditorView.can_undo(fake)
+    fake.can_redo = lambda: EditorView.can_redo(fake)
+    fake._capture_state = lambda: EditorView._capture_state(fake)
+    fake._restore_state = lambda state: EditorView._restore_state(fake, state)
+
+    # Simulate the call pattern of every parameter handler: snapshot, then
+    # mutate the parameter. Brightness, filter, frame, stickers, obfuscate
+    # all live outside _working, so a working-only snapshot would lose them.
+    EditorView._snapshot_state(fake)
+    fake._brightness = 1.6
+    fake._filter_mode = "vintage"
+    fake._frame_theme = "summer"
+    fake._stickers = [{"source": "🎉", "rel": (0.5, 0.5), "size": 0.2}]
+    fake._obfuscate_strokes = [(0.1, 0.1, 0.05, (255, 0, 0, 255))]
+
+    EditorView.undo(fake)
+    assert fake._brightness == 1.0
+    assert fake._filter_mode == "none"
+    assert fake._frame_theme is None
+    assert fake._stickers == []
+    assert fake._obfuscate_strokes == []
+
+    # And redo restores the post-edit values.
+    EditorView.redo(fake)
+    assert fake._brightness == 1.6
+    assert fake._filter_mode == "vintage"
+    assert fake._frame_theme == "summer"
+    assert fake._stickers == [{"source": "🎉", "rel": (0.5, 0.5), "size": 0.2}]
+    assert fake._obfuscate_strokes == [(0.1, 0.1, 0.05, (255, 0, 0, 255))]
+
+
+# ---------------------------------------------------------------------------
+# 7c. Gesture-driven edits (sticker drag, sticker pinch, obfuscate brush)
+#     produce undo entries. Regression: drag/zoom handlers used to mutate
+#     state without ever calling _snapshot_state, so the gestures were not
+#     undoable at all (the counter didn't even increment).
+# ---------------------------------------------------------------------------
+
+def _make_editor_fake(pil, img_path):
+    fake = SimpleNamespace(
+        _original=pil.Image.open(str(img_path)).convert("RGB"),
+        _history_undo=[],
+        _history_redo=[],
+        _history_max_steps=5,
+        _update_id=None,
+        _schedule_update=lambda: None,
+        _restoring=False,
+        _filter_mode="none",
+        _brightness=1.0, _contrast=1.0, _red=1.0, _green=1.0, _blue=1.0,
+        _stickers=[],
+        _active_sticker=None,
+        _obfuscate_strokes=[],
+        _frame_theme=None,
+        _adjust_sliders={},
+        _filter_btns={},
+        _frame_btns={},
+        _sync_active_sticker=lambda: None,
+        _draw_area=SimpleNamespace(queue_draw=lambda: None),
+    )
+    fake._working = fake._original.copy()
+    fake._emit_history_changed = lambda: None
+    return fake
+
+
+def test_obfuscate_drag_begin_snapshots_for_undo(tmp_path: Path) -> None:
+    pil = pytest.importorskip("PIL")
+    from yaga.editor.view import EditorView
+    img_path = tmp_path / "t.png"
+    pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
+
+    fake = _make_editor_fake(pil, img_path)
+    fake._obfuscate_mode = True
+    fake._obfuscate_drag_origin = None
+    fake._obfuscate_brush_size = 0.05
+    fake._sample_color_at = lambda *_a: (0, 0, 0, 255)
+    fake._crop_mode = False
+    fake._drag_sticker = False
+    fake._sticker_source = None
+    # Bind helpers used by the handlers under test.
+    fake._capture_state = lambda: EditorView._capture_state(fake)
+    fake._restore_state = lambda s: EditorView._restore_state(fake, s)
+    fake._snapshot_state = lambda: EditorView._snapshot_state(fake)
+    fake.can_undo = lambda: EditorView.can_undo(fake)
+    fake.can_redo = lambda: EditorView.can_redo(fake)
+    fake._add_obfuscate_stroke = lambda px, py: EditorView._add_obfuscate_stroke(fake, px, py)
+    # _add_obfuscate_stroke needs the draw area dimensions — mimic them.
+    fake._draw_area = SimpleNamespace(
+        queue_draw=lambda: None,
+        get_width=lambda: 100,
+        get_height=lambda: 100,
+    )
+
+    assert not fake.can_undo()
+    EditorView._on_drag_begin(fake, None, 50.0, 50.0)
+    # The drag created one undo step and one stroke.
+    assert fake.can_undo()
+    assert len(fake._obfuscate_strokes) == 1
+
+    EditorView.undo(fake)
+    assert fake._obfuscate_strokes == []
+
+
+def test_sticker_drag_begin_snapshots_for_undo(tmp_path: Path) -> None:
+    pil = pytest.importorskip("PIL")
+    from yaga.editor.view import EditorView
+    img_path = tmp_path / "t.png"
+    pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
+
+    fake = _make_editor_fake(pil, img_path)
+    fake._obfuscate_mode = False
+    fake._crop_mode = False
+    fake._drag_sticker = False
+    fake._sticker_source = None
+    fake._sticker_rel = (0.5, 0.5)
+    fake._sticker_size_frac = 0.2
+    fake._sticker_del_rect = None
+    # One sticker present, with a known position.
+    fake._stickers = [{"source": "🎉", "rel": (0.3, 0.3), "size": 0.2}]
+    fake._active_sticker = 0
+    fake._capture_state = lambda: EditorView._capture_state(fake)
+    fake._restore_state = lambda s: EditorView._restore_state(fake, s)
+    fake._snapshot_state = lambda: EditorView._snapshot_state(fake)
+    fake.can_undo = lambda: EditorView.can_undo(fake)
+    fake.can_redo = lambda: EditorView.can_redo(fake)
+
+    assert not fake.can_undo()
+    EditorView._on_drag_begin(fake, None, 10.0, 10.0)
+    # Now mutate — simulating what _move_sticker would do during the drag.
+    fake._stickers[0]["rel"] = (0.8, 0.8)
+    assert fake.can_undo()
+
+    EditorView.undo(fake)
+    assert fake._stickers[0]["rel"] == (0.3, 0.3)
+
+
+def test_sticker_zoom_begin_snapshots_for_undo(tmp_path: Path) -> None:
+    pil = pytest.importorskip("PIL")
+    from yaga.editor.view import EditorView
+    img_path = tmp_path / "t.png"
+    pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
+
+    fake = _make_editor_fake(pil, img_path)
+    fake._sticker_source = "🎉"
+    fake._sticker_size_frac = 0.2
+    fake._sticker_zoom_start = 0.2
+    fake._stickers = [{"source": "🎉", "rel": (0.5, 0.5), "size": 0.2}]
+    fake._active_sticker = 0
+    fake._capture_state = lambda: EditorView._capture_state(fake)
+    fake._restore_state = lambda s: EditorView._restore_state(fake, s)
+    fake._snapshot_state = lambda: EditorView._snapshot_state(fake)
+    fake.can_undo = lambda: EditorView.can_undo(fake)
+    fake.can_redo = lambda: EditorView.can_redo(fake)
+
+    assert not fake.can_undo()
+    EditorView._on_sticker_zoom_begin(fake, None, None)
+    fake._stickers[0]["size"] = 0.6
+    assert fake.can_undo()
+
+    EditorView.undo(fake)
+    assert fake._stickers[0]["size"] == 0.2
+
+
+def test_sticker_zoom_begin_no_snapshot_when_no_active_source(tmp_path: Path) -> None:
+    """If there is no active sticker, pinch begin must not create a phantom undo entry."""
+    pil = pytest.importorskip("PIL")
+    from yaga.editor.view import EditorView
+    img_path = tmp_path / "t.png"
+    pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
+
+    fake = _make_editor_fake(pil, img_path)
+    fake._sticker_source = None
+    fake._sticker_size_frac = 0.2
+    fake._sticker_zoom_start = 0.2
+    fake._capture_state = lambda: EditorView._capture_state(fake)
+    fake._restore_state = lambda s: EditorView._restore_state(fake, s)
+    fake._snapshot_state = lambda: EditorView._snapshot_state(fake)
+    fake.can_undo = lambda: EditorView.can_undo(fake)
+
+    EditorView._on_sticker_zoom_begin(fake, None, None)
+    assert not fake.can_undo()
 
 
 # ---------------------------------------------------------------------------
