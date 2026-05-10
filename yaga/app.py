@@ -2105,8 +2105,39 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _do_settings_rebuild(self) -> bool:
         self._settings_rebuild_pending = False
-        self._build_ui()
-        self.refresh(scan=True)
+        # Detect nav-position changes specifically: those swap the toolbar
+        # topology (top/bottom-bar ↔ side rail in a horizontal Gtk.Box wrapper)
+        # and have been observed to deadlock GTK's layout pass when rebuilt
+        # in place. Compare current nav_box orientation against the new
+        # setting and, if they differ, hide the window across the rebuild so
+        # the active measure cycle on the old tree completes before the new
+        # tree is parented. For settings that don't reshape the tree (theme,
+        # grid columns, cache, etc.) keep the lighter in-place rebuild.
+        new_position = getattr(self.settings, "nav_position", "top")
+        if new_position not in ("top", "bottom", "left", "right"):
+            new_position = "top"
+        old_position = getattr(self, "_nav_position", "top")
+        topology_changed = (old_position != new_position) and (
+            (old_position in ("left", "right")) != (new_position in ("left", "right"))
+            or (old_position in ("top", "bottom")) != (new_position in ("top", "bottom"))
+            or old_position != new_position  # cover the same-axis flips too (top↔bottom, left↔right)
+        )
+        was_visible = self.get_visible() if topology_changed else False
+        if was_visible:
+            self.set_visible(False)
+        try:
+            self._build_ui()
+            self.refresh(scan=True)
+        finally:
+            if was_visible:
+                # Restore visibility on a follow-up tick so the new tree gets
+                # one full measure pass before the window comes back on screen.
+                GLib.idle_add(self._show_after_rebuild, priority=GLib.PRIORITY_DEFAULT_IDLE)
+        return GLib.SOURCE_REMOVE
+
+    def _show_after_rebuild(self) -> bool:
+        self.set_visible(True)
+        self.present()
         return GLib.SOURCE_REMOVE
 
     # ------------------------------------------------------------------
@@ -2207,12 +2238,12 @@ class GalleryWindow(Adw.ApplicationWindow):
                 padding-top: 4px;
             }
             /* Side rail (nav at left/right). Sized to content, with a
-               separator border on the side facing the gallery, and a hard
-               cap so a long category label can't widen the rail past 140px. */
+               separator border on the side facing the gallery. No max-width
+               here: combined with the descendant button min-width override
+               below, GTK4 was observed to enter a measure feedback loop when
+               a long category label pushed the natural width past the cap. */
             .nav-sidebar {
                 padding: 4px 2px;
-                min-width: 64px;
-                max-width: 140px;
             }
             .nav-sidebar button {
                 /* Cancel libadwaita's button min-width so the rail tracks the
