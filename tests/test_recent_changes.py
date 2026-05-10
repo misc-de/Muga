@@ -1449,32 +1449,45 @@ def test_recreate_window_destroys_old_after_new_is_presented() -> None:
     assert new_idx < present_idx < destroy_idx
 
 
-def test_recreate_destroys_transient_children_before_self() -> None:
-    """Regression: parent-destroy cascading to a transient settings dialog
-    leaves GTK's modal-grab tracker pointing at the destroyed dialog. The
-    reopened dialog renders and reacts visually but its action handlers
-    silently no-op. Fix: walk transient children and destroy() each
-    explicitly before destroy()ing self."""
+def test_recreate_destroys_tracked_settings_dialog_before_self() -> None:
+    """Regression: an earlier attempt iterated app.get_windows() to find the
+    settings dialog and destroy it. That doesn't work because Adw.Preferences-
+    Window with transient_for=parent isn't auto-registered with the app, so
+    the loop never found the dialog and parent-destroy left it behind on
+    some WMs — producing two visible dialogs after recreate. Fix: track the
+    dialog explicitly via self._settings_dialog and destroy it directly."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
     fn_def = src.index("def _recreate_window_for_layout_change")
     fn_end = src.index("\n    def ", fn_def + 1)
     fn_body = src[fn_def:fn_end]
-    new_idx        = fn_body.index("new_window = GalleryWindow(app)")
-    present_idx    = fn_body.index("new_window.present()", new_idx)
-    children_loop  = fn_body.index("for child in list(app.get_windows())", present_idx)
-    child_destroy  = fn_body.index("child.destroy()", children_loop)
-    self_destroy   = fn_body.index("self.destroy()", child_destroy)
-    # Children get torn down before we destroy ourselves.
-    assert new_idx < present_idx < children_loop < child_destroy < self_destroy
-    # The loop must skip self and the new_window so we don't accidentally
-    # tear down the freshly-presented gallery.
-    skip_self = fn_body.index("child is self", children_loop)
-    skip_new  = fn_body.index("child is new_window", children_loop)
-    assert children_loop < skip_self
-    assert children_loop < skip_new
-    # The transient_for filter is what selects only modal/dialog children.
-    transient_check = fn_body.index("get_transient_for() is self", children_loop)
-    assert children_loop < transient_check < child_destroy
+    new_idx     = fn_body.index("new_window = GalleryWindow(app)")
+    present_idx = fn_body.index("new_window.present()", new_idx)
+    track_read  = fn_body.index("self._settings_dialog", present_idx)
+    destroy_dlg = fn_body.index("dialog.destroy()", track_read)
+    self_dest   = fn_body.index("self.destroy()", destroy_dlg)
+    assert new_idx < present_idx < track_read < destroy_dlg < self_dest
+    # Old (broken) loop must NOT be reintroduced.
+    assert "for child in list(app.get_windows())" not in fn_body
+
+
+def test_open_settings_is_idempotent() -> None:
+    """Clicking the gear button twice must not stack two dialogs — the
+    second click presents the existing one. Pin via source order: the
+    existing-dialog branch returns before constructing a new SettingsWindow."""
+    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    fn_def = src.index("def _open_settings(self, _button")
+    fn_end = src.index("\n    def ", fn_def + 1)
+    fn_body = src[fn_def:fn_end]
+    check_existing = fn_body.index("existing = self._settings_dialog")
+    early_present  = fn_body.index("existing.present()", check_existing)
+    early_return   = fn_body.index("return", early_present)
+    construct      = fn_body.index("dialog = SettingsWindow(self)", early_return)
+    assert check_existing < early_present < early_return < construct
+    # The newly constructed dialog is also tracked + close-listened.
+    track_idx = fn_body.index("self._settings_dialog = dialog", construct)
+    close_req = fn_body.index('dialog.connect("close-request"', track_idx)
+    destroy_c = fn_body.index('dialog.connect("destroy"', close_req)
+    assert construct < track_idx < close_req < destroy_c
 
 
 def test_recreate_does_not_auto_reopen_settings() -> None:

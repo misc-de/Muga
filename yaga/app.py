@@ -174,6 +174,15 @@ class GalleryWindow(Adw.ApplicationWindow):
         # Track last-rendered view so we can preserve scroll position on refresh
         self._last_render_key: tuple[str, str | None] | None = None
 
+        # Tracked reference to a currently-open settings dialog. Adw.Preferences-
+        # Window is transient_for the parent but not auto-registered with the
+        # Adw.Application, so app.get_windows() can't find it for cleanup. We
+        # need an explicit reference so _recreate_window_for_layout_change can
+        # destroy it before destroying the parent — without it, parent-destroy
+        # doesn't reliably cascade to the dialog and the old modal lingers,
+        # producing two visible settings dialogs after a recreate.
+        self._settings_dialog: SettingsWindow | None = None
+
         # Dynamic tile-size CSS (updated via tick callback whenever the scroller resizes)
         self._tile_css = Gtk.CssProvider()
         self._grid_width = 0
@@ -2014,7 +2023,29 @@ class GalleryWindow(Adw.ApplicationWindow):
             target.set_active(True)  # fires _on_category_toggled
 
     def _open_settings(self, _button: Gtk.Button) -> None:
-        SettingsWindow(self).present()
+        # Idempotent: if a dialog is already open, just bring it to the front
+        # instead of stacking a second one. The reference is cleared in
+        # _on_settings_dialog_closed when the dialog destroys.
+        existing = self._settings_dialog
+        if existing is not None:
+            try:
+                existing.present()
+                return
+            except Exception:
+                # Stale reference (rare race after destroy) — fall through
+                # and create a fresh one.
+                self._settings_dialog = None
+        dialog = SettingsWindow(self)
+        self._settings_dialog = dialog
+        dialog.connect("close-request", self._on_settings_dialog_closed)
+        dialog.connect("destroy", self._on_settings_dialog_closed)
+        dialog.present()
+
+    def _on_settings_dialog_closed(self, _dialog) -> bool:
+        # Drop the reference so the next gear-button click creates a fresh
+        # dialog. Returning False on close-request lets the close proceed.
+        self._settings_dialog = None
+        return False
 
     def _show_privacy_info(self, _button: Gtk.Button) -> None:
         """Show privacy and help information dialog."""
@@ -2204,26 +2235,20 @@ class GalleryWindow(Adw.ApplicationWindow):
             return
         new_window = GalleryWindow(app)
         new_window.present()
-        # Tear down our transient children (the modal settings dialog the
-        # user was in) explicitly before destroying ourselves. Letting the
-        # destroy cascade through parent → children leaves GTK's modal-grab
-        # tracker pointing at the already-destroyed dialog: the newly
-        # reopened dialog is rendered and reacts visually (hover, focus
-        # rings), but every action handler routes to the stale grab and
-        # silently no-ops. Explicit destroy on each child runs the normal
-        # close path and releases the grab cleanly.
-        for child in list(app.get_windows()):
-            if child is self or child is new_window:
-                continue
+        # Explicitly tear down our tracked settings dialog before destroying
+        # ourselves. Adw.PreferencesWindow with transient_for=parent isn't
+        # auto-registered with the Adw.Application, so iterating
+        # app.get_windows() cannot find it. Without this destroy the old
+        # dialog survives the parent destroy on some WMs and the user ends
+        # up with two settings dialogs visible after a recreate.
+        dialog = self._settings_dialog
+        if dialog is not None:
+            self._settings_dialog = None
             try:
-                if child.get_transient_for() is self:
-                    child.destroy()
+                dialog.destroy()
             except Exception:
-                # Some platforms/widgets may not implement get_transient_for
-                # via the same C-side getter; ignore and move on rather than
-                # leaving the destroy half-done.
                 pass
-        # Destroy after present + child cleanup so the app has a window at
+        # Destroy after present + dialog cleanup so the app has a window at
         # all times — Adw quits the main loop when the last window goes
         # away, which would take the new window down with it on certain WMs.
         self.destroy()
