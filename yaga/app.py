@@ -1104,11 +1104,20 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._date_last_key = key
         self.gallery_grid.append_media(item)
 
+    # English month names indexed by month-1. Used as translation keys so
+    # the in-app language switch (Translator) drives the header text
+    # instead of the system locale — strftime("%B") follows LC_TIME and
+    # ignored the user's pick in Settings → Language.
+    _MONTH_NAMES_EN = (
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    )
+
     def _month_header_markup(self, dt: datetime) -> str:
-        # Two-line month/year header (locale-aware month name); the year is sized
-        # relative to the surrounding label so it scales with the .date-header CSS.
-        month = GLib.markup_escape_text(dt.strftime("%B"))
-        year = GLib.markup_escape_text(dt.strftime("%Y"))
+        # Two-line month/year header; the year is sized relative to the
+        # surrounding label so it scales with the .date-header CSS.
+        month = GLib.markup_escape_text(self._(self._MONTH_NAMES_EN[dt.month - 1]))
+        year = GLib.markup_escape_text(f"{dt.year:04d}")
         return (
             f"<span weight='600'>{month}</span>\n"
             f"<span size='65%' alpha='65%'>{year}</span>"

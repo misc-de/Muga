@@ -243,6 +243,22 @@ TRANSLATIONS = {
         "Dimensions": "Dimensions",
         "Modified": "Modified",
         "Size": "Size",
+        # Month names (date-sort headers). English defaults are identity
+        # mappings, but the keys are duplicated explicitly here so the
+        # translator never falls back to the bare key with a stale
+        # comment.
+        "January": "January",
+        "February": "February",
+        "March": "March",
+        "April": "April",
+        "May": "May",
+        "June": "June",
+        "July": "July",
+        "August": "August",
+        "September": "September",
+        "October": "October",
+        "November": "November",
+        "December": "December",
     },
     "de": {
         # Navigation / gallery
@@ -485,6 +501,19 @@ TRANSLATIONS = {
         "Dimensions": "Abmessungen",
         "Modified": "Geändert",
         "Size": "Größe",
+        # Month names (date-sort headers).
+        "January": "Januar",
+        "February": "Februar",
+        "March": "März",
+        "April": "April",
+        "May": "Mai",
+        "June": "Juni",
+        "July": "Juli",
+        "August": "August",
+        "September": "September",
+        "October": "Oktober",
+        "November": "November",
+        "December": "Dezember",
     },
 }
 
