@@ -184,7 +184,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.slideshow_button.set_visible(False)
         header.pack_end(self.slideshow_button)
 
-        self.share_button = Gtk.Button.new_from_icon_name("share-public-symbolic")
+        self.share_button = Gtk.Button.new_from_icon_name("folder-publicshare-symbolic")
         self.share_button.set_tooltip_text(parent._("Share"))
         self.share_button.connect("clicked", self._on_share_clicked)
         self.share_button.set_visible(False)

@@ -385,7 +385,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_move_btn.connect("clicked", lambda _: self._sel_move_selected())
         self.header.pack_start(self._sel_move_btn)
 
-        self._sel_share_btn = Gtk.Button.new_from_icon_name("share-public-symbolic")
+        self._sel_share_btn = Gtk.Button.new_from_icon_name("folder-publicshare-symbolic")
         self._sel_share_btn.set_tooltip_text(self._("Share selected"))
         self._sel_share_btn.set_visible(False)
         self._sel_share_btn.connect("clicked", lambda _: self._sel_share_selected())
@@ -506,16 +506,19 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._pull_threshold_px = 80.0
         self._pull_animation: Adw.TimedAnimation | None = None
         pull_gesture = Gtk.GestureDrag.new()
-        pull_gesture.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        # CAPTURE phase: we have to observe motion *before* the inner
+        # ScrolledWindow's pan gesture claims it. With BUBBLE the pan
+        # already swallowed pure-vertical touches at the top edge of
+        # categories with lots of tiles (Overview, Photos) — the user
+        # then had to jerk horizontally first to "free" the sequence
+        # before the vertical pull would register.
+        pull_gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         pull_gesture.connect("drag-begin", self._on_pull_drag_begin)
         pull_gesture.connect("drag-update", self._on_pull_drag_update)
         pull_gesture.connect("drag-end", self._on_pull_drag_end)
-        # Attach to the overlay (gallery_grid), not the scroller itself.
-        # ScrolledWindow ships with its own internal pan gesture; mounting
-        # our GestureDrag on the same widget made it fire inconsistently
-        # in categories with lots of tiles (Photos, Overview). The overlay
-        # has no competing controller and is the same widget folder_swipe
-        # uses successfully.
+        # Attach to the overlay (gallery_grid), not the scroller itself —
+        # the overlay has no competing pan controller and is the same
+        # widget folder_swipe uses successfully.
         self.gallery_grid.add_controller(pull_gesture)
         folder_swipe = Gtk.GestureSwipe()
         folder_swipe.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
@@ -547,6 +550,22 @@ class GalleryWindow(Adw.ApplicationWindow):
         else:
             self.toolbar.set_content(content)
         self._rebuild_categories()
+
+        # Mobile breakpoint: at narrow widths the titlebar Refresh icon
+        # disappears (pull-to-refresh handles it on touch), keeping the
+        # header from looking cramped next to the back arrow on phones.
+        breakpoint = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse("max-width: 600px"),
+        )
+        breakpoint.add_setter(self.refresh_button, "visible", False)
+        # Clear any pre-existing breakpoints on rebuilds (nav-layout swap
+        # recreates the window, but apply_settings rebuilds in place).
+        try:
+            self.add_breakpoint(breakpoint)
+        except Exception:
+            # Older libadwaita doesn't expose breakpoints — silently fall
+            # back to "icon always visible". Better than crashing the UI.
+            pass
 
     # ------------------------------------------------------------------
     # Sort popover
@@ -1673,7 +1692,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         for label, icon, callback in [
             ("Delete", "user-trash-symbolic", self._delete_item),
             ("Move", "document-revert-symbolic", self._move_item),
-            ("Share", "share-public-symbolic", self._share_item),
+            ("Share", "folder-publicshare-symbolic", self._share_item),
             ("Open externally", "document-open-symbolic", self._open_externally),
         ]:
             button = Gtk.Button()
