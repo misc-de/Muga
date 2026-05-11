@@ -40,6 +40,11 @@ class Settings:
     # string falls back to Path(path).name. Stored as a parallel list (not as
     # tuples) to keep settings.json human-editable and JSON-serialisable.
     extra_location_names: list[str] = field(default_factory=list)
+    # "Do not inherit" flag per extra location, index-aligned. When True, any
+    # *other* category whose root is a parent of this folder will not include
+    # its content during scans — useful when a subfolder is exposed as its
+    # own category and shouldn't be listed twice.
+    extra_location_no_inherit: list[bool] = field(default_factory=list)
     sort_mode: str = "newest"
     sort_modes: dict = field(default_factory=dict)
     theme: str = "system"
@@ -141,6 +146,19 @@ class Settings:
             label, path = spec
             cats.append((key, label, path))
         return cats
+
+    def excluded_subtrees(self) -> list[str]:
+        """Absolute paths of extra locations flagged "do not inherit". The
+        scanner subtracts these from any parent root's recursive walk so a
+        single folder is never listed under both its own category and a
+        containing one."""
+        out: list[str] = []
+        for i, p in enumerate(self.extra_locations):
+            if i >= len(self.extra_location_no_inherit):
+                break
+            if self.extra_location_no_inherit[i] and p:
+                out.append(str(Path(p).expanduser()))
+        return out
 
     # ------------------------------------------------------------------
     # Nextcloud helpers

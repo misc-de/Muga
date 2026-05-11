@@ -970,13 +970,14 @@ class SettingsWindow(Adw.PreferencesWindow):
             path = file.get_path()
             if not path or path in self.settings.extra_locations:
                 return
-            # Append the new location to extra_locations and to the order list,
-            # so the new entry shows up at the bottom of the listbox.
+            # self.settings was built via `Settings(**parent.settings.__dict__)`,
+            # so its list attributes are *the same* objects as parent's — one
+            # append per list reaches both. A second append on the parent ref
+            # was the cause of every new folder showing up twice.
             self.settings.extra_locations.append(path)
             self.settings.extra_location_names.append("")
+            self.settings.extra_location_no_inherit.append(False)
             new_idx = len(self.settings.extra_locations) - 1
-            self.parent_window.settings.extra_locations.append(path)
-            self.parent_window.settings.extra_location_names.append("")
             order = list(self.settings.media_folder_order or [])
             order.append(f"location:{new_idx}")
             self.settings.media_folder_order = order
@@ -1033,11 +1034,13 @@ class SettingsWindow(Adw.PreferencesWindow):
         new_extras.pop(idx)
         self.settings.extra_locations = new_extras
         self.parent_window.settings.extra_locations = list(new_extras)
-        # Names list runs in lock-step with the paths.
+        # Names + no-inherit lists run in lock-step with the paths. They are
+        # shared with parent.settings (shallow-copy in __init__), so one
+        # pop per list is enough — popping twice removed the next entry too.
         if idx < len(self.settings.extra_location_names):
             self.settings.extra_location_names.pop(idx)
-        if idx < len(self.parent_window.settings.extra_location_names):
-            self.parent_window.settings.extra_location_names.pop(idx)
+        if idx < len(self.settings.extra_location_no_inherit):
+            self.settings.extra_location_no_inherit.pop(idx)
 
         renumbered: list[str] = []
         for k in (self.settings.media_folder_order or []):
@@ -1069,6 +1072,11 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.settings.extra_location_names[idx]
             if idx < len(self.settings.extra_location_names)
             else ""
+        )
+        current_no_inherit = (
+            self.settings.extra_location_no_inherit[idx]
+            if idx < len(self.settings.extra_location_no_inherit)
+            else False
         )
         # Pre-fill with whatever is currently shown as the entry label so the
         # user starts editing from the value they actually see.
@@ -1117,9 +1125,18 @@ class SettingsWindow(Adw.PreferencesWindow):
         browse.connect("clicked", _open_picker)
         path_row.add_suffix(browse)
 
+        inherit_row = Adw.SwitchRow(
+            title=self._("Don't inherit"),
+            subtitle=self._(
+                "Parent folders won't include this folder's content during scans."
+            ),
+        )
+        inherit_row.set_active(bool(current_no_inherit))
+
         group = Adw.PreferencesGroup()
         group.add(name_row)
         group.add(path_row)
+        group.add(inherit_row)
         dialog.set_extra_child(group)
 
         dialog.add_response("cancel", self._("Cancel"))
@@ -1133,16 +1150,16 @@ class SettingsWindow(Adw.PreferencesWindow):
                 return
             new_name = name_row.get_text().strip()
             new_path = path_row.get_text().strip() or current_path
-            # Apply
+            new_no_inherit = bool(inherit_row.get_active())
+            # The list fields are shared with parent.settings (shallow-copy in
+            # __init__), so one write per list reaches both.
             self.settings.extra_locations[idx] = new_path
-            self.parent_window.settings.extra_locations[idx] = new_path
-            # Pad names list to match index length.
             while len(self.settings.extra_location_names) <= idx:
                 self.settings.extra_location_names.append("")
-            while len(self.parent_window.settings.extra_location_names) <= idx:
-                self.parent_window.settings.extra_location_names.append("")
             self.settings.extra_location_names[idx] = new_name
-            self.parent_window.settings.extra_location_names[idx] = new_name
+            while len(self.settings.extra_location_no_inherit) <= idx:
+                self.settings.extra_location_no_inherit.append(False)
+            self.settings.extra_location_no_inherit[idx] = new_no_inherit
             self.parent_window.settings.save()
             # Refresh the row (title falls back to basename if name is empty)
             display_title = new_name or Path(new_path).name or new_path

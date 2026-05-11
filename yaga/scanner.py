@@ -21,11 +21,13 @@ class MediaScanner:
         self.missing_root: dict[str, str] = {}
 
     def scan(self, categories: list[tuple[str, str, str]], nc_client=None,
-             nc_thumbnail_only: bool = True) -> None:
+             nc_thumbnail_only: bool = True,
+             excluded_subtrees: list[str] | None = None) -> None:
         started = time.time()
         scanned_categories: list[str] = []
         self._visited_inodes.clear()  # Reset for fresh scan
-        
+        excluded_paths = [Path(p).expanduser() for p in (excluded_subtrees or [])]
+
         for category, _label, root_text in categories:
             if category == "nextcloud":
                 if nc_client is not None:
@@ -47,15 +49,35 @@ class MediaScanner:
             if root.is_symlink():
                 LOGGER.warning("Skipping symlink root folder: %s", root)
                 continue
-            
+
+            # Subtrees flagged "do not inherit" that live *strictly* inside the
+            # current root: their content belongs to their own category only.
+            # `is_relative_to(root)` would also be True for root itself; that
+            # case is excluded so a no-inherit folder still gets scanned as
+            # its own category.
+            skip_prefixes: list[Path] = []
+            for ex in excluded_paths:
+                try:
+                    if ex != root and ex.is_relative_to(root):
+                        skip_prefixes.append(ex)
+                except ValueError:
+                    continue
+
             for path in root.rglob("*"):
                 # Skip symlinks to prevent infinite loops and unexpected behavior
                 if path.is_symlink():
                     LOGGER.debug("Skipping symlink: %s", path)
                     continue
-                
+
                 if not path.is_file():
                     continue
+
+                if skip_prefixes:
+                    if any(
+                        path == sp or sp in path.parents
+                        for sp in skip_prefixes
+                    ):
+                        continue
                 
                 # Optional: Track visited directories (inode) to detect symlink loops
                 # This provides defense-in-depth if rglob() encounters symlinks

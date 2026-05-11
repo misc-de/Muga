@@ -800,7 +800,10 @@ class GalleryWindow(Adw.ApplicationWindow):
                     if c != "nextcloud"
                 ]
             if local_cats:
-                self.scanner.scan(local_cats)
+                self.scanner.scan(
+                    local_cats,
+                    excluded_subtrees=self.settings.excluded_subtrees(),
+                )
 
             # Phase 2: NC structure scan (no thumbnails)
             if nc_client is not None:

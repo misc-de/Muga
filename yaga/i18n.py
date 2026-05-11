@@ -71,6 +71,9 @@ TRANSLATIONS = {
         "The name appears as the entry label in the gallery navigation.":
             "The name appears as the entry label in the gallery navigation.",
         "Path": "Path",
+        "Don't inherit": "Don't inherit",
+        "Parent folders won't include this folder's content during scans.":
+            "Parent folders won't include this folder's content during scans.",
         "Search": "Search",
         "Filename, date, month, EXIF…": "Filename, date, month, EXIF…",
         "Search: %d hits": "Search: %d hits",
@@ -299,6 +302,10 @@ TRANSLATIONS = {
         "The name appears as the entry label in the gallery navigation.":
             "Der Name erscheint als Beschriftung in der Galerie-Navigation.",
         "Path": "Pfad",
+        "Don't inherit": "Nicht vererben",
+        "Parent folders won't include this folder's content during scans.":
+            "Übergeordnete Ordner berücksichtigen den Inhalt dieses Ordners "
+            "beim Scan nicht.",
         "Search": "Suchen",
         "Filename, date, month, EXIF…": "Dateiname, Datum, Monat, EXIF…",
         "Search: %d hits": "Suche: %d Treffer",
