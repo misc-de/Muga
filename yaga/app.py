@@ -2000,42 +2000,68 @@ class GalleryWindow(Adw.ApplicationWindow):
         if velocity_x > 0:
             self._go_back_folder()
 
-    # Motion in px before we steal the sequence from a category button. Smaller
-    # than a pure click drift but large enough that a finger-down "settle" on
-    # a button doesn't count as a swipe.
-    _NAV_SWIPE_CLAIM_PX = 24
+    # Motion in px below which we treat a press+release as a tap (synthesise
+    # the button click) rather than a swipe. Above this on the primary axis
+    # the existing _on_nav_swipe velocity logic gets a shot.
+    _NAV_SWIPE_TAP_PX = 16
 
-    def _on_nav_drag_begin(self, _gesture: Gtk.GestureDrag, _x: float, _y: float) -> None:
-        # Record start time so drag-end can compute a px/s velocity matching
-        # what Gtk.GestureSwipe would have provided. monotonic time avoids
-        # NTP-jitter weirdness on long drags.
+    def _on_nav_drag_begin(self, gesture: Gtk.GestureDrag, x: float, y: float) -> None:
+        # Claim immediately so the ToggleButton's internal Gtk.GestureClick
+        # can't lock the press sequence and starve us of motion / release
+        # events. With "claim on motion threshold" the click already won by
+        # the time motion accumulated, which is why every previous variant
+        # failed to swipe over icons. We pay for this by losing the button's
+        # press visual; in exchange the gesture is reliable.
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
         self._nav_drag_start_us = GLib.get_monotonic_time()
-        self._nav_drag_claimed = False
+        # Remember which button the press landed on so a non-swipe release
+        # can synthesise the click that the denied GestureClick would have.
+        self._nav_press_button = self._find_nav_button_at(x, y)
 
-    def _on_nav_drag_update(self, gesture: Gtk.GestureDrag, ox: float, oy: float) -> None:
-        if getattr(self, "_nav_drag_claimed", False):
-            return
+    def _on_nav_drag_update(self, _gesture: Gtk.GestureDrag, _ox: float, _oy: float) -> None:
+        # Decisions happen on drag-end; cumulative offset is the truthful signal.
+        return
+
+    def _on_nav_drag_end(self, _gesture: Gtk.GestureDrag, ox: float, oy: float) -> None:
+        elapsed_us = max(1, GLib.get_monotonic_time() - getattr(self, "_nav_drag_start_us", 0))
         is_vertical = (
             self.nav_box.get_orientation() == Gtk.Orientation.VERTICAL
         )
         primary, secondary = (oy, ox) if is_vertical else (ox, oy)
-        if abs(primary) < self._NAV_SWIPE_CLAIM_PX:
-            return
-        if abs(primary) <= abs(secondary):
-            # Off-axis drag — likely the user is dragging in a direction
-            # the nav layout doesn't navigate. Don't steal the sequence so
-            # the button click still has a chance once they release.
-            return
-        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-        self._nav_drag_claimed = True
+        press_button = getattr(self, "_nav_press_button", None)
+        self._nav_press_button = None
 
-    def _on_nav_drag_end(self, _gesture: Gtk.GestureDrag, ox: float, oy: float) -> None:
-        if not getattr(self, "_nav_drag_claimed", False):
+        if abs(primary) >= self._NAV_SWIPE_TAP_PX and abs(primary) > abs(secondary):
+            # Real swipe — convert offset/time to px/s and reuse the swipe handler.
+            scale = 1_000_000 / elapsed_us
+            self._on_nav_swipe(None, ox * scale, oy * scale)
             return
-        elapsed_us = max(1, GLib.get_monotonic_time() - getattr(self, "_nav_drag_start_us", 0))
-        # px/s — matches the units the existing _on_nav_swipe handler expects.
-        scale = 1_000_000 / elapsed_us
-        self._on_nav_swipe(None, ox * scale, oy * scale)
+        # Tap: synthesise the click on the button that was under the press
+        # point. set_active(True) emits "toggled" → _on_category_toggled,
+        # exactly the path a normal click would have followed.
+        if press_button is not None and not press_button.get_active():
+            try:
+                press_button.set_active(True)
+            except Exception:
+                pass
+
+    def _find_nav_button_at(self, x: float, y: float) -> "Gtk.ToggleButton | None":
+        """Walk nav_box children and return the ToggleButton whose
+        allocation contains (x, y) in nav_box coords. Used by the swipe
+        gesture to know which category a finger-down was aiming at, even
+        though we claim the sequence before the button's click sees it."""
+        child = self.nav_box.get_first_child()
+        while child is not None:
+            if isinstance(child, Gtk.ToggleButton):
+                ok, bounds = child.compute_bounds(self.nav_box)
+                if ok:
+                    bx = bounds.get_x()
+                    by = bounds.get_y()
+                    if (bx <= x <= bx + bounds.get_width()
+                        and by <= y <= by + bounds.get_height()):
+                        return child
+            child = child.get_next_sibling()
+        return None
 
     def _on_nav_swipe(self, _gesture, velocity_x: float, velocity_y: float) -> None:
         """Swipe on the nav bar to step through categories along its main axis.

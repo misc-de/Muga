@@ -1325,34 +1325,121 @@ def _make_nav_swipe_fake(category: str, cats: list[str], orientation):
     return fake, activated
 
 
-def test_nav_swipe_uses_drag_with_explicit_claim_to_steal_from_button_click() -> None:
-    """Regression: GestureSwipe in either CAPTURE or BUBBLE didn't help because
-    the category buttons' internal Gtk.GestureClick claims the sequence on
-    press and doesn't release on mere in-bounds motion — so the swipe
-    gesture never saw motion or release events. The fix is GestureDrag in
-    CAPTURE that explicitly sets state to CLAIMED on a motion threshold,
-    cancelling the button's pending click and taking ownership of the
-    sequence. A stationary tap never crosses the threshold so clicks
-    still work."""
+def test_nav_swipe_claims_sequence_at_press_not_at_motion() -> None:
+    """Regression: even claim-on-motion was too late. The category buttons'
+    internal Gtk.GestureClick claims the press sequence immediately on the
+    press event, before any motion accumulates. By the time the swipe
+    drag-update fires with enough motion to claim, the click already owns
+    the sequence and motion events are routed to it alone. Fix: claim in
+    drag-begin (i.e. on press). Tap is then synthesised in drag-end by
+    calling set_active(True) on the button under the press point — exactly
+    the path a real button click would have followed."""
     src = Path("yaga/app.py").read_text(encoding="utf-8")
-    drag_def = src.index("nav_drag = Gtk.GestureDrag()")
-    add_ctrl = src.index("self.nav_box.add_controller(nav_drag)", drag_def)
-    block    = src[drag_def:add_ctrl]
-    assert "Gtk.PropagationPhase.CAPTURE" in block
-    # The three drag-* signals must all be wired so we can claim on motion
-    # and compute a velocity at release.
-    assert 'connect("drag-begin"' in block
-    assert 'connect("drag-update"' in block
-    assert 'connect("drag-end"' in block
-    # The explicit claim must live in drag-update, fired on the motion
-    # threshold being exceeded. Without the claim, the button click still
-    # owns the sequence and our handler sees no release.
+    begin_fn = src.index("def _on_nav_drag_begin")
+    begin_end = src.index("\n    def ", begin_fn + 1)
+    begin_body = src[begin_fn:begin_end]
+    # Claim is in drag-begin, not drag-update.
+    assert "Gtk.EventSequenceState.CLAIMED" in begin_body
+    assert "set_state" in begin_body
+    # The button under the press is remembered so drag-end can synthesise
+    # a click on it for the tap case.
+    assert "_find_nav_button_at" in begin_body
+    assert "_nav_press_button" in begin_body
+
+    # drag-update must NOT claim — the decision is already made by begin.
     update_fn = src.index("def _on_nav_drag_update")
     update_end = src.index("\n    def ", update_fn + 1)
     update_body = src[update_fn:update_end]
-    assert "Gtk.EventSequenceState.CLAIMED" in update_body
-    assert "set_state" in update_body
-    assert "_NAV_SWIPE_CLAIM_PX" in update_body
+    assert "Gtk.EventSequenceState.CLAIMED" not in update_body
+    assert "set_state" not in update_body
+
+    # drag-end either fires _on_nav_swipe (motion past threshold) or
+    # synthesises a tap via set_active(True) on the remembered button.
+    end_fn = src.index("def _on_nav_drag_end")
+    end_end = src.index("\n    def ", end_fn + 1)
+    end_body = src[end_fn:end_end]
+    assert "_on_nav_swipe(None," in end_body
+    assert "set_active(True)" in end_body
+    assert "_NAV_SWIPE_TAP_PX" in end_body
+
+
+def test_find_nav_button_at_walks_nav_box_children() -> None:
+    """The helper finds the ToggleButton whose allocation contains a press
+    point — used so the tap-fallback can fire the right button's toggled
+    handler even though we claimed the sequence before the click saw it."""
+    from yaga.app import GalleryWindow
+    from gi.repository import Gtk
+
+    # Build a fake nav_box with two "buttons" at known positions.
+    class _FakeBtn(Gtk.ToggleButton):
+        def __init__(self, bx, by, bw, bh):
+            super().__init__()
+            self._b = SimpleNamespace(
+                get_x=lambda: bx, get_y=lambda: by,
+                get_width=lambda: bw, get_height=lambda: bh,
+            )
+        def compute_bounds(self, _ancestor):
+            return True, self._b
+
+    b1 = _FakeBtn(0, 0, 50, 40)
+    b2 = _FakeBtn(50, 0, 50, 40)
+    # Walk via get_first_child / get_next_sibling; emulate with a closure.
+    siblings = {id(b1): b2, id(b2): None}
+    nav_box = SimpleNamespace(
+        get_first_child=lambda: b1,
+    )
+    # Patch get_next_sibling on each
+    b1.get_next_sibling = lambda: b2
+    b2.get_next_sibling = lambda: None
+    fake = SimpleNamespace(nav_box=nav_box)
+    # Point in b1.
+    found = GalleryWindow._find_nav_button_at(fake, 10.0, 10.0)
+    assert found is b1
+    # Point in b2.
+    found = GalleryWindow._find_nav_button_at(fake, 75.0, 10.0)
+    assert found is b2
+    # Point outside both.
+    assert GalleryWindow._find_nav_button_at(fake, 200.0, 200.0) is None
+
+
+def test_date_header_arrows_hidden_at_first_and_last_header() -> None:
+    """User asked: first (newest) header has no up arrow, last (oldest) has
+    no down arrow — there's nothing to jump to in those directions. Pin via
+    the bind-time visibility logic that the _apply_binding header branch
+    sets per-row, using _find_adjacent_header_pos to decide."""
+    src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    apply_def = src.index("def _apply_binding")
+    apply_end = src.index("\n    def ", apply_def + 1)
+    apply_body = src[apply_def:apply_end]
+    # Both arrows have their visibility wired to whether an adjacent header
+    # exists in the corresponding direction.
+    assert "stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1)" in apply_body
+    assert "stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1)" in apply_body
+
+
+def test_header_nav_uses_estimate_plus_retry_for_robust_alignment() -> None:
+    """User reported the jump 'sometimes wrong, sometimes confusing'. The
+    fix: pre-position by an estimate (gets the target into ListView's bind
+    window) AND retry the precise alignment until the target is actually
+    bound. Single-shot idle_add was the source of the off-target case."""
+    src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    nav_def = src.index("def _on_header_nav")
+    nav_end = src.index("\n    def ", nav_def + 1)
+    nav_body = src[nav_def:nav_end]
+    # Phase 1 estimate is set on the vadjustment to bring the target row
+    # close enough for ListView to bind it.
+    assert "_estimate_content_y_at" in nav_body
+    assert "_set_vadj_clamped" in nav_body
+    # Phase 2 is a retry loop, not a single-shot idle.
+    assert "_begin_align_retries" in nav_body
+    # And the retry loop itself caps attempts to avoid busy-looping.
+    retry_def = src.index("def _begin_align_retries")
+    retry_end = src.index("\n    def ", retry_def + 1)
+    retry_body = src[retry_def:retry_end]
+    assert "attempts" in retry_body
+    assert "<= 0" in retry_body  # the cap check
+    assert "GLib.SOURCE_CONTINUE" in retry_body
+    assert "GLib.SOURCE_REMOVE" in retry_body
 
 
 def test_find_adjacent_header_pos_walks_row_store() -> None:
@@ -1410,6 +1497,7 @@ def test_align_target_header_uses_actual_widget_bounds() -> None:
     )
     fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
     fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
     # Source was at screen_y = 250 (some click-target Y the user hit).
     GalleryGrid._align_target_header(fake, 7, 250.0)
     # New vadj so target_content_y(1234) - new_vadj == target_screen_y(250)
@@ -1439,16 +1527,17 @@ def test_align_target_header_clamps_to_adjustment_range() -> None:
     )
     fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
     fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
     # tgt_y(50) - target_screen_y(500) = -450, which would be a negative
     # vadjustment value — clamp to 0.
     GalleryGrid._align_target_header(fake, 0, 500.0)
     assert set_values == [0.0]
 
 
-def test_align_target_header_bails_when_target_not_bound() -> None:
-    """If scroll_to didn't manage to bind the target row in time (rare —
-    overscan usually covers it), the alignment idle callback must just
-    bail rather than crashing or moving the scroll position randomly."""
+def test_align_target_header_returns_false_when_target_not_bound() -> None:
+    """The retry loop relies on a boolean return to know whether to keep
+    trying. False = not bound yet, try again on the next tick; True =
+    aligned successfully, stop. No vadjustment change on failure."""
     from yaga.gallery_grid import GalleryGrid
     set_values: list[float] = []
     vadj = SimpleNamespace(
@@ -1462,11 +1551,36 @@ def test_align_target_header_bails_when_target_not_bound() -> None:
     )
     fake._bound_widget_at = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
     fake._content_y_of    = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
     result = GalleryGrid._align_target_header(fake, 42, 250.0)
     assert set_values == []
-    # Returns SOURCE_REMOVE so it's not retried (the idle is one-shot).
-    from gi.repository import GLib
-    assert result == GLib.SOURCE_REMOVE
+    assert result is False
+
+
+def test_align_target_header_returns_true_on_success() -> None:
+    """When the target IS bound, alignment fires + returns True so the
+    retry loop stops at the first successful tick."""
+    from yaga.gallery_grid import GalleryGrid
+    fake_bounds = SimpleNamespace(get_y=lambda: 1234.0)
+    target_widget = SimpleNamespace(compute_bounds=lambda _g: (True, fake_bounds))
+    fake_li = SimpleNamespace(get_position=lambda: 7, get_child=lambda: target_widget)
+    set_values: list[float] = []
+    vadj = SimpleNamespace(
+        get_value=lambda: 600.0, get_upper=lambda: 5000.0, get_page_size=lambda: 800.0,
+        set_value=lambda v: set_values.append(v),
+    )
+    fake = SimpleNamespace(
+        _bound_list_items=[fake_li],
+        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
+        grid_view=SimpleNamespace(),
+    )
+    fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
+    fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
+    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
+    result = GalleryGrid._align_target_header(fake, 7, 250.0)
+    # tgt_y(1234) - screen_y(250) = 984
+    assert set_values == [984.0]
+    assert result is True
 
 
 def test_date_header_nav_box_spacing_is_at_least_20px() -> None:

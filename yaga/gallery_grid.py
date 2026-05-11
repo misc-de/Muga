@@ -342,26 +342,32 @@ class GalleryGrid(Gtk.Overlay):
         """Jump to the next/previous header row from *header_box*'s row.
         direction = -1 for the up arrow (previous header in row order),
         +1 for the down arrow (next header in row order). Sort-direction
-        independent — the arrows always navigate by visible row order.
+        independent — arrows always navigate by visible row order.
 
-        Robust alignment strategy: rather than estimating the inter-row
-        delta via constant heights (which drifts when the cell size doesn't
-        match the assumed value, or when ListView injects internal
-        per-row padding), we measure the actual on-screen geometry of both
-        headers via Gtk.Widget.compute_bounds against the listview's
-        scrollable coord space. The source is rendered (the click just
-        landed on it), so its Y is known exactly. We scroll_to the target
-        to force a bind, then on the next idle tick (after GTK's layout
-        pass) measure the target's actual Y and set the vadjustment so the
-        target lands at exactly the screen Y the source was at. Rapid
-        click-through then keeps every consecutive arrow under the cursor.
+        Two-phase alignment so the jump lands pixel-perfectly even when the
+        target was far enough away to be unbound:
+
+        1. **Pre-position**: jump vadjustment by an estimate (sum of header
+           and tile-row heights between source and target). The estimate is
+           usually slightly off, but it brings the target into the bind
+           window so ListView materialises its widget.
+        2. **Refine**: an idle/tick retry loop runs until the target widget
+           is bound. It then reads the target's *actual* content_y via
+           compute_bounds and adjusts vadjustment so the target sits at
+           exactly the screen Y the source was at.
+
+        Retrying is the key robustness improvement over the previous
+        scroll_to + single-shot idle_add: ListView's bind can take several
+        layout passes for distant rows, and one idle tick sometimes wasn't
+        enough — the alignment silently bailed and the user landed in
+        whichever position scroll_to chose (often top of viewport).
         """
         list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
         if list_item is None:
             return
-        target_pos = self._find_adjacent_header_pos(list_item.get_position(), direction)
+        current_pos = list_item.get_position()
+        target_pos = self._find_adjacent_header_pos(current_pos, direction)
         if target_pos is None:
-            # No adjacent header (top/bottom of list, or single-month range).
             return
         src_widget = list_item.get_child()
         if src_widget is None:
@@ -374,18 +380,64 @@ class GalleryGrid(Gtk.Overlay):
         # to land on.
         target_screen_y = src_y - vadj.get_value()
 
-        # Make sure the target gets bound so we can measure it. ListView's
-        # scroll_to brings it into view but the precise Y typically isn't
-        # what we want — we'll override below.
-        self.grid_view.scroll_to(target_pos, Gtk.ListScrollFlags.NONE, None)
-
-        # Layout hasn't run yet at this point, so measuring inline would give
-        # the *pre-scroll* coordinates. Defer until idle, when the layout
-        # pass kicked off by scroll_to has settled, then align precisely.
-        GLib.idle_add(
-            self._align_target_header, target_pos, target_screen_y,
-            priority=GLib.PRIORITY_HIGH_IDLE,
+        # Phase 1: pre-position via estimate. Brings the target into the
+        # ListView bind window.
+        estimated_target_y = self._estimate_content_y_at(
+            current_pos, target_pos, src_widget, src_y,
         )
+        if estimated_target_y is not None:
+            self._set_vadj_clamped(vadj, estimated_target_y - target_screen_y)
+
+        # Phase 2: retry alignment until target is actually bound. Cap
+        # retries so we don't busy-loop forever on edge cases (e.g. ListView
+        # decides not to bind because the row is past the end somehow).
+        self._begin_align_retries(target_pos, target_screen_y, attempts=12)
+
+    def _estimate_content_y_at(
+        self, current_pos: int, target_pos: int,
+        src_widget: Gtk.Widget, src_y: float,
+    ) -> float | None:
+        """Quick estimate of target row's content_y. Uses the source
+        header's actually-allocated height for the header constant and
+        cell_size for tile rows. Off by a few pixels is fine — phase 2
+        corrects to the exact value once the target widget is bound."""
+        header_h = src_widget.get_allocated_height() or 152
+        scroller_width = self.scroller.get_width() or 800
+        cols = self._cols or 4
+        tile_h = max(32, scroller_width // cols)
+        start = min(current_pos, target_pos)
+        end   = max(current_pos, target_pos)
+        delta = 0.0
+        for i in range(start, end):
+            row = self.row_store.get_item(i)
+            if row is None:
+                continue
+            delta += header_h if row.is_header else tile_h
+        if target_pos < current_pos:
+            delta = -delta
+        return src_y + delta
+
+    def _set_vadj_clamped(self, vadj: Gtk.Adjustment, value: float) -> None:
+        upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
+        vadj.set_value(max(0.0, min(value, upper)))
+
+    def _begin_align_retries(
+        self, target_pos: int, target_screen_y: float, attempts: int,
+    ) -> None:
+        """Schedule a retry-until-bound alignment chain. Each tick checks
+        whether ListView has bound the target row; if so, snap to exact
+        pixel alignment via _align_target_header and stop. If not,
+        decrement and retry. Cap exists so we don't busy-loop forever."""
+        state = {"attempts": attempts}
+        def _try() -> bool:
+            if self._align_target_header(target_pos, target_screen_y) is True:
+                return GLib.SOURCE_REMOVE
+            state["attempts"] -= 1
+            if state["attempts"] <= 0:
+                return GLib.SOURCE_REMOVE
+            return GLib.SOURCE_CONTINUE
+        # ~60fps cadence; gives the layout pass a frame to bind new rows.
+        GLib.timeout_add(16, _try)
 
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header
@@ -423,23 +475,19 @@ class GalleryGrid(Gtk.Overlay):
         return None
 
     def _align_target_header(self, target_pos: int, target_screen_y: float) -> bool:
-        """Idle callback: place the target header at the same screen Y the
-        source header was at. If the target widget didn't get bound by
-        scroll_to (rare — overscan should cover it), silently bail; the
-        scroll_to has at least made it visible, and the user can click
-        again from the new header for a precise re-alignment."""
+        """Place the target header at the same screen Y the source header
+        was at. Returns True if alignment succeeded (target was bound and
+        measurable), False if it couldn't (target not yet bound — caller
+        should retry on a later tick)."""
         target_widget = self._bound_widget_at(target_pos)
         if target_widget is None:
-            return GLib.SOURCE_REMOVE
+            return False
         tgt_y = self._content_y_of(target_widget)
         if tgt_y is None:
-            return GLib.SOURCE_REMOVE
+            return False
         vadj = self.scroller.get_vadjustment()
-        new_value = tgt_y - target_screen_y
-        upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
-        new_value = max(0.0, min(new_value, upper))
-        vadj.set_value(new_value)
-        return GLib.SOURCE_REMOVE
+        self._set_vadj_clamped(vadj, tgt_y - target_screen_y)
+        return True
 
     # ------------------------------------------------------------------
     # Factory callbacks
@@ -461,6 +509,12 @@ class GalleryGrid(Gtk.Overlay):
         nav_up.add_css_class("flat")
         nav_up.add_css_class("date-header-nav")
         nav_up.set_tooltip_text("Previous month")
+        # set_visible(False) on per-bind basis: the first (newest) header has
+        # no previous month, the last (oldest) has no next month. Hidden
+        # buttons still occupy layout space; using set_opacity / set_sensitive
+        # would keep them visually present, but the user asked for them gone
+        # at the boundaries. Layout adapts because the parent vbox doesn't
+        # reserve a slot for an invisible child.
         nav_down = Gtk.Button.new_from_icon_name("go-down-symbolic")
         nav_down.add_css_class("flat")
         nav_down.add_css_class("date-header-nav")
@@ -502,6 +556,8 @@ class GalleryGrid(Gtk.Overlay):
         stack.add_named(tile_box, "tiles")
         stack._header_lbl = header_lbl       # type: ignore[attr-defined]
         stack._header_box = header_box       # type: ignore[attr-defined]
+        stack._nav_up = nav_up               # type: ignore[attr-defined]
+        stack._nav_down = nav_down           # type: ignore[attr-defined]
         stack._tile_buttons = tile_buttons   # type: ignore[attr-defined]
         # Stamped fresh on every bind in _apply_binding so the recycled pool
         # widget's arrow handlers always see the current row's list_item.
@@ -637,6 +693,13 @@ class GalleryGrid(Gtk.Overlay):
             # position to navigate from (pool widgets are recycled, so the
             # closure captured at setup time has no row identity on its own).
             stack._header_box._list_item = list_item
+            # Hide the up arrow at the first (newest) header and the down arrow
+            # at the last (oldest) — there's nothing to navigate to in those
+            # directions. Pool widgets are recycled across positions, so we
+            # have to update visibility on every bind, not just on construction.
+            pos = list_item.get_position()
+            stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1) is not None)
+            stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1) is not None)
             return
 
         stack.set_visible_child_name("tiles")

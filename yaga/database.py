@@ -87,19 +87,59 @@ END;
 class Database:
     def __init__(self, path: Path = DB_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock = threading.RLock()
         self._db_path = path
-        self.conn = sqlite3.connect(path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        # WAL lets the scanner thread write while the main thread reads without
-        # SQLite-level blocking; synchronous=NORMAL is the recommended pairing
-        # (durable on power loss, far cheaper fsyncs).
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA temp_store=MEMORY")
+        # Per-thread connection storage. Each thread that touches the DB gets
+        # its own sqlite3.Connection (and its own RLock) on first access.
+        # WAL mode lets concurrent connections read/write without Python-level
+        # serialization, which is what previously caused the main thread to
+        # stall during long scanner sync passes: a single shared connection
+        # plus a global RLock meant a slow batch write would freeze
+        # gallery rendering until the batch finished. busy_timeout handles
+        # the rare write-vs-write race at the SQLite layer with a short
+        # internal wait-and-retry instead of an exception.
+        self._tls = threading.local()
+        # Initialise the *current* thread's connection so the schema/migration
+        # work below runs on a fully-configured handle.
+        self._open_conn()
         with self.lock:
             self.conn.executescript(SCHEMA_V1)
             self._migrate()
+
+    def _open_conn(self) -> "sqlite3.Connection":
+        """Open a fresh sqlite3 connection for the calling thread, applying
+        the same PRAGMAs as the main connection. Called lazily from the
+        :pyattr:`conn` property the first time each thread touches the DB."""
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        # WAL: readers + one writer in parallel, no SQLite-level blocking.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        # 5 s busy timeout so concurrent writers wait at the SQLite layer
+        # instead of raising OperationalError("database is locked").
+        conn.execute("PRAGMA busy_timeout=5000")
+        self._tls.conn = conn
+        return conn
+
+    @property
+    def conn(self) -> "sqlite3.Connection":
+        c = getattr(self._tls, "conn", None)
+        if c is None:
+            c = self._open_conn()
+        return c
+
+    @property
+    def lock(self) -> threading.RLock:
+        """Per-thread reentrant lock. Threads acquire *their own* lock — never
+        each other's — so the historic ``with self.lock:`` guards still work
+        within a single call site (executemany + ON CONFLICT etc.) without
+        re-introducing cross-thread serialization that was the actual UI
+        block during a long-running Nextcloud sync."""
+        lk = getattr(self._tls, "lock", None)
+        if lk is None:
+            lk = threading.RLock()
+            self._tls.lock = lk
+        return lk
 
     def _migrate(self) -> None:
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]

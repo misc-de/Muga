@@ -78,7 +78,12 @@ class NextcloudClient:
     # Low-level HTTP
     # ------------------------------------------------------------------
 
-    def _conn(self, timeout: float = 30.0) -> http.client.HTTPConnection:
+    def _conn(self, timeout: float = 12.0) -> http.client.HTTPConnection:
+        # 12 s default: enough for a slow but live server, short enough that
+        # a stalled connection fails fast and the user isn't staring at a
+        # spinner for the previous 30 s default. The scan-thread caller
+        # treats the timeout exception as "sync failed, try again" without
+        # blocking the UI further.
         if self.use_ssl:
             ctx = ssl.create_default_context()
             return http.client.HTTPSConnection(self.host, context=ctx, timeout=timeout)
