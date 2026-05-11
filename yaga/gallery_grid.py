@@ -339,28 +339,20 @@ class GalleryGrid(Gtk.Overlay):
             self._building_row = []
 
     def _on_header_nav(self, header_box: Gtk.Box, direction: int) -> None:
-        """Jump to the next/previous header row from *header_box*'s row.
-        direction = -1 for the up arrow (previous header in row order),
-        +1 for the down arrow (next header in row order). Sort-direction
-        independent — arrows always navigate by visible row order.
+        """Jump to the next/previous header from *header_box*'s row in a
+        single, predictable vadjustment write.
 
-        Two-phase alignment so the jump lands pixel-perfectly even when the
-        target was far enough away to be unbound:
+        direction = -1 (up arrow) → previous header in row store
+        direction = +1 (down arrow) → next header in row store
 
-        1. **Pre-position**: jump vadjustment by an estimate (sum of header
-           and tile-row heights between source and target). The estimate is
-           usually slightly off, but it brings the target into the bind
-           window so ListView materialises its widget.
-        2. **Refine**: an idle/tick retry loop runs until the target widget
-           is bound. It then reads the target's *actual* content_y via
-           compute_bounds and adjusts vadjustment so the target sits at
-           exactly the screen Y the source was at.
-
-        Retrying is the key robustness improvement over the previous
-        scroll_to + single-shot idle_add: ListView's bind can take several
-        layout passes for distant rows, and one idle tick sometimes wasn't
-        enough — the alignment silently bailed and the user landed in
-        whichever position scroll_to chose (often top of viewport).
+        Strategy: row heights are measured from currently-bound widgets
+        (source header is always rendered; tile-row height is read from any
+        bound tile-row in the viewport). Multiplying those measured heights
+        by the count of intervening rows in row_store gives the target's
+        content_y to within ListView's internal per-row padding (which is
+        zero in our configuration). We then write the vadjustment exactly
+        once so the target appears at the same screen Y the source was at —
+        no scroll_to, no retry loop, no two-stage flicker.
         """
         list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
         if list_item is None:
@@ -375,39 +367,14 @@ class GalleryGrid(Gtk.Overlay):
         src_y = self._content_y_of(src_widget)
         if src_y is None:
             return
+
         vadj = self.scroller.get_vadjustment()
-        # The screen Y the user just clicked at — what we want the new header
-        # to land on.
         target_screen_y = src_y - vadj.get_value()
 
-        # Phase 1: pre-position via estimate. Brings the target into the
-        # ListView bind window.
-        estimated_target_y = self._estimate_content_y_at(
-            current_pos, target_pos, src_widget, src_y,
-        )
-        if estimated_target_y is not None:
-            self._set_vadj_clamped(vadj, estimated_target_y - target_screen_y)
-
-        # Phase 2: retry alignment until target is actually bound. Cap
-        # retries so we don't busy-loop forever on edge cases (e.g. ListView
-        # decides not to bind because the row is past the end somehow).
-        self._begin_align_retries(target_pos, target_screen_y, attempts=12)
-
-    def _estimate_content_y_at(
-        self, current_pos: int, target_pos: int,
-        src_widget: Gtk.Widget, src_y: float,
-    ) -> float | None:
-        """Quick estimate of target row's content_y. Uses the source
-        header's actually-allocated height for the header constant and
-        cell_size for tile rows. Off by a few pixels is fine — phase 2
-        corrects to the exact value once the target widget is bound."""
-        header_h = src_widget.get_allocated_height() or 152
-        scroller_width = self.scroller.get_width() or 800
-        cols = self._cols or 4
-        tile_h = max(32, scroller_width // cols)
+        header_h, tile_h = self._measure_row_heights(src_widget)
+        delta = 0.0
         start = min(current_pos, target_pos)
         end   = max(current_pos, target_pos)
-        delta = 0.0
         for i in range(start, end):
             row = self.row_store.get_item(i)
             if row is None:
@@ -415,29 +382,46 @@ class GalleryGrid(Gtk.Overlay):
             delta += header_h if row.is_header else tile_h
         if target_pos < current_pos:
             delta = -delta
-        return src_y + delta
+
+        target_content_y = src_y + delta
+        self._set_vadj_clamped(vadj, target_content_y - target_screen_y)
+
+    def _measure_row_heights(self, src_widget: Gtk.Widget) -> tuple[float, float]:
+        """Return measured (header_h, tile_h) from currently-bound widgets.
+
+        The source header is guaranteed to be rendered (the click just
+        landed on it) so its allocation gives us the exact header row
+        height. Tile row height is read from any tile-row list_item that's
+        currently bound; if none happens to be bound (e.g. user clicked an
+        arrow while no tiles were on screen), fall back to the CSS cell_size
+        estimate. The fallback is rare and never compounds with header
+        measurement, so the residual error stays inside a single tile-row
+        height — small enough that the user's eye doesn't catch it."""
+        header_h = float(src_widget.get_allocated_height() or 152)
+        tile_h: float | None = None
+        for li in list(self._bound_list_items):
+            try:
+                row = li.get_item()
+                if row is None or row.is_header:
+                    continue
+                widget = li.get_child()
+                if widget is None:
+                    continue
+                h = widget.get_allocated_height()
+                if h > 0:
+                    tile_h = float(h)
+                    break
+            except Exception:
+                continue
+        if tile_h is None:
+            scroller_width = self.scroller.get_width() or 800
+            cols = self._cols or 4
+            tile_h = float(max(32, scroller_width // cols))
+        return header_h, tile_h
 
     def _set_vadj_clamped(self, vadj: Gtk.Adjustment, value: float) -> None:
         upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
         vadj.set_value(max(0.0, min(value, upper)))
-
-    def _begin_align_retries(
-        self, target_pos: int, target_screen_y: float, attempts: int,
-    ) -> None:
-        """Schedule a retry-until-bound alignment chain. Each tick checks
-        whether ListView has bound the target row; if so, snap to exact
-        pixel alignment via _align_target_header and stop. If not,
-        decrement and retry. Cap exists so we don't busy-loop forever."""
-        state = {"attempts": attempts}
-        def _try() -> bool:
-            if self._align_target_header(target_pos, target_screen_y) is True:
-                return GLib.SOURCE_REMOVE
-            state["attempts"] -= 1
-            if state["attempts"] <= 0:
-                return GLib.SOURCE_REMOVE
-            return GLib.SOURCE_CONTINUE
-        # ~60fps cadence; gives the layout pass a frame to bind new rows.
-        GLib.timeout_add(16, _try)
 
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header
@@ -460,34 +444,6 @@ class GalleryGrid(Gtk.Overlay):
         if not ok:
             return None
         return bounds.get_y()
-
-    def _bound_widget_at(self, pos: int) -> Gtk.Widget | None:
-        """Find the bound list_item widget for row *pos*, if any. ListView
-        recycles widgets, so the same Gtk.Stack pool entry can correspond
-        to different rows over time — list_item.get_position() resolves the
-        live mapping at lookup time."""
-        for li in list(self._bound_list_items):
-            try:
-                if li.get_position() == pos:
-                    return li.get_child()
-            except Exception:
-                continue
-        return None
-
-    def _align_target_header(self, target_pos: int, target_screen_y: float) -> bool:
-        """Place the target header at the same screen Y the source header
-        was at. Returns True if alignment succeeded (target was bound and
-        measurable), False if it couldn't (target not yet bound — caller
-        should retry on a later tick)."""
-        target_widget = self._bound_widget_at(target_pos)
-        if target_widget is None:
-            return False
-        tgt_y = self._content_y_of(target_widget)
-        if tgt_y is None:
-            return False
-        vadj = self.scroller.get_vadjustment()
-        self._set_vadj_clamped(vadj, tgt_y - target_screen_y)
-        return True
 
     # ------------------------------------------------------------------
     # Factory callbacks

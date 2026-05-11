@@ -1417,29 +1417,28 @@ def test_date_header_arrows_hidden_at_first_and_last_header() -> None:
     assert "stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1)" in apply_body
 
 
-def test_header_nav_uses_estimate_plus_retry_for_robust_alignment() -> None:
-    """User reported the jump 'sometimes wrong, sometimes confusing'. The
-    fix: pre-position by an estimate (gets the target into ListView's bind
-    window) AND retry the precise alignment until the target is actually
-    bound. Single-shot idle_add was the source of the off-target case."""
+def test_header_nav_is_single_shot_no_retry_no_scroll_to() -> None:
+    """Rebuilt jump uses a single vadjustment write — no retry loop, no
+    scroll_to, no two-phase flicker. Pin the absence of those patterns so
+    a future 'improvement' can't reintroduce the bugs the user hit when
+    we had them."""
     src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
     nav_def = src.index("def _on_header_nav")
     nav_end = src.index("\n    def ", nav_def + 1)
     nav_body = src[nav_def:nav_end]
-    # Phase 1 estimate is set on the vadjustment to bring the target row
-    # close enough for ListView to bind it.
-    assert "_estimate_content_y_at" in nav_body
+    # Strip the docstring before checking — the docstring deliberately
+    # mentions the absent constructs so the reader understands the design;
+    # we only care that they're not present in actual code.
+    import re
+    code_only = re.sub(r'"""[\s\S]*?"""', "", nav_body, count=1)
+    assert "_begin_align_retries" not in code_only
+    assert ".scroll_to(" not in code_only
+    assert "GLib.idle_add" not in code_only
+    assert "GLib.timeout_add" not in code_only
+    # The body must measure row heights from rendered widgets and write the
+    # vadjustment exactly once via the clamped helper.
+    assert "_measure_row_heights" in nav_body
     assert "_set_vadj_clamped" in nav_body
-    # Phase 2 is a retry loop, not a single-shot idle.
-    assert "_begin_align_retries" in nav_body
-    # And the retry loop itself caps attempts to avoid busy-looping.
-    retry_def = src.index("def _begin_align_retries")
-    retry_end = src.index("\n    def ", retry_def + 1)
-    retry_body = src[retry_def:retry_end]
-    assert "attempts" in retry_body
-    assert "<= 0" in retry_body  # the cap check
-    assert "GLib.SOURCE_CONTINUE" in retry_body
-    assert "GLib.SOURCE_REMOVE" in retry_body
 
 
 def test_find_adjacent_header_pos_walks_row_store() -> None:
@@ -1466,121 +1465,155 @@ def test_find_adjacent_header_pos_walks_row_store() -> None:
     assert GalleryGrid._find_adjacent_header_pos(fake, 0, -1) is None
 
 
-def test_align_target_header_uses_actual_widget_bounds() -> None:
-    """The robust alignment path: read the target widget's actual content-Y
-    from compute_bounds, then set vadjustment so the target lands at the
-    same screen-Y the source header was at. Pin the math via fakes that
-    return known coordinates — no estimation drift, no constants for the
-    test to hard-code."""
-    from yaga.gallery_grid import GalleryGrid
+def test_header_nav_writes_vadjustment_once_for_pixel_perfect_jump() -> None:
+    """End-to-end behaviour of the rebuilt jump: measure source y → compute
+    target y by summing measured row heights → write vadjustment exactly
+    once. No scroll_to, no retry loop, no two-phase flicker."""
+    from yaga.gallery_grid import GalleryGrid, GalleryRow
 
-    # target widget reports content_y = 1234 in scrollable space.
-    fake_bounds = SimpleNamespace(get_y=lambda: 1234.0)
-    target_widget = SimpleNamespace(
-        compute_bounds=lambda _grid: (True, fake_bounds),
+    # 3 headers (pos 0, 3, 5) with 2 tile rows between each.
+    rows = [
+        GalleryRow.header("Mar"),
+        GalleryRow.from_tiles([]),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Feb"),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Jan"),
+    ]
+    row_store = SimpleNamespace(
+        get_n_items=lambda: len(rows),
+        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
     )
-    fake_li = SimpleNamespace(
-        get_position=lambda: 7,
-        get_child=lambda: target_widget,
+    # Source header is at content_y=0, allocated_height=150.
+    src_bounds = SimpleNamespace(get_y=lambda: 0.0)
+    src_widget = SimpleNamespace(
+        compute_bounds=lambda _g: (True, src_bounds),
+        get_allocated_height=lambda: 150,
+    )
+    src_li = SimpleNamespace(
+        get_position=lambda: 0,
+        get_child=lambda: src_widget,
+    )
+    header_box = SimpleNamespace(_list_item=src_li)
+    # One bound tile-row that reports allocated_height=200 — that's what
+    # _measure_row_heights picks up for tile_h.
+    tile_li = SimpleNamespace(
+        get_item=lambda: rows[1],
+        get_child=lambda: SimpleNamespace(get_allocated_height=lambda: 200),
     )
     set_values: list[float] = []
     vadj = SimpleNamespace(
-        get_value=lambda: 600.0,
-        get_upper=lambda: 5000.0,
-        get_page_size=lambda: 800.0,
+        get_value=lambda: 100.0, get_upper=lambda: 5000.0, get_page_size=lambda: 800.0,
         set_value=lambda v: set_values.append(v),
     )
     fake = SimpleNamespace(
-        _bound_list_items=[fake_li],
-        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
+        row_store=row_store,
+        scroller=SimpleNamespace(
+            get_width=lambda: 800, get_vadjustment=lambda: vadj,
+        ),
         grid_view=SimpleNamespace(),
+        _bound_list_items=[src_li, tile_li],
+        _cols=4,
     )
-    fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
-    fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
-    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-    # Source was at screen_y = 250 (some click-target Y the user hit).
-    GalleryGrid._align_target_header(fake, 7, 250.0)
-    # New vadj so target_content_y(1234) - new_vadj == target_screen_y(250)
-    # → new_vadj = 1234 - 250 = 984. Clamped against [0, 5000-800=4200]: 984.
-    assert set_values == [984.0]
+    fake._find_adjacent_header_pos = lambda pos, d: GalleryGrid._find_adjacent_header_pos(fake, pos, d)
+    fake._content_y_of             = lambda w: GalleryGrid._content_y_of(fake, w)
+    fake._measure_row_heights      = lambda src: GalleryGrid._measure_row_heights(fake, src)
+    fake._set_vadj_clamped         = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
+
+    # Down arrow from pos 0 → next header at pos 3.
+    # Heights 0..2: header(150) + tile(200) + tile(200) = 550.
+    # target_content_y = 0 + 550 = 550. target_screen_y = 0 - 100 = -100.
+    # new_vadj = 550 - (-100) = 650.
+    GalleryGrid._on_header_nav(fake, header_box, +1)
+    assert set_values == [650.0]
 
 
-def test_align_target_header_clamps_to_adjustment_range() -> None:
-    """If the math would request a value past the lower or upper bound of
-    the vadjustment, clamp into range so we never sit at a partially-
-    scrolled position the user can't reach with the scroll bar."""
-    from yaga.gallery_grid import GalleryGrid
+def test_header_nav_falls_back_to_cell_size_when_no_tile_row_bound() -> None:
+    """If no tile row is currently bound (e.g. user navigates while only
+    a single header is on screen), tile_h falls back to scroller_width /
+    cols. Pin the fallback so a future refactor can't drop it and have
+    the jump silently underestimate when there are no tile rows visible."""
+    from yaga.gallery_grid import GalleryGrid, GalleryRow
 
-    target_widget = SimpleNamespace(
-        compute_bounds=lambda _grid: (True, SimpleNamespace(get_y=lambda: 50.0)),
+    rows = [
+        GalleryRow.header("Mar"),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Feb"),
+    ]
+    row_store = SimpleNamespace(
+        get_n_items=lambda: len(rows),
+        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
     )
-    fake_li = SimpleNamespace(get_position=lambda: 0, get_child=lambda: target_widget)
+    src_widget = SimpleNamespace(
+        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 0.0)),
+        get_allocated_height=lambda: 150,
+    )
+    src_li = SimpleNamespace(get_position=lambda: 0, get_child=lambda: src_widget)
+    header_box = SimpleNamespace(_list_item=src_li)
+    set_values: list[float] = []
+    vadj = SimpleNamespace(
+        get_value=lambda: 0.0, get_upper=lambda: 10000.0, get_page_size=lambda: 800.0,
+        set_value=lambda v: set_values.append(v),
+    )
+    fake = SimpleNamespace(
+        row_store=row_store,
+        scroller=SimpleNamespace(
+            get_width=lambda: 800, get_vadjustment=lambda: vadj,
+        ),
+        grid_view=SimpleNamespace(),
+        _bound_list_items=[src_li],  # only the source header is bound
+        _cols=4,
+    )
+    fake._find_adjacent_header_pos = lambda pos, d: GalleryGrid._find_adjacent_header_pos(fake, pos, d)
+    fake._content_y_of             = lambda w: GalleryGrid._content_y_of(fake, w)
+    fake._measure_row_heights      = lambda src: GalleryGrid._measure_row_heights(fake, src)
+    fake._set_vadj_clamped         = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
+
+    # Going from pos 0 to pos 2 (Mar → Feb), one tile row in between.
+    # tile_h fallback = 800 // 4 = 200. delta = 150 (header) + 200 (tile) = 350.
+    # target_content_y = 0 + 350 = 350. target_screen_y = 0 - 0 = 0.
+    # new_vadj = 350.
+    GalleryGrid._on_header_nav(fake, header_box, +1)
+    assert set_values == [350.0]
+
+
+def test_header_nav_clamps_at_boundaries() -> None:
+    """Jumping near the very top or bottom must not push vadjustment out
+    of range."""
+    from yaga.gallery_grid import GalleryGrid, GalleryRow
+
+    rows = [GalleryRow.header("a"), GalleryRow.header("b")]
+    row_store = SimpleNamespace(
+        get_n_items=lambda: len(rows),
+        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
+    )
+    src_widget = SimpleNamespace(
+        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 0.0)),
+        get_allocated_height=lambda: 150,
+    )
+    src_li = SimpleNamespace(get_position=lambda: 1, get_child=lambda: src_widget)
+    header_box = SimpleNamespace(_list_item=src_li)
     set_values: list[float] = []
     vadj = SimpleNamespace(
         get_value=lambda: 500.0, get_upper=lambda: 1000.0, get_page_size=lambda: 400.0,
         set_value=lambda v: set_values.append(v),
     )
     fake = SimpleNamespace(
-        _bound_list_items=[fake_li],
-        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
+        row_store=row_store,
+        scroller=SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj),
         grid_view=SimpleNamespace(),
+        _bound_list_items=[src_li],
+        _cols=4,
     )
-    fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
-    fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
-    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-    # tgt_y(50) - target_screen_y(500) = -450, which would be a negative
-    # vadjustment value — clamp to 0.
-    GalleryGrid._align_target_header(fake, 0, 500.0)
-    assert set_values == [0.0]
-
-
-def test_align_target_header_returns_false_when_target_not_bound() -> None:
-    """The retry loop relies on a boolean return to know whether to keep
-    trying. False = not bound yet, try again on the next tick; True =
-    aligned successfully, stop. No vadjustment change on failure."""
-    from yaga.gallery_grid import GalleryGrid
-    set_values: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 100.0, get_upper=lambda: 1000.0, get_page_size=lambda: 400.0,
-        set_value=lambda v: set_values.append(v),
-    )
-    fake = SimpleNamespace(
-        _bound_list_items=[],  # nothing bound at the target pos
-        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
-        grid_view=SimpleNamespace(),
-    )
-    fake._bound_widget_at = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
-    fake._content_y_of    = lambda widget: GalleryGrid._content_y_of(fake, widget)
-    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-    result = GalleryGrid._align_target_header(fake, 42, 250.0)
-    assert set_values == []
-    assert result is False
-
-
-def test_align_target_header_returns_true_on_success() -> None:
-    """When the target IS bound, alignment fires + returns True so the
-    retry loop stops at the first successful tick."""
-    from yaga.gallery_grid import GalleryGrid
-    fake_bounds = SimpleNamespace(get_y=lambda: 1234.0)
-    target_widget = SimpleNamespace(compute_bounds=lambda _g: (True, fake_bounds))
-    fake_li = SimpleNamespace(get_position=lambda: 7, get_child=lambda: target_widget)
-    set_values: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 600.0, get_upper=lambda: 5000.0, get_page_size=lambda: 800.0,
-        set_value=lambda v: set_values.append(v),
-    )
-    fake = SimpleNamespace(
-        _bound_list_items=[fake_li],
-        scroller=SimpleNamespace(get_vadjustment=lambda: vadj),
-        grid_view=SimpleNamespace(),
-    )
-    fake._bound_widget_at  = lambda pos: GalleryGrid._bound_widget_at(fake, pos)
-    fake._content_y_of     = lambda widget: GalleryGrid._content_y_of(fake, widget)
-    fake._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-    result = GalleryGrid._align_target_header(fake, 7, 250.0)
-    # tgt_y(1234) - screen_y(250) = 984
-    assert set_values == [984.0]
-    assert result is True
+    fake._find_adjacent_header_pos = lambda pos, d: GalleryGrid._find_adjacent_header_pos(fake, pos, d)
+    fake._content_y_of             = lambda w: GalleryGrid._content_y_of(fake, w)
+    fake._measure_row_heights      = lambda src: GalleryGrid._measure_row_heights(fake, src)
+    fake._set_vadj_clamped         = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
+    # From pos 1, up arrow → pos 0. delta = -150 (header above).
+    # target_content_y = 0 + (-150) = -150. target_screen_y = 0 - 500 = -500.
+    # new_vadj = -150 - (-500) = 350. Within range [0, 600]: stays 350.
+    GalleryGrid._on_header_nav(fake, header_box, -1)
+    assert set_values == [350.0]
 
 
 def test_date_header_nav_box_spacing_is_at_least_20px() -> None:
