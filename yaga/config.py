@@ -72,6 +72,10 @@ class Settings:
     # never deleted — pictures_dir is preserved purely for legacy load()
     # compatibility and is no longer scanned.
     pictures_hidden: bool = False
+    # Media-type filter for Overview. Defaults to "images" so the historic
+    # Pictures view (images-only) keeps its semantics on upgrade. Allowed:
+    # "both", "images", "videos" — same vocabulary as extras.
+    pictures_media_filter: str = "images"
 
     # Disk cache budget for thumbnails + downloaded NC originals (MB).
     # 0 means "unlimited"; any positive value triggers LRU eviction.
@@ -162,9 +166,13 @@ class Settings:
 
     def media_filter_for(self, category: str) -> str | None:
         """Resolve the per-folder media-type filter for *category*. Returns
-        one of "both"/"images"/"videos" for extra locations that have it
-        explicitly set, or None to mean "use the DB's category default"
-        (built-ins keep their historic image/video split)."""
+        one of "both"/"images"/"videos" for Overview and extra locations
+        that have it explicitly set, or None to mean "use the DB's
+        category default" (built-ins keep their historic image/video
+        split)."""
+        if category == "pictures":
+            val = self.pictures_media_filter
+            return val if val in ("both", "images", "videos") else "images"
         if not category.startswith("location:"):
             return None
         try:

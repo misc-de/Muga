@@ -82,6 +82,8 @@ TRANSLATIONS = {
         "Videos only": "Videos only",
         "Hide": "Hide",
         "All other folders combined": "All other folders combined",
+        "Overview shows the combined content of every other folder.":
+            "Overview shows the combined content of every other folder.",
         "Search": "Search",
         "Filename, date, month, EXIF…": "Filename, date, month, EXIF…",
         "Search: %d hits": "Search: %d hits",
@@ -322,6 +324,8 @@ TRANSLATIONS = {
         "Videos only": "Nur Videos",
         "Hide": "Ausblenden",
         "All other folders combined": "Inhalt aller anderen Ordner",
+        "Overview shows the combined content of every other folder.":
+            "Übersicht zeigt den kombinierten Inhalt aller anderen Ordner.",
         "Search": "Suchen",
         "Filename, date, month, EXIF…": "Dateiname, Datum, Monat, EXIF…",
         "Search: %d hits": "Suche: %d Treffer",

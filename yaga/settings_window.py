@@ -742,6 +742,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         # remove, and there's no underlying path to pick.
         if spec["kind"] == "overview":
             hidden = bool(self.settings.pictures_hidden)
+            edit = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+            edit.set_tooltip_text(self._("Edit"))
+            edit.add_css_class("flat")
+            edit.set_valign(Gtk.Align.CENTER)
+            edit.connect("clicked", self._edit_overview)
+            box.append(edit)
             toggle = Gtk.Button.new_from_icon_name(
                 "view-reveal-symbolic" if hidden else "view-conceal-symbolic"
             )
@@ -1022,6 +1028,56 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.parent_window.refresh(scan=True)
         finally:
             chooser.destroy()
+
+    def _edit_overview(self, _btn: Gtk.Button) -> None:
+        """Overview has no path or name to edit — the only editable knob
+        is the media-type filter (Images / Videos / Both). Mirrors the
+        extras edit dialog so the UX stays consistent."""
+        current = self.settings.pictures_media_filter
+        if current not in ("both", "images", "videos"):
+            current = "images"
+
+        dialog = Adw.AlertDialog(
+            heading=self._("Edit folder"),
+            body=self._("Overview shows the combined content of every other folder."),
+        )
+
+        filter_values = ["both", "images", "videos"]
+        filter_labels = [self._("Both"), self._("Images only"), self._("Videos only")]
+        filter_store = Gtk.StringList()
+        for lbl in filter_labels:
+            filter_store.append(lbl)
+        filter_row = Adw.ComboRow(
+            title=self._("Show"),
+            subtitle=self._("Which media types appear when this folder is opened."),
+            model=filter_store,
+            selected=filter_values.index(current),
+        )
+
+        group = Adw.PreferencesGroup()
+        group.add(filter_row)
+        dialog.set_extra_child(group)
+
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("save", self._("Save"))
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+
+        def _done(_d, response):
+            if response != "save":
+                return
+            new_val = filter_values[filter_row.get_selected()]
+            self.settings.pictures_media_filter = new_val
+            self.parent_window.settings.pictures_media_filter = new_val
+            self.parent_window.settings.save()
+            # Re-render only if Overview is currently visible — otherwise
+            # the change applies the next time the user shows it.
+            if self.parent_window.category == "pictures":
+                self.parent_window.refresh(scan=False)
+
+        dialog.connect("response", _done)
+        dialog.present(self)
 
     def _toggle_pictures_hidden(self, _btn: Gtk.Button) -> None:
         new_value = not bool(self.settings.pictures_hidden)
