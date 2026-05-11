@@ -1402,19 +1402,89 @@ def test_find_nav_button_at_walks_nav_box_children() -> None:
     assert GalleryWindow._find_nav_button_at(fake, 200.0, 200.0) is None
 
 
-def test_date_header_arrows_hidden_at_first_and_last_header() -> None:
-    """User asked: first (newest) header has no up arrow, last (oldest) has
-    no down arrow — there's nothing to jump to in those directions. Pin via
-    the bind-time visibility logic that the _apply_binding header branch
-    sets per-row, using _find_adjacent_header_pos to decide."""
+def test_date_header_arrow_visibility_is_neighbour_based() -> None:
+    """Per-header behaviour: show ↑ when there's a previous header, show ↓
+    when there's a next header, hide each when not. Pin the central
+    visibility helper that bind and items-changed both call."""
+    from yaga.gallery_grid import GalleryGrid, GalleryRow
+
+    rows = [
+        GalleryRow.header("Mar"),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Feb"),
+        GalleryRow.from_tiles([]),
+        GalleryRow.header("Jan"),
+    ]
+    store = SimpleNamespace(
+        get_n_items=lambda: len(rows),
+        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
+    )
+
+    def _make_li(pos):
+        nav_up = SimpleNamespace(visible=None)
+        nav_down = SimpleNamespace(visible=None)
+        def _set_up(v): nav_up.visible = v
+        def _set_down(v): nav_down.visible = v
+        nav_up.set_visible = _set_up
+        nav_down.set_visible = _set_down
+        stack = SimpleNamespace(_nav_up=nav_up, _nav_down=nav_down)
+        li = SimpleNamespace(
+            get_position=lambda: pos,
+            get_child=lambda: stack,
+        )
+        return li, nav_up, nav_down
+
+    fake = SimpleNamespace(row_store=store)
+    fake._find_adjacent_header_pos = lambda p, d: GalleryGrid._find_adjacent_header_pos(fake, p, d)
+
+    # First (newest) header at pos 0: only ↓ should be visible.
+    li, up, down = _make_li(0)
+    GalleryGrid._set_header_arrow_visibility(fake, li)
+    assert up.visible is False and down.visible is True
+
+    # Middle header at pos 2: both arrows visible.
+    li, up, down = _make_li(2)
+    GalleryGrid._set_header_arrow_visibility(fake, li)
+    assert up.visible is True and down.visible is True
+
+    # Last (oldest) header at pos 4: only ↑.
+    li, up, down = _make_li(4)
+    GalleryGrid._set_header_arrow_visibility(fake, li)
+    assert up.visible is True and down.visible is False
+
+
+def test_pagination_append_refreshes_previously_last_header_arrow() -> None:
+    """Regression: when pagination appends a new header past the current
+    last header, the previously-last header's ↓ stays hidden until the
+    user scrolls (no rebind fires for an existing-position list_item).
+    Fix: items-changed triggers a refresh pass over all bound headers.
+    Pin that the trigger is in place and the refresh is debounced via
+    idle so a burst of appends only fires one pass."""
     src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
-    apply_def = src.index("def _apply_binding")
-    apply_end = src.index("\n    def ", apply_def + 1)
-    apply_body = src[apply_def:apply_end]
-    # Both arrows have their visibility wired to whether an adjacent header
-    # exists in the corresponding direction.
-    assert "stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1)" in apply_body
-    assert "stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1)" in apply_body
+    init_def = src.index("def __init__(self, owner")
+    init_end = src.index("\n    def ", init_def + 1)
+    init_body = src[init_def:init_end]
+    # The store wires items-changed to our handler.
+    assert 'self.row_store.connect("items-changed"' in init_body
+    assert "_on_row_store_items_changed" in init_body
+
+    # The handler must:
+    #  - bail on in-place updates (added <= removed) so thumb refreshes
+    #    don't trigger header rebinds
+    #  - debounce via idle so a burst of appends only does one pass
+    #  - skip non-header bound items inside the refresh
+    handler_def = src.index("def _on_row_store_items_changed")
+    handler_end = src.index("\n    def ", handler_def + 1)
+    handler_body = src[handler_def:handler_end]
+    assert "added <= removed" in handler_body
+    assert "_refresh_arrows_pending" in handler_body
+    assert "GLib.idle_add(self._refresh_header_arrows_on_idle" in handler_body
+
+    refresh_def = src.index("def _refresh_header_arrows_on_idle")
+    refresh_end = src.index("\n    def ", refresh_def + 1)
+    refresh_body = src[refresh_def:refresh_end]
+    assert "row.is_header" in refresh_body
+    assert "_set_header_arrow_visibility" in refresh_body
 
 
 def test_header_nav_is_single_shot_no_retry_no_scroll_to() -> None:

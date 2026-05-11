@@ -131,6 +131,16 @@ class GalleryGrid(Gtk.Overlay):
         self._bound_list_items: list[Gtk.ListItem] = []
 
         self.row_store = Gio.ListStore(item_type=GalleryRow)
+        # When pagination appends new rows past the current last header, the
+        # *previously* last header's down-arrow is now wrong (it shows
+        # "hidden" because at bind time there was no header below). Listen
+        # for net-add events on the store and refresh the visibility of all
+        # currently-bound headers so the affordance tracks the live state.
+        # In-place updates (splice with removed == added — e.g. thumbnail
+        # arrivals) are skipped to avoid churn.
+        self._refresh_arrows_pending = False
+        self.row_store.connect("items-changed", self._on_row_store_items_changed)
+
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._on_item_setup)
         factory.connect("bind", self._on_item_bind)
@@ -436,6 +446,50 @@ class GalleryGrid(Gtk.Overlay):
             pos += direction
         return None
 
+    def _set_header_arrow_visibility(self, list_item: Gtk.ListItem) -> None:
+        """Apply per-header up/down arrow visibility based on whether there
+        is an adjacent header in each direction. Extracted from
+        _apply_binding so items-changed handling can re-run it without
+        going through the full bind path."""
+        stack = list_item.get_child()
+        if stack is None:
+            return
+        try:
+            pos = list_item.get_position()
+        except Exception:
+            return
+        stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1) is not None)
+        stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1) is not None)
+
+    def _on_row_store_items_changed(
+        self, _store: Gio.ListStore, _position: int, removed: int, added: int,
+    ) -> None:
+        """Refresh arrow visibility on already-bound headers when the store
+        gains rows. Pagination is the main case: a new header at the end
+        of the store turns the previously-last header's down-arrow from
+        "hidden" to "visible", but no fresh bind fires for that row
+        (its position is unchanged). Debounced via idle so a burst of
+        appends only triggers one refresh pass."""
+        if added <= removed:
+            return  # in-place replacement or pure removal — no new headers
+        if self._refresh_arrows_pending:
+            return
+        self._refresh_arrows_pending = True
+        GLib.idle_add(self._refresh_header_arrows_on_idle,
+                      priority=GLib.PRIORITY_LOW)
+
+    def _refresh_header_arrows_on_idle(self) -> bool:
+        self._refresh_arrows_pending = False
+        for li in list(self._bound_list_items):
+            try:
+                row = li.get_item()
+                if row is None or not row.is_header:
+                    continue
+                self._set_header_arrow_visibility(li)
+            except Exception:
+                continue
+        return GLib.SOURCE_REMOVE
+
     def _content_y_of(self, widget: Gtk.Widget) -> float | None:
         """Y of *widget* within the listview's scrollable content coord
         space. Independent of current scroll value — that's exactly what we
@@ -649,13 +703,12 @@ class GalleryGrid(Gtk.Overlay):
             # position to navigate from (pool widgets are recycled, so the
             # closure captured at setup time has no row identity on its own).
             stack._header_box._list_item = list_item
-            # Hide the up arrow at the first (newest) header and the down arrow
-            # at the last (oldest) — there's nothing to navigate to in those
-            # directions. Pool widgets are recycled across positions, so we
-            # have to update visibility on every bind, not just on construction.
-            pos = list_item.get_position()
-            stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1) is not None)
-            stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1) is not None)
+            # Hide the up arrow at the first (newest) header and the down
+            # arrow at the last (oldest); show both at any header that has
+            # neighbours in both directions. Pool widgets are recycled, so
+            # this runs on every bind. Pagination keeps the visibility live
+            # via _on_row_store_items_changed → _refresh_header_arrows_on_idle.
+            self._set_header_arrow_visibility(list_item)
             return
 
         stack.set_visible_child_name("tiles")
