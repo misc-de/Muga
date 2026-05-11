@@ -369,6 +369,12 @@ class GalleryGrid(Gtk.Overlay):
             return
         current_pos = list_item.get_position()
         target_pos = self._find_adjacent_header_pos(current_pos, direction)
+        # Going forward and we ran off the end of the currently-loaded
+        # rows: pull the next page(s) until another month header appears
+        # or there's nothing left in the database. Capped so a pathological
+        # "every file is the same month" dataset can't lock up the UI.
+        if target_pos is None and direction > 0:
+            target_pos = self._load_more_until_next_header(current_pos)
         if target_pos is None:
             return
         src_widget = list_item.get_child()
@@ -433,6 +439,36 @@ class GalleryGrid(Gtk.Overlay):
         upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
         vadj.set_value(max(0.0, min(value, upper)))
 
+    def _load_more_until_next_header(self, current_pos: int) -> int | None:
+        """Drive the owner's paginated loader forward until a row with
+        is_header=True shows up *after* current_pos, or the loader signals
+        end-of-data. Returns the new header's row_store index, or None.
+
+        The loader synchronously appends rows to row_store on each call,
+        so polling the store after each step is safe. Capped at 32 pages
+        — long enough to chew through "100 photos a month for years" but
+        bounded against any edge case where pages somehow never contain
+        a header."""
+        owner = getattr(self, "owner", None)
+        loader = getattr(owner, "_load_more_items", None)
+        if loader is None:
+            return None
+        max_pages = 32
+        for _ in range(max_pages):
+            if not getattr(owner, "_has_more_items", False):
+                return None
+            before = self.row_store.get_n_items()
+            loader()
+            after = self.row_store.get_n_items()
+            if after == before:
+                # Loader bailed (in-flight guard, empty page, …) — give up
+                # rather than spin.
+                return None
+            found = self._find_adjacent_header_pos(current_pos, +1)
+            if found is not None:
+                return found
+        return None
+
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header
         row is found. Returns the row index, or None if the boundary is hit
@@ -459,7 +495,14 @@ class GalleryGrid(Gtk.Overlay):
         except Exception:
             return
         stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1) is not None)
-        stack._nav_down.set_visible(self._find_adjacent_header_pos(pos, +1) is not None)
+        # Show the down arrow whenever there is *or could be* a next
+        # header — i.e. an already-loaded one further down, or more
+        # paginated items still waiting in the database. The handler
+        # itself drives pagination forward in the second case.
+        has_next_loaded = self._find_adjacent_header_pos(pos, +1) is not None
+        owner = getattr(self, "owner", None)
+        has_more_db = bool(getattr(owner, "_has_more_items", False))
+        stack._nav_down.set_visible(has_next_loaded or has_more_db)
 
     def _on_row_store_items_changed(
         self, _store: Gio.ListStore, _position: int, removed: int, added: int,
