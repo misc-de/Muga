@@ -510,7 +510,13 @@ class GalleryWindow(Adw.ApplicationWindow):
         pull_gesture.connect("drag-begin", self._on_pull_drag_begin)
         pull_gesture.connect("drag-update", self._on_pull_drag_update)
         pull_gesture.connect("drag-end", self._on_pull_drag_end)
-        self.gallery_grid.scroller.add_controller(pull_gesture)
+        # Attach to the overlay (gallery_grid), not the scroller itself.
+        # ScrolledWindow ships with its own internal pan gesture; mounting
+        # our GestureDrag on the same widget made it fire inconsistently
+        # in categories with lots of tiles (Photos, Overview). The overlay
+        # has no competing controller and is the same widget folder_swipe
+        # uses successfully.
+        self.gallery_grid.add_controller(pull_gesture)
         folder_swipe = Gtk.GestureSwipe()
         folder_swipe.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
         folder_swipe.connect("swipe", self._on_folder_swipe)
@@ -807,11 +813,18 @@ class GalleryWindow(Adw.ApplicationWindow):
 
             # Phase 1: local categories
             if only_current:
-                if self.category in ("nextcloud", "pictures"):
-                    # Overview is a virtual aggregator — nothing to scan on
-                    # its own. The next refresh after this returns will
-                    # repopulate the view from the underlying categories.
+                if self.category == "nextcloud":
                     local_cats: list = []
+                elif self.category == "pictures":
+                    # Overview is a virtual aggregator — to "refresh what
+                    # I'm looking at" we have to re-scan every category it
+                    # unions. Without this the pull-to-refresh gesture
+                    # silently no-op'd on Overview.
+                    local_cats = [
+                        (c, l, p)
+                        for c, l, p in self.settings.categories()
+                        if c not in ("nextcloud", "pictures")
+                    ]
                 else:
                     local_cats = [
                         (c, l, p)
