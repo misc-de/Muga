@@ -618,6 +618,18 @@ class SettingsWindow(Adw.PreferencesWindow):
             base = self._media_folder_specs[key]
             attr = base["attr"]
             value = getattr(self.settings, attr) or ""
+            if key == "pictures":
+                # Overview is a virtual aggregator — always shown in the
+                # listbox so the user can toggle its visibility. It can't
+                # be removed and has no path picker.
+                return {
+                    "key":   key,
+                    "title": base["title"],
+                    "path":  self._("All other folders combined"),
+                    "kind":  "overview",
+                    "attr":  attr,
+                    "removable": False,
+                }
             if not value and base["kind"] != "nextcloud":
                 return None
             if base["kind"] == "nextcloud" and not self.settings.nextcloud_enabled:
@@ -655,7 +667,10 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _available_media_keys(self) -> list[str]:
         keys: list[str] = []
-        for k in ("pictures", "photos", "videos", "screenshots"):
+        # Overview is virtual — listed regardless of any path setting so the
+        # user can always toggle its visibility from the row.
+        keys.append("pictures")
+        for k in ("photos", "videos", "screenshots"):
             if getattr(self.settings, self._media_folder_specs[k]["attr"]):
                 keys.append(k)
         if self.settings.nextcloud_enabled:
@@ -722,33 +737,51 @@ class SettingsWindow(Adw.PreferencesWindow):
         text_box.append(path_lbl)
         box.append(text_box)
 
-        # Trash icon — left of the chooser/edit button. Hidden for Nextcloud,
-        # which is structurally not removable in this UI.
-        if spec["removable"]:
-            trash = Gtk.Button.new_from_icon_name("user-trash-symbolic")
-            trash.set_tooltip_text(self._("Remove"))
-            trash.add_css_class("flat")
-            trash.set_valign(Gtk.Align.CENTER)
-            trash.connect("clicked", self._confirm_remove_media, key)
-            box.append(trash)
+        # Overview takes a visibility toggle in place of the trash + chooser
+        # combo: it is a virtual aggregator that the user can hide but never
+        # remove, and there's no underlying path to pick.
+        if spec["kind"] == "overview":
+            hidden = bool(self.settings.pictures_hidden)
+            toggle = Gtk.Button.new_from_icon_name(
+                "view-reveal-symbolic" if hidden else "view-conceal-symbolic"
+            )
+            toggle.set_tooltip_text(
+                self._("Show") if hidden else self._("Hide")
+            )
+            toggle.add_css_class("flat")
+            toggle.set_valign(Gtk.Align.CENTER)
+            toggle.connect("clicked", self._toggle_pictures_hidden)
+            if hidden:
+                title_lbl.add_css_class("dim-label")
+            box.append(toggle)
+        else:
+            # Trash icon — left of the chooser/edit button. Hidden for Nextcloud,
+            # which is structurally not removable in this UI.
+            if spec["removable"]:
+                trash = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+                trash.set_tooltip_text(self._("Remove"))
+                trash.add_css_class("flat")
+                trash.set_valign(Gtk.Align.CENTER)
+                trash.connect("clicked", self._confirm_remove_media, key)
+                box.append(trash)
 
-        if spec["kind"] == "local":
-            choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
-            choose.set_tooltip_text(self._("Choose folder"))
-            choose.connect("clicked", self._choose_folder_for_key, spec["attr"], path_lbl)
-        elif spec["kind"] == "extra":
-            # Pencil — opens a dialog with both Name and Path fields, since the
-            # custom name is what shows up in the gallery navigation.
-            choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
-            choose.set_tooltip_text(self._("Edit"))
-            choose.connect("clicked", self._edit_extra_location, spec["extra_idx"], title_lbl, path_lbl)
-        else:  # nextcloud
-            choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
-            choose.set_tooltip_text(self._("Edit"))
-            choose.connect("clicked", self._edit_nc_path, path_lbl)
-        choose.add_css_class("flat")
-        choose.set_valign(Gtk.Align.CENTER)
-        box.append(choose)
+            if spec["kind"] == "local":
+                choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
+                choose.set_tooltip_text(self._("Choose folder"))
+                choose.connect("clicked", self._choose_folder_for_key, spec["attr"], path_lbl)
+            elif spec["kind"] == "extra":
+                # Pencil — opens a dialog with both Name and Path fields, since the
+                # custom name is what shows up in the gallery navigation.
+                choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+                choose.set_tooltip_text(self._("Edit"))
+                choose.connect("clicked", self._edit_extra_location, spec["extra_idx"], title_lbl, path_lbl)
+            else:  # nextcloud
+                choose = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+                choose.set_tooltip_text(self._("Edit"))
+                choose.connect("clicked", self._edit_nc_path, path_lbl)
+            choose.add_css_class("flat")
+            choose.set_valign(Gtk.Align.CENTER)
+            box.append(choose)
 
         row.set_child(box)
 
@@ -989,6 +1022,27 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.parent_window.refresh(scan=True)
         finally:
             chooser.destroy()
+
+    def _toggle_pictures_hidden(self, _btn: Gtk.Button) -> None:
+        new_value = not bool(self.settings.pictures_hidden)
+        self.settings.pictures_hidden = new_value
+        self.parent_window.settings.pictures_hidden = new_value
+        self.parent_window.settings.save()
+        self._populate_media_listbox()
+        # _rebuild_categories drops the Overview button when hidden. If
+        # Overview was the active tab, activate the first remaining
+        # button so the gallery doesn't stay pointed at a vanished tab.
+        self.parent_window._rebuild_categories()
+        if new_value and self.parent_window.category == "pictures":
+            remaining = list(self.parent_window.category_buttons.items())
+            if remaining:
+                next_cat, next_btn = remaining[0]
+                # set_active(True) fires _on_category_toggled, which handles
+                # the self.category update, last_category persistence and
+                # the re-render in one path.
+                next_btn.set_active(True)
+                return
+        self.parent_window.refresh(scan=False)
 
     def _confirm_remove_media(self, _btn: Gtk.Button, key: str) -> None:
         spec = self._row_spec(key)

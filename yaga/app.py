@@ -668,7 +668,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._nc_spinner = None
         self._nc_broken_img = None
         for category, label, path in self.settings.categories():
-            if not path:
+            # Overview has no backing path (it aggregates); every other
+            # category still requires a path to make sense in the nav.
+            if not path and category != "pictures":
                 continue
             if category == "nextcloud":
                 img = self._make_nc_icon(_nc_icon_dir, _dark)
@@ -785,7 +787,10 @@ class GalleryWindow(Adw.ApplicationWindow):
 
             # Phase 1: local categories
             if only_current:
-                if self.category == "nextcloud":
+                if self.category in ("nextcloud", "pictures"):
+                    # Overview is a virtual aggregator — nothing to scan on
+                    # its own. The next refresh after this returns will
+                    # repopulate the view from the underlying categories.
                     local_cats: list = []
                 else:
                     local_cats = [
@@ -797,7 +802,7 @@ class GalleryWindow(Adw.ApplicationWindow):
                 local_cats = [
                     (c, l, p)
                     for c, l, p in self.settings.categories()
-                    if c != "nextcloud"
+                    if c not in ("nextcloud", "pictures")
                 ]
             if local_cats:
                 self.scanner.scan(

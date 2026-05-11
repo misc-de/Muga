@@ -186,6 +186,19 @@ class Database:
             LOGGER.warning(
                 "FTS5 trigram index unavailable; search uses LIKE fallback: %s", exc,
             )
+        if version < 4:
+            # Overview became a virtual aggregator: any rows previously
+            # indexed under category='pictures' are now duplicates of what
+            # other categories (photos/videos/screenshots/extras) provide.
+            # Drop them once so the aggregator query doesn't double-list
+            # files that happened to live under both ~/Pictures and
+            # another scanned root.
+            try:
+                self.conn.execute("DELETE FROM media WHERE category = 'pictures'")
+                self.conn.execute("PRAGMA user_version = 4")
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
 
     def upsert_media(self, *, path: Path, category: str, media_type: str, folder: str, thumb_path: str | None) -> None:
         stat = path.stat()
@@ -321,12 +334,30 @@ class Database:
                           media_filter: str | None = None) -> tuple[str, list]:
         """Return (where_sql, args) for filtering by category (+ optional folder).
         Built-in image categories restrict to media_type='image'; the videos
-        category aggregates videos across every source. *media_filter* overrides
-        the per-category default for extras: "both" drops the type constraint,
-        "videos" flips to videos-only, "images" keeps the image-only default."""
+        and pictures (Overview) categories aggregate across every source.
+        *media_filter* overrides the per-category default for extras:
+        "both" drops the type constraint, "videos" flips to videos-only,
+        "images" keeps the image-only default."""
         if category == "videos":
             # Aggregate: every video on disk or NC, regardless of which root holds it.
             return "media_type = 'video'", []
+        if category == "pictures":
+            # Overview is a virtual aggregator across every local category.
+            # `category != 'pictures'` excludes any stale rows the migration
+            # missed; NC is folded in only when the caller explicitly opted
+            # into it via include_nc, matching the historic pictures view.
+            args_pic: list = []
+            base_pic = "category NOT IN ('pictures', 'nextcloud')"
+            if media_filter == "videos":
+                base_pic += " AND media_type = 'video'"
+            elif media_filter != "both":
+                base_pic += " AND media_type = 'image'"
+            if folder:
+                base_pic += " AND folder = ?"
+                args_pic.append(folder)
+            if include_nc:
+                return f"({base_pic}) OR (category = 'nextcloud' AND media_type = 'image')", args_pic
+            return base_pic, args_pic
         args: list = [category]
         if media_filter == "videos":
             local = "category = ? AND media_type = 'video'"
@@ -540,6 +571,15 @@ class Database:
         if category == "videos":
             sql = "SELECT folder, thumb_path FROM media WHERE media_type = 'video' ORDER BY mtime DESC"
             params: tuple = ()
+        elif category == "pictures":
+            # Overview aggregator — union across every local category.
+            if media_filter == "videos":
+                sql = "SELECT folder, thumb_path FROM media WHERE category NOT IN ('pictures', 'nextcloud') AND media_type = 'video' ORDER BY mtime DESC"
+            elif media_filter == "both":
+                sql = "SELECT folder, thumb_path FROM media WHERE category NOT IN ('pictures', 'nextcloud') ORDER BY mtime DESC"
+            else:
+                sql = "SELECT folder, thumb_path FROM media WHERE category NOT IN ('pictures', 'nextcloud') AND media_type = 'image' ORDER BY mtime DESC"
+            params = ()
         elif media_filter == "videos":
             sql = "SELECT folder, thumb_path FROM media WHERE category = ? AND media_type = 'video' ORDER BY mtime DESC"
             params = (category,)

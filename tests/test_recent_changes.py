@@ -891,12 +891,12 @@ def test_search_returns_substring_match_via_fts(tmp_path: Path) -> None:
         f = folder / fname
         f.write_bytes(b"x")
         db.upsert_media(
-            path=f, category="pictures", media_type="image",
+            path=f, category="screenshots", media_type="image",
             folder="pics", thumb_path=None,
         )
     db.commit()
 
-    hits = db.search_media("pictures", "ach", folder="pics")
+    hits = db.search_media("screenshots", "ach", folder="pics")
     names = {h.name for h in hits}
     # Both "Bachstrasse" and "Beach" contain "ach".
     assert "Bachstrasse.png" in names
@@ -916,12 +916,12 @@ def test_search_short_query_falls_back_to_like(tmp_path: Path) -> None:
     f = folder / "ab.jpg"
     f.write_bytes(b"x")
     db.upsert_media(
-        path=f, category="pictures", media_type="image",
+        path=f, category="screenshots", media_type="image",
         folder="p", thumb_path=None,
     )
     db.commit()
 
-    hits = db.search_media("pictures", "ab", folder="p")
+    hits = db.search_media("screenshots", "ab", folder="p")
     assert any(h.name == "ab.jpg" for h in hits)
 
 
@@ -938,14 +938,14 @@ def test_search_handles_fts_special_chars_in_filename(tmp_path: Path) -> None:
     tricky = folder / "foo (bar) AND baz.jpg"
     tricky.write_bytes(b"x")
     db.upsert_media(
-        path=tricky, category="pictures", media_type="image",
+        path=tricky, category="screenshots", media_type="image",
         folder="p", thumb_path=None,
     )
     db.commit()
 
     # Substring containing a paren — the phrase quoting in
     # _build_search_clause must defuse FTS5 syntax.
-    hits = db.search_media("pictures", "(bar)", folder="p")
+    hits = db.search_media("screenshots", "(bar)", folder="p")
     assert any(h.name == tricky.name for h in hits)
 
 
@@ -1164,7 +1164,10 @@ def test_migration_v2_to_v3_backfills_fts(tmp_path: Path) -> None:
     raw.execute(
         "INSERT INTO media (path, category, media_type, folder, name, mtime, size, seen_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        ("/p/Bachstrasse.png", "pictures", "image", "p", "Bachstrasse.png", 0.0, 0, 0.0),
+        # Category != "pictures": the v4 migration deletes any rows under
+        # "pictures" (now a virtual aggregator), which would otherwise
+        # erase the test fixture before the assertion runs.
+        ("/p/Bachstrasse.png", "screenshots", "image", "p", "Bachstrasse.png", 0.0, 0, 0.0),
     )
     raw.commit()
     raw.close()
@@ -1193,7 +1196,7 @@ def test_migration_v3_idempotent_does_not_duplicate(tmp_path: Path) -> None:
     f = folder / "x.jpg"
     f.write_bytes(b"x")
     db.upsert_media(
-        path=f, category="pictures", media_type="image",
+        path=f, category="screenshots", media_type="image",
         folder="p", thumb_path=None,
     )
     db.commit()

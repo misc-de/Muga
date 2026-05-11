@@ -67,6 +67,12 @@ class Settings:
         "pictures", "photos", "videos", "screenshots",
     ])
 
+    # The "Overview" category is a virtual aggregator across every other
+    # local category. It can be hidden from the gallery navigation but
+    # never deleted — pictures_dir is preserved purely for legacy load()
+    # compatibility and is no longer scanned.
+    pictures_hidden: bool = False
+
     # Disk cache budget for thumbnails + downloaded NC originals (MB).
     # 0 means "unlimited"; any positive value triggers LRU eviction.
     cache_max_mb: int = 0
@@ -117,10 +123,13 @@ class Settings:
 
     def categories(self) -> list[tuple[str, str, str]]:
         cat_map: dict[str, tuple[str, str]] = {}
-        # Built-ins are visible only when their path is non-empty — clearing
-        # the path is how the user "deletes" a built-in folder.
-        if self.pictures_dir:
-            cat_map["pictures"] = ("Overview", self.pictures_dir)
+        # Overview is a virtual aggregator. Its path slot carries the legacy
+        # pictures_dir value so existing 3-tuple consumers stay happy, but the
+        # DB query for category="pictures" unions the other categories — the
+        # path itself is never scanned. The user can hide Overview but not
+        # remove it; clearing pictures_dir does not delete it anymore.
+        if not self.pictures_hidden:
+            cat_map["pictures"] = ("Overview", self.pictures_dir or "(overview)")
         if self.photos_dir:
             cat_map["photos"] = ("Photos", self.photos_dir)
         if self.videos_dir:

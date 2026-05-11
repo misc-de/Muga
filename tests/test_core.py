@@ -69,14 +69,18 @@ def test_database_delete_path_is_category_scoped(tmp_path: Path) -> None:
     shared = tmp_path / "shared.jpg"
     shared.write_bytes(b"img")
 
+    # "pictures" is now a virtual aggregator (Overview) and rejects writes,
+    # so the second insertion uses another real category. The test is about
+    # (path, category) compound-key behaviour — the specific pair doesn't
+    # matter as long as both are real, indexable categories.
     db.upsert_media(path=shared, category="photos", media_type="image", folder="/", thumb_path=None)
-    db.upsert_media(path=shared, category="pictures", media_type="image", folder="/", thumb_path=None)
+    db.upsert_media(path=shared, category="screenshots", media_type="image", folder="/", thumb_path=None)
     db.commit()
 
     db.delete_path(str(shared), category="photos")
 
     assert db.list_media("photos") == []
-    assert [item.name for item in db.list_media("pictures")] == ["shared.jpg"]
+    assert [item.name for item in db.list_media("screenshots")] == ["shared.jpg"]
 
 
 def test_database_get_media_by_path_is_category_scoped(tmp_path: Path) -> None:
@@ -85,13 +89,13 @@ def test_database_get_media_by_path_is_category_scoped(tmp_path: Path) -> None:
     shared.write_bytes(b"img")
 
     db.upsert_media(path=shared, category="photos", media_type="image", folder="/", thumb_path="t1.jpg")
-    db.upsert_media(path=shared, category="pictures", media_type="image", folder="/", thumb_path="t2.jpg")
+    db.upsert_media(path=shared, category="screenshots", media_type="image", folder="/", thumb_path="t2.jpg")
     db.commit()
 
-    item = db.get_media_by_path(str(shared), category="pictures")
+    item = db.get_media_by_path(str(shared), category="screenshots")
     assert item is not None
     assert item.thumb_path == "t2.jpg"
-    assert item.category == "pictures"
+    assert item.category == "screenshots"
 
 
 def test_scanner_indexes_media_recursively_and_ignores_non_media(tmp_path: Path) -> None:
@@ -104,11 +108,13 @@ def test_scanner_indexes_media_recursively_and_ignores_non_media(tmp_path: Path)
     (nested / "notes.txt").write_bytes(b"text")
 
     scanner = MediaScanner(db, FakeThumbnailer())
-    scanner.scan([("pictures", "Pictures", str(root))])
+    # Use "screenshots" rather than "pictures": the latter is now a virtual
+    # aggregator and is intentionally not scannable as its own category.
+    scanner.scan([("screenshots", "Screenshots", str(root))])
 
     # Image categories show only images — videos surface via the dedicated
     # "videos" aggregate category, regardless of which root indexed them.
-    images = db.list_media("pictures", "name")
+    images = db.list_media("screenshots", "name")
     assert [item.name for item in images] == ["cover.jpg"]
     assert images[0].folder == "/"
     assert images[0].media_type == "image"
@@ -133,7 +139,9 @@ def test_scanner_can_use_database_from_background_thread(tmp_path: Path) -> None
 
     def run_scan() -> None:
         try:
-            scanner.scan([("pictures", "Pictures", str(root))])
+            # Avoid "pictures" — that key now resolves to the Overview
+            # aggregator and is not scannable as its own category.
+            scanner.scan([("screenshots", "Screenshots", str(root))])
         except BaseException as exc:
             error.append(exc)
 
@@ -143,7 +151,7 @@ def test_scanner_can_use_database_from_background_thread(tmp_path: Path) -> None
 
     assert not thread.is_alive()
     assert error == []
-    assert [item.name for item in db.list_media("pictures")] == ["background.jpg"]
+    assert [item.name for item in db.list_media("screenshots")] == ["background.jpg"]
 
 
 def test_scanner_prunes_removed_files_only_for_scanned_existing_categories(tmp_path: Path) -> None:
