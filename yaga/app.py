@@ -325,15 +325,26 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.header = Adw.HeaderBar()
         self.toolbar.add_top_bar(self.header)
 
-        self.search_button = Gtk.ToggleButton()
-        self.search_button.set_icon_name("system-search-symbolic")
-        self.search_button.set_tooltip_text(self._("Search"))
-        self.header.pack_start(self.search_button)
+        # Pack order on the start (left) edge: refresh first so the icon
+        # the user reaches for ("aktualisieren") sits at the top-left
+        # corner of the titlebar; back follows immediately after so the
+        # navigation pair stays grouped. The back arrow is only revealed
+        # once `current_folder` is set (see _render()).
+        self.refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
+        self.refresh_button.set_tooltip_text(self._("Refresh"))
+        self.refresh_button.connect("clicked", lambda _b: self.refresh(scan=True, scope="current"))
+        self.header.pack_start(self.refresh_button)
 
         self.back_button = Gtk.Button.new_from_icon_name("go-previous-symbolic")
         self.back_button.set_tooltip_text(self._("Back"))
         self.back_button.connect("clicked", self._on_back)
+        self.back_button.set_visible(False)
         self.header.pack_start(self.back_button)
+
+        self.search_button = Gtk.ToggleButton()
+        self.search_button.set_icon_name("system-search-symbolic")
+        self.search_button.set_tooltip_text(self._("Search"))
+        self.header.pack_start(self.search_button)
 
         self.new_folder_button = Gtk.Button.new_from_icon_name("list-add-symbolic")
         self.new_folder_button.set_tooltip_text(self._("New folder"))
@@ -342,10 +353,6 @@ class GalleryWindow(Adw.ApplicationWindow):
 
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
-
-        self.refresh_button = Gtk.Button.new_from_icon_name("view-refresh-symbolic")
-        self.refresh_button.set_tooltip_text(self._("Refresh"))
-        self.refresh_button.connect("clicked", lambda _b: self.refresh(scan=True))
 
         self.settings_button = Gtk.Button.new_from_icon_name("emblem-system-symbolic")
         self.settings_button.set_tooltip_text(self._("Settings"))
@@ -487,10 +494,23 @@ class GalleryWindow(Adw.ApplicationWindow):
         # Virtualized grid (GridView only renders visible tiles)
         self.gallery_grid = GalleryGrid(self)
         self.gallery_grid.scroller.add_tick_callback(self._on_grid_tick)
-        self.gallery_grid.scroller.connect("edge-overshot", self._on_scroll_edge_overshot)
-        scroll_refresh = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
-        scroll_refresh.connect("scroll", self._on_pull_refresh_scroll)
-        self.gallery_grid.scroller.add_controller(scroll_refresh)
+        # Android-style pull-to-refresh: GestureDrag captures the user's
+        # touch from the moment the gallery is at the top. While they
+        # over-drag downward we apply a rubber-banded margin to the grid
+        # so the list visibly "wobbles" down; only on release past the
+        # threshold do we fire a refresh (scoped to the current folder).
+        # The old edge-overshot + scroll handlers triggered immediately
+        # on any over-pull, which felt twitchy.
+        self._pull_started_at_top = False
+        self._pull_offset_px = 0.0
+        self._pull_threshold_px = 80.0
+        self._pull_animation: Adw.TimedAnimation | None = None
+        pull_gesture = Gtk.GestureDrag.new()
+        pull_gesture.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
+        pull_gesture.connect("drag-begin", self._on_pull_drag_begin)
+        pull_gesture.connect("drag-update", self._on_pull_drag_update)
+        pull_gesture.connect("drag-end", self._on_pull_drag_end)
+        self.gallery_grid.scroller.add_controller(pull_gesture)
         folder_swipe = Gtk.GestureSwipe()
         folder_swipe.set_propagation_phase(Gtk.PropagationPhase.BUBBLE)
         folder_swipe.connect("swipe", self._on_folder_swipe)
@@ -909,7 +929,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         # Sync the dropdown + direction icon to whatever was saved for this view.
         if hasattr(self, "_sort_dropdown"):
             self._sync_sort_controls()
-        self.back_button.set_visible(False)
+        # Back arrow surfaces whenever the user has drilled into a
+        # subfolder. Selection mode flips it back off in _enter_selection_mode.
+        self.back_button.set_visible(self.current_folder is not None)
         if self._search_query:
             self._render_search(sort_mode)
         elif sort_mode in ("folder", "folder_desc"):
@@ -1684,7 +1706,9 @@ class GalleryWindow(Adw.ApplicationWindow):
         # Restore normal header
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
-        self.back_button.set_visible(False)
+        # Mirror _render()'s rule so leaving multi-select inside a
+        # subfolder still shows the back arrow.
+        self.back_button.set_visible(self.current_folder is not None)
         self.new_folder_button.set_visible(True)
         self.search_button.set_visible(True)
         self.refresh_button.set_visible(True)
@@ -2374,24 +2398,92 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._update_tile_size(width)
         return GLib.SOURCE_CONTINUE
 
-    def _on_scroll_edge_overshot(self, _scroller, pos: Gtk.PositionType) -> None:
-        if pos == Gtk.PositionType.TOP:
-            self._trigger_pull_refresh()
+    # ──────────────────────────────────────────────────────────────────
+    # Pull-to-refresh (drag gesture with rubber-band wobble)
+    # ──────────────────────────────────────────────────────────────────
 
-    def _on_pull_refresh_scroll(self, _controller: Gtk.EventControllerScroll, _dx: float, dy: float) -> bool:
-        adjustment = self.gallery_grid.get_vadjustment()
-        if dy < -0.8 and adjustment.get_value() <= adjustment.get_lower() + 1:
+    def _on_pull_drag_begin(self, _gesture: Gtk.GestureDrag, _x: float, _y: float) -> None:
+        # Only arm the pull when the gallery is fully scrolled to the top
+        # at the moment the press starts. Anywhere else the gesture must
+        # stay a no-op so normal kinetic scrolling and tile clicks keep
+        # working.
+        adj = self.gallery_grid.get_vadjustment()
+        self._pull_started_at_top = adj.get_value() <= adj.get_lower() + 1.0
+        self._pull_offset_px = 0.0
+        if self._pull_animation is not None:
+            self._pull_animation.pause()
+            self._pull_animation = None
+
+    def _on_pull_drag_update(self, _gesture: Gtk.GestureDrag,
+                             _offset_x: float, offset_y: float) -> None:
+        if not self._pull_started_at_top or self._selection_mode:
+            return
+        if offset_y <= 0:
+            # User changed mind and dragged upward — collapse any
+            # visual offset and stop tracking until the next touch-down.
+            if self._pull_offset_px != 0:
+                self._pull_offset_px = 0.0
+                self.gallery_grid.grid_view.set_margin_top(0)
+                self.gallery_grid.pull_revealer.set_reveal_child(False)
+            return
+        # 1:1 follow up to threshold, then diminishing returns so the
+        # extra pull "fights back" the way an Android list bounces past
+        # its natural limit.
+        if offset_y <= self._pull_threshold_px:
+            eased = offset_y
+        else:
+            excess = offset_y - self._pull_threshold_px
+            eased = self._pull_threshold_px + min(excess * 0.4, 60.0)
+        self._pull_offset_px = eased
+        self.gallery_grid.grid_view.set_margin_top(int(eased))
+        self.gallery_grid.pull_revealer.set_reveal_child(eased >= 24)
+
+    def _on_pull_drag_end(self, _gesture: Gtk.GestureDrag,
+                          _offset_x: float, _offset_y: float) -> None:
+        if not self._pull_started_at_top:
+            return
+        triggered = self._pull_offset_px >= self._pull_threshold_px
+        self._pull_started_at_top = False
+        if triggered:
             self._trigger_pull_refresh()
-            return True
-        return False
+            self._animate_pull_release(duration_ms=420, easing=Adw.Easing.EASE_OUT_CUBIC)
+        else:
+            self._animate_pull_release(duration_ms=260, easing=Adw.Easing.EASE_OUT_BACK)
+        self._pull_offset_px = 0.0
+
+    def _animate_pull_release(self, duration_ms: int, easing: "Adw.Easing") -> None:
+        """Spring the grid's top margin back to 0. EASE_OUT_BACK gives a
+        small wobble at the end; EASE_OUT_CUBIC just glides."""
+        start = float(self.gallery_grid.grid_view.get_margin_top())
+        if start <= 0:
+            self.gallery_grid.pull_revealer.set_reveal_child(False)
+            return
+        target = Adw.CallbackAnimationTarget.new(
+            lambda v: self.gallery_grid.grid_view.set_margin_top(max(0, int(v)))
+        )
+        animation = Adw.TimedAnimation.new(
+            self.gallery_grid.grid_view, start, 0.0, duration_ms, target,
+        )
+        animation.set_easing(easing)
+        animation.connect(
+            "done",
+            lambda *_: self.gallery_grid.pull_revealer.set_reveal_child(False),
+        )
+        self._pull_animation = animation
+        animation.play()
 
     def _trigger_pull_refresh(self) -> None:
         if not self.refresh_button.get_sensitive():
             return
         LOGGER.info("Pull refresh triggered for category %s", self.category)
         self.gallery_grid.pull_revealer.set_reveal_child(True)
+        # scope="current" keeps the scan limited to the active category —
+        # the pull gesture is a "refresh what I'm looking at" affordance.
         self.refresh(scan=True, scope="current")
-        GLib.timeout_add(1200, lambda: self.gallery_grid.pull_revealer.set_reveal_child(False) or False)
+        GLib.timeout_add(
+            1200,
+            lambda: self.gallery_grid.pull_revealer.set_reveal_child(False) or False,
+        )
 
     def _update_tile_size(self, scroller_width: int) -> None:
         if scroller_width <= 0:

@@ -379,9 +379,15 @@ def test_navigation_uses_spinner_broken_icon_and_pull_refresh() -> None:
 
     assert "DEBUG_LOG_PATH" in config_source
     assert "RotatingFileHandler(DEBUG_LOG_PATH" in app_source
-    assert "header.pack_start(self.refresh_button)" not in app_source
-    assert "Gtk.EventControllerScrollFlags.VERTICAL" in app_source
-    assert "def _on_pull_refresh_scroll" in app_source
+    # Refresh icon now lives in the titlebar (top-left) so desktop users
+    # have a discoverable refresh action; mobile keeps the gesture below.
+    assert "header.pack_start(self.refresh_button)" in app_source
+    # Pull-to-refresh moved from "any over-pull" (EventControllerScroll +
+    # edge-overshot) to a proper GestureDrag with a release-threshold so
+    # the list visibly wobbles before firing the refresh.
+    assert "Gtk.GestureDrag.new()" in app_source
+    assert "def _on_pull_drag_update" in app_source
+    assert "def _on_pull_drag_end" in app_source
     assert "Gtk.Spinner()" in app_source
     assert "network-error-symbolic" in app_source
     assert "set_pixel_size(22)" in app_source
