@@ -530,17 +530,21 @@ class GalleryGrid(Gtk.Overlay):
         nav_down.add_css_class("date-header-nav")
         nav_down.set_tooltip_text("Next month")
 
-        nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
+        nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         nav_box.set_halign(Gtk.Align.END)
         nav_box.set_valign(Gtk.Align.CENTER)
         nav_box.set_margin_end(12)
         nav_box.append(nav_up)
         nav_box.append(nav_down)
 
-        header_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        # CenterBox keeps the date label anchored to the row's geometric
+        # center even when only one side (here: end) carries a widget.
+        # A plain HBox would size the label to "row width minus nav_box",
+        # shifting the visual center off-axis.
+        header_box = Gtk.CenterBox()
         header_box.set_hexpand(True)
-        header_box.append(header_lbl)
-        header_box.append(nav_box)
+        header_box.set_center_widget(header_lbl)
+        header_box.set_end_widget(nav_box)
 
         # Capture the list_item closures bind the click handler against — the
         # bind step refreshes _header_list_item before each row is shown, so a

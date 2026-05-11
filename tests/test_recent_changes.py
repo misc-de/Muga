@@ -1686,16 +1686,17 @@ def test_header_nav_clamps_at_boundaries() -> None:
     assert set_values == [350.0]
 
 
-def test_date_header_nav_box_spacing_is_at_least_20px() -> None:
-    """User asked for 'min 20px auseinander' between the up and down arrows.
-    Pin the spacing constant so a future style refactor can't shrink it."""
+def test_date_header_nav_box_spacing_is_zero() -> None:
+    """User later asked to pull the two arrows ~20px closer together —
+    the previous 'min 20px auseinander' guidance is superseded. Pin the
+    new spacing=0 so a future refactor can't silently widen the gap."""
     src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
     nav_box_def = src.index("nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL")
     # The Gtk.Box constructor passes spacing as a kwarg; the kwarg value sets
     # the gap between consecutive children.
     line_end = src.index("\n", nav_box_def)
     line = src[nav_box_def:line_end]
-    assert "spacing=20" in line
+    assert "spacing=0" in line
 
 
 def test_date_header_arrow_buttons_are_subtle() -> None:

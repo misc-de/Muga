@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_recent_changes.py::test_date_header_nav_box_spacing_is_zero tests/test_core.py -x -q)",
+      "Bash(python -m pytest tests/ -x -q)"
+    ]
+  }
+}

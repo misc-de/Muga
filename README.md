@@ -75,3 +75,10 @@ bash uninstall.sh
 4. Hit **Connect**
 
 Photos are streamed directly over WebDAV. Thumbnails are cached locally; full files are only downloaded when you open them.
+
+---
+
+## Privacy & License
+
+- **Privacy:** local-first, no telemetry. See [PRIVACY.md](PRIVACY.md) for what is stored where and how to wipe it.
+- **License:** [MIT](LICENSE).
