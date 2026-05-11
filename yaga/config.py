@@ -45,6 +45,10 @@ class Settings:
     # its content during scans — useful when a subfolder is exposed as its
     # own category and shouldn't be listed twice.
     extra_location_no_inherit: list[bool] = field(default_factory=list)
+    # Media-type filter per extra location, index-aligned. Allowed values:
+    # "both" (default), "images", "videos". Drives which rows show up when
+    # the user opens this folder in the gallery.
+    extra_location_media_filter: list[str] = field(default_factory=list)
     sort_mode: str = "newest"
     sort_modes: dict = field(default_factory=dict)
     theme: str = "system"
@@ -146,6 +150,24 @@ class Settings:
             label, path = spec
             cats.append((key, label, path))
         return cats
+
+    def media_filter_for(self, category: str) -> str | None:
+        """Resolve the per-folder media-type filter for *category*. Returns
+        one of "both"/"images"/"videos" for extra locations that have it
+        explicitly set, or None to mean "use the DB's category default"
+        (built-ins keep their historic image/video split)."""
+        if not category.startswith("location:"):
+            return None
+        try:
+            idx = int(category.split(":", 1)[1])
+        except ValueError:
+            return None
+        if idx < 0 or idx >= len(self.extra_location_media_filter):
+            return None
+        val = self.extra_location_media_filter[idx]
+        if val in ("both", "images", "videos"):
+            return val
+        return None
 
     def excluded_subtrees(self) -> list[str]:
         """Absolute paths of extra locations flagged "do not inherit". The

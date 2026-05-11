@@ -943,14 +943,17 @@ class GalleryWindow(Adw.ApplicationWindow):
             query_sort = sort_mode
             grouped = False
 
+        media_filter = self.settings.media_filter_for(self.category)
         self._total_count = self.database.search_media_count(
             self.category, self._search_query,
             self.current_folder, include_nc=include_nc,
+            media_filter=media_filter,
         )
         page = self.database.search_media(
             self.category, self._search_query, query_sort,
             self.current_folder, include_nc=include_nc,
             limit=self._page_size, offset=0,
+            media_filter=media_filter,
         )
         self.current_items = list(page)
         self._current_offset = len(page)
@@ -1016,12 +1019,15 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _render_flat(self, sort_mode: str) -> None:
         include_nc = self._should_merge_nc()
+        media_filter = self.settings.media_filter_for(self.category)
         self._total_count = self.database.count_media(
             self.category, self.current_folder, include_nc=include_nc,
+            media_filter=media_filter,
         )
         page = self.database.list_media_paginated(
             self.category, sort_mode, self.current_folder,
             self._page_size, 0, include_nc=include_nc,
+            media_filter=media_filter,
         )
         self.current_items = list(page)
         self._current_offset = len(page)
@@ -1033,7 +1039,10 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _render_folders(self) -> None:
         sort_mode = self.settings.get_sort_mode(self.category, self.current_folder)
-        folders = self.database.child_folders(self.category, self.current_folder)
+        media_filter = self.settings.media_filter_for(self.category)
+        folders = self.database.child_folders(
+            self.category, self.current_folder, media_filter=media_filter,
+        )
         for folder, count, thumbs in folders:
             self.gallery_grid.append_folder(folder, count, thumbs)
         direct_folder = self.current_folder or "/"
@@ -1042,10 +1051,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         include_nc = self._should_merge_nc() and self.current_folder in (None, "/")
         self._total_count = self.database.count_media(
             self.category, direct_folder, include_nc=include_nc,
+            media_filter=media_filter,
         )
         page = self.database.list_media_paginated(
             self.category, sort_mode, direct_folder,
             self._page_size, 0, include_nc=include_nc,
+            media_filter=media_filter,
         )
         self.current_items = list(page)
         self._current_offset = len(page)
@@ -1059,12 +1070,15 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _render_date_groups(self, ascending: bool = False) -> None:
         order = "oldest" if ascending else "newest"
         include_nc = self._should_merge_nc()
+        media_filter = self.settings.media_filter_for(self.category)
         self._total_count = self.database.count_media(
             self.category, self.current_folder, include_nc=include_nc,
+            media_filter=media_filter,
         )
         page = self.database.list_media_paginated(
             self.category, order, self.current_folder,
             self._page_size, 0, include_nc=include_nc,
+            media_filter=media_filter,
         )
         self.current_items = list(page)
         self._current_offset = len(page)
@@ -1163,16 +1177,19 @@ class GalleryWindow(Adw.ApplicationWindow):
                 folder_arg = self.current_folder or "/"
             else:
                 folder_arg = self.current_folder
+            media_filter = self.settings.media_filter_for(self.category)
             if self._search_query:
                 next_items = self.database.search_media(
                     self.category, self._search_query, query_sort, folder_arg,
                     include_nc=include_nc,
                     limit=self._page_size, offset=self._current_offset,
+                    media_filter=media_filter,
                 )
             else:
                 next_items = self.database.list_media_paginated(
                     self.category, query_sort, folder_arg,
                     self._page_size, self._current_offset, include_nc=include_nc,
+                    media_filter=media_filter,
                 )
             if not next_items:
                 self._has_more_items = False
@@ -1579,7 +1596,9 @@ class GalleryWindow(Adw.ApplicationWindow):
             )
             return
         items = self.current_items or self.database.list_media(
-            item.category, self.settings.get_sort_mode(item.category, self.current_folder), self.current_folder
+            item.category, self.settings.get_sort_mode(item.category, self.current_folder),
+            self.current_folder,
+            media_filter=self.settings.media_filter_for(item.category),
         )
         # Match by path — frozen MediaItem __eq__ compares all fields, and thumb_path
         # may differ between the cached current_items and the clicked tile (async thumb update).

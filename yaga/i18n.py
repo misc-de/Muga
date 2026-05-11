@@ -74,6 +74,12 @@ TRANSLATIONS = {
         "Don't inherit": "Don't inherit",
         "Parent folders won't include this folder's content during scans.":
             "Parent folders won't include this folder's content during scans.",
+        "Show": "Show",
+        "Which media types appear when this folder is opened.":
+            "Which media types appear when this folder is opened.",
+        "Both": "Both",
+        "Images only": "Images only",
+        "Videos only": "Videos only",
         "Search": "Search",
         "Filename, date, month, EXIF…": "Filename, date, month, EXIF…",
         "Search: %d hits": "Search: %d hits",
@@ -306,6 +312,12 @@ TRANSLATIONS = {
         "Parent folders won't include this folder's content during scans.":
             "Übergeordnete Ordner berücksichtigen den Inhalt dieses Ordners "
             "beim Scan nicht.",
+        "Show": "Anzeigen",
+        "Which media types appear when this folder is opened.":
+            "Welche Medientypen erscheinen, wenn dieser Ordner geöffnet wird.",
+        "Both": "Beides",
+        "Images only": "Nur Bilder",
+        "Videos only": "Nur Videos",
         "Search": "Suchen",
         "Filename, date, month, EXIF…": "Dateiname, Datum, Monat, EXIF…",
         "Search: %d hits": "Suche: %d Treffer",

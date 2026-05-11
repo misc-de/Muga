@@ -977,6 +977,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.settings.extra_locations.append(path)
             self.settings.extra_location_names.append("")
             self.settings.extra_location_no_inherit.append(False)
+            self.settings.extra_location_media_filter.append("both")
             new_idx = len(self.settings.extra_locations) - 1
             order = list(self.settings.media_folder_order or [])
             order.append(f"location:{new_idx}")
@@ -1041,6 +1042,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             self.settings.extra_location_names.pop(idx)
         if idx < len(self.settings.extra_location_no_inherit):
             self.settings.extra_location_no_inherit.pop(idx)
+        if idx < len(self.settings.extra_location_media_filter):
+            self.settings.extra_location_media_filter.pop(idx)
 
         renumbered: list[str] = []
         for k in (self.settings.media_folder_order or []):
@@ -1078,6 +1081,13 @@ class SettingsWindow(Adw.PreferencesWindow):
             if idx < len(self.settings.extra_location_no_inherit)
             else False
         )
+        current_media_filter = (
+            self.settings.extra_location_media_filter[idx]
+            if idx < len(self.settings.extra_location_media_filter)
+            else "both"
+        )
+        if current_media_filter not in ("both", "images", "videos"):
+            current_media_filter = "both"
         # Pre-fill with whatever is currently shown as the entry label so the
         # user starts editing from the value they actually see.
         display_name = custom_name or Path(current_path).name or current_path
@@ -1133,10 +1143,26 @@ class SettingsWindow(Adw.PreferencesWindow):
         )
         inherit_row.set_active(bool(current_no_inherit))
 
+        # Media-type filter: the order of `filter_values` must stay in lock-step
+        # with the labels appended to `filter_store` so the resolved selection
+        # maps back to the right enum value.
+        filter_values = ["both", "images", "videos"]
+        filter_labels = [self._("Both"), self._("Images only"), self._("Videos only")]
+        filter_store = Gtk.StringList()
+        for lbl in filter_labels:
+            filter_store.append(lbl)
+        filter_row = Adw.ComboRow(
+            title=self._("Show"),
+            subtitle=self._("Which media types appear when this folder is opened."),
+            model=filter_store,
+            selected=filter_values.index(current_media_filter),
+        )
+
         group = Adw.PreferencesGroup()
         group.add(name_row)
         group.add(path_row)
         group.add(inherit_row)
+        group.add(filter_row)
         dialog.set_extra_child(group)
 
         dialog.add_response("cancel", self._("Cancel"))
@@ -1151,6 +1177,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             new_name = name_row.get_text().strip()
             new_path = path_row.get_text().strip() or current_path
             new_no_inherit = bool(inherit_row.get_active())
+            new_media_filter = filter_values[filter_row.get_selected()]
             # The list fields are shared with parent.settings (shallow-copy in
             # __init__), so one write per list reaches both.
             self.settings.extra_locations[idx] = new_path
@@ -1160,6 +1187,9 @@ class SettingsWindow(Adw.PreferencesWindow):
             while len(self.settings.extra_location_no_inherit) <= idx:
                 self.settings.extra_location_no_inherit.append(False)
             self.settings.extra_location_no_inherit[idx] = new_no_inherit
+            while len(self.settings.extra_location_media_filter) <= idx:
+                self.settings.extra_location_media_filter.append("both")
+            self.settings.extra_location_media_filter[idx] = new_media_filter
             self.parent_window.settings.save()
             # Refresh the row (title falls back to basename if name is empty)
             display_title = new_name or Path(new_path).name or new_path

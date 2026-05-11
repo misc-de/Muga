@@ -317,17 +317,23 @@ class Database:
             self.conn.commit()
 
     @staticmethod
-    def _build_list_where(category: str, folder: str | None, include_nc: bool) -> tuple[str, list]:
+    def _build_list_where(category: str, folder: str | None, include_nc: bool,
+                          media_filter: str | None = None) -> tuple[str, list]:
         """Return (where_sql, args) for filtering by category (+ optional folder).
-        Image categories (pictures/photos/screenshots/nextcloud/...) restrict to
-        media_type='image'. The videos category aggregates videos across every
-        source. When include_nc is True for an image category, NC images are
-        merged in regardless of folder."""
+        Built-in image categories restrict to media_type='image'; the videos
+        category aggregates videos across every source. *media_filter* overrides
+        the per-category default for extras: "both" drops the type constraint,
+        "videos" flips to videos-only, "images" keeps the image-only default."""
         if category == "videos":
             # Aggregate: every video on disk or NC, regardless of which root holds it.
             return "media_type = 'video'", []
         args: list = [category]
-        local = "category = ? AND media_type = 'image'"
+        if media_filter == "videos":
+            local = "category = ? AND media_type = 'video'"
+        elif media_filter == "both":
+            local = "category = ?"
+        else:
+            local = "category = ? AND media_type = 'image'"
         if folder:
             local += " AND folder = ?"
             args.append(folder)
@@ -337,7 +343,7 @@ class Database:
         return local, args
 
     def list_media(self, category: str, sort_mode: str = "newest", folder: str | None = None,
-                   include_nc: bool = False) -> list[MediaItem]:
+                   include_nc: bool = False, media_filter: str | None = None) -> list[MediaItem]:
         order = {
             "newest":      "mtime DESC, name COLLATE NOCASE ASC",
             "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
@@ -346,14 +352,15 @@ class Database:
             "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
             "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
         }.get(sort_mode, "mtime DESC")
-        where, args = self._build_list_where(category, folder, include_nc)
+        where, args = self._build_list_where(category, folder, include_nc, media_filter)
         with self.lock:
             rows = self.conn.execute(f"SELECT * FROM media WHERE {where} ORDER BY {order}", args).fetchall()
         return [self._row_to_item(row) for row in rows]
 
-    def count_media(self, category: str, folder: str | None = None, include_nc: bool = False) -> int:
+    def count_media(self, category: str, folder: str | None = None, include_nc: bool = False,
+                    media_filter: str | None = None) -> int:
         """Return total count of media items (for pagination)."""
-        where, args = self._build_list_where(category, folder, include_nc)
+        where, args = self._build_list_where(category, folder, include_nc, media_filter)
         with self.lock:
             result = self.conn.execute(f"SELECT COUNT(*) FROM media WHERE {where}", args).fetchone()
         return result[0] if result else 0
@@ -438,12 +445,12 @@ class Database:
 
     def search_media_count(
         self, category: str, query: str, folder: str | None = None,
-        include_nc: bool = False,
+        include_nc: bool = False, media_filter: str | None = None,
     ) -> int:
         """Total number of items matching the search query in the given
         category/folder context. Mirrors search_media so paginated callers
         can know when to stop fetching."""
-        base_where, args = self._build_list_where(category, folder, include_nc)
+        base_where, args = self._build_list_where(category, folder, include_nc, media_filter)
         search_where, search_args = self._build_search_clause(query)
         full_where = f"({base_where}) AND {search_where}"
         args.extend(search_args)
@@ -457,6 +464,7 @@ class Database:
         self, category: str, query: str, sort_mode: str = "newest",
         folder: str | None = None, include_nc: bool = False,
         limit: int | None = None, offset: int = 0,
+        media_filter: str | None = None,
     ) -> list[MediaItem]:
         """Filter media by a free-text query. Matches filename, EXIF text,
         year (4-digit), year-month (YYYY-MM / YYYY/MM / YYYY.MM) and locale
@@ -469,7 +477,7 @@ class Database:
             "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
             "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
         }.get(sort_mode, "mtime DESC")
-        base_where, args = self._build_list_where(category, folder, include_nc)
+        base_where, args = self._build_list_where(category, folder, include_nc, media_filter)
         search_where, search_args = self._build_search_clause(query)
         full_where = f"({base_where}) AND {search_where}"
         args.extend(search_args)
@@ -484,6 +492,7 @@ class Database:
     def list_media_paginated(
         self, category: str, sort_mode: str = "newest", folder: str | None = None,
         limit: int = 100, offset: int = 0, include_nc: bool = False,
+        media_filter: str | None = None,
     ) -> list[MediaItem]:
         """Return paginated media items with LIMIT and OFFSET."""
         order = {
@@ -494,7 +503,7 @@ class Database:
             "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
             "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
         }.get(sort_mode, "mtime DESC")
-        where, args = self._build_list_where(category, folder, include_nc)
+        where, args = self._build_list_where(category, folder, include_nc, media_filter)
         args.extend([limit, offset])
         with self.lock:
             rows = self.conn.execute(
@@ -526,10 +535,17 @@ class Database:
             ).fetchall()
         return [(row["folder"], row["count"], row["thumb"]) for row in rows]
 
-    def child_folders(self, category: str, parent: str | None) -> list[tuple[str, int, list]]:
+    def child_folders(self, category: str, parent: str | None,
+                      media_filter: str | None = None) -> list[tuple[str, int, list]]:
         if category == "videos":
             sql = "SELECT folder, thumb_path FROM media WHERE media_type = 'video' ORDER BY mtime DESC"
             params: tuple = ()
+        elif media_filter == "videos":
+            sql = "SELECT folder, thumb_path FROM media WHERE category = ? AND media_type = 'video' ORDER BY mtime DESC"
+            params = (category,)
+        elif media_filter == "both":
+            sql = "SELECT folder, thumb_path FROM media WHERE category = ? ORDER BY mtime DESC"
+            params = (category,)
         else:
             sql = "SELECT folder, thumb_path FROM media WHERE category = ? AND media_type = 'image' ORDER BY mtime DESC"
             params = (category,)
