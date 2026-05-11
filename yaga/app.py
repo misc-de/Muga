@@ -379,13 +379,13 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sel_delete_btn.connect("clicked", lambda _: self._sel_delete_selected())
         self.header.pack_start(self._sel_delete_btn)
 
-        self._sel_move_btn = Gtk.Button.new_from_icon_name("folder-move-symbolic")
+        self._sel_move_btn = Gtk.Button.new_from_icon_name("document-revert-symbolic")
         self._sel_move_btn.set_tooltip_text(self._("Move selected"))
         self._sel_move_btn.set_visible(False)
         self._sel_move_btn.connect("clicked", lambda _: self._sel_move_selected())
         self.header.pack_start(self._sel_move_btn)
 
-        self._sel_share_btn = Gtk.Button.new_from_icon_name("emblem-shared-symbolic")
+        self._sel_share_btn = Gtk.Button.new_from_icon_name("share-public-symbolic")
         self._sel_share_btn.set_tooltip_text(self._("Share selected"))
         self._sel_share_btn.set_visible(False)
         self._sel_share_btn.connect("clicked", lambda _: self._sel_share_selected())
@@ -1672,8 +1672,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         for label, icon, callback in [
             ("Delete", "user-trash-symbolic", self._delete_item),
-            ("Move", "folder-move-symbolic", self._move_item),
-            ("Share", "mail-send-symbolic", self._share_item),
+            ("Move", "document-revert-symbolic", self._move_item),
+            ("Share", "share-public-symbolic", self._share_item),
             ("Open externally", "document-open-symbolic", self._open_externally),
         ]:
             button = Gtk.Button()
