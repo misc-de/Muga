@@ -446,6 +446,8 @@ class CameraWindow(Adw.Window):
         # Per-device cache so re-opening the popover after a camera switch
         # doesn't trigger another v4l2-ctl probe.
         self._controls_cache: dict[str, dict[str, V4l2Control]] = {}
+        self._focus_point: tuple[float, float] | None = None
+        self._focus_hide_source: int | None = None
 
         overlay = Gtk.Overlay()
         self.set_content(overlay)
@@ -495,6 +497,17 @@ class CameraWindow(Adw.Window):
         except Exception:
             pass
         overlay.add_overlay(self._flash)
+
+        # Tap-to-focus indicator — full-size invisible drawing area that
+        # only paints when self._focus_point is set. Picture click coords
+        # map 1:1 to this area's coords because both are children of the
+        # same Overlay and span the same allocation.
+        self._focus_rect = Gtk.DrawingArea()
+        self._focus_rect.set_hexpand(True)
+        self._focus_rect.set_vexpand(True)
+        self._focus_rect.set_can_target(False)
+        self._focus_rect.set_draw_func(self._draw_focus_rect)
+        overlay.add_overlay(self._focus_rect)
 
         # Countdown — large centered number shown only while self-timer runs.
         self._countdown = Gtk.Label(label="")
@@ -601,6 +614,14 @@ class CameraWindow(Adw.Window):
         zoom_gesture.connect("begin", self._on_zoom_begin)
         zoom_gesture.connect("scale-changed", self._on_zoom_changed)
         self.add_controller(zoom_gesture)
+
+        # Tap-to-focus — attached to the picture so the chrome buttons,
+        # which sit above the picture in the overlay z-order, capture
+        # their own clicks first.
+        click = Gtk.GestureClick()
+        click.set_button(1)
+        click.connect("released", self._on_tap_to_focus)
+        self._picture.add_controller(click)
 
         # ESC / Space / Return shortcuts.
         keys = Gtk.EventControllerKey()
@@ -1273,6 +1294,65 @@ class CameraWindow(Adw.Window):
         return True
 
     # ------------------------------------------------------------------
+    # Tap-to-focus
+    # ------------------------------------------------------------------
+
+    def _on_tap_to_focus(
+        self,
+        gesture: Gtk.GestureClick,
+        n_press: int,
+        x: float,
+        y: float,
+    ) -> None:
+        if n_press != 1:
+            return
+        # Picture coords -> overlay coords. Since the focus_rect drawing
+        # area shares the overlay allocation with the picture, no
+        # translation is required.
+        self._focus_point = (x, y)
+        self._focus_rect.queue_draw()
+        if self._focus_hide_source is not None:
+            GLib.source_remove(self._focus_hide_source)
+        self._focus_hide_source = GLib.timeout_add(700, self._hide_focus_rect)
+        self._fire_autofocus()
+
+    def _hide_focus_rect(self) -> bool:
+        self._focus_point = None
+        self._focus_hide_source = None
+        self._focus_rect.queue_draw()
+        return False
+
+    def _draw_focus_rect(
+        self, _da: Gtk.DrawingArea, cr: Any, _w: int, _h: int
+    ) -> None:
+        if self._focus_point is None:
+            return
+        fx, fy = self._focus_point
+        size = 60
+        cr.set_line_width(2.0)
+        # Outer shadow for contrast on bright scenes.
+        cr.set_source_rgba(0, 0, 0, 0.6)
+        cr.rectangle(fx - size / 2 + 1, fy - size / 2 + 1, size, size)
+        cr.stroke()
+        cr.set_source_rgba(1.0, 0.82, 0.10, 0.95)
+        cr.rectangle(fx - size / 2, fy - size / 2, size, size)
+        cr.stroke()
+        # Tiny corner ticks like classic AF indicators.
+        for ox, oy in ((-size / 2, 0), (size / 2, 0), (0, -size / 2), (0, size / 2)):
+            cr.move_to(fx + ox * 0.6, fy + oy * 0.6)
+            cr.line_to(fx + ox, fy + oy)
+        cr.stroke()
+
+    def _fire_autofocus(self) -> None:
+        """Trigger one autofocus cycle if the device exposes the V4L2
+        button control for it. Visual indicator runs regardless so the
+        user gets feedback even when the hardware can't act on it."""
+        af = camera_controls.resolve(self._controls, "auto_focus_start")
+        if af is None:
+            return
+        camera_controls.set_control(self._current_device_path(), af.name, 1)
+
+    # ------------------------------------------------------------------
     # Capture
     # ------------------------------------------------------------------
 
@@ -1449,4 +1529,7 @@ class CameraWindow(Adw.Window):
         if self._flash_source is not None:
             GLib.source_remove(self._flash_source)
             self._flash_source = None
+        if self._focus_hide_source is not None:
+            GLib.source_remove(self._focus_hide_source)
+            self._focus_hide_source = None
         return False
