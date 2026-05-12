@@ -846,45 +846,91 @@ class CameraWindow(Adw.Window):
         has_jpeg = gst.ElementFactory.find("jpegenc") is not None
         has_appsink = gst.ElementFactory.find("appsink") is not None
 
-        # Larger queue on Halium because droidcamsrc's buffer pool is
-        # tiny — a bigger downstream queue absorbs more without back-
-        # pressuring the source. Combined with leaky=downstream, this
-        # also drops the oldest frames once full, keeping the pool fluid.
         on_halium = device.get("source_factory") == "droidcamsrc"
-        preview_queue = (
-            "queue leaky=downstream max-size-buffers=8 max-size-time=0 max-size-bytes=0"
-            if on_halium else
-            "queue leaky=downstream max-size-buffers=2"
-        )
-
-        if has_gtk_sink:
-            preview_branch = (
-                f"t. ! {preview_queue} ! videoconvert "
-                "   ! gtk4paintablesink name=preview"
+        # Halium / droidcamsrc has a tiny source buffer pool (~4 frames).
+        # Any element downstream that keeps refs to those buffers starves
+        # the pool and the source stops producing — the "first frame, then
+        # freeze" symptom. Two countermeasures, applied only on Halium:
+        #   1. Force videoconvert to ACTUALLY convert (NV21 → RGBA) right
+        #      after the tee. gtk4paintablesink/appsink both accept NV21
+        #      natively, so without a forced format change videoconvert
+        #      runs in passthrough and the source buffer survives all the
+        #      way to the sink (which retains it for repaint).
+        #   2. Place the preview queue AFTER that conversion, so the queue
+        #      holds RGBA buffers from videoconvert's own pool — not
+        #      source-pool buffers.
+        if on_halium:
+            preview_queue = (
+                "queue leaky=downstream max-size-buffers=4 "
+                "max-size-time=0 max-size-bytes=0"
             )
-        elif has_appsink:
-            preview_branch = (
-                f"t. ! {preview_queue} "
-                "   ! videoconvert "
-                "   ! appsink name=preview_sink emit-signals=true caps=video/x-raw,format=RGBA "
-                "             max-buffers=2 drop=true sync=false"
-            )
+            if has_gtk_sink:
+                preview_branch = (
+                    "t. ! videoconvert ! video/x-raw,format=RGBA "
+                    f"   ! {preview_queue} "
+                    "   ! gtk4paintablesink name=preview"
+                )
+            elif has_appsink:
+                preview_branch = (
+                    "t. ! videoconvert ! video/x-raw,format=RGBA "
+                    f"   ! {preview_queue} "
+                    "   ! appsink name=preview_sink emit-signals=true "
+                    "             caps=video/x-raw,format=RGBA "
+                    "             max-buffers=2 drop=true sync=false"
+                )
+            else:
+                preview_branch = (
+                    "t. ! videoconvert ! video/x-raw,format=RGBA "
+                    f"   ! {preview_queue} ! fakesink sync=false"
+                )
         else:
-            preview_branch = (
-                f"t. ! {preview_queue} ! fakesink sync=false"
-            )
+            preview_queue = "queue leaky=downstream max-size-buffers=2"
+            if has_gtk_sink:
+                preview_branch = (
+                    f"t. ! {preview_queue} ! videoconvert "
+                    "   ! gtk4paintablesink name=preview"
+                )
+            elif has_appsink:
+                preview_branch = (
+                    f"t. ! {preview_queue} "
+                    "   ! videoconvert "
+                    "   ! appsink name=preview_sink emit-signals=true "
+                    "             caps=video/x-raw,format=RGBA "
+                    "             max-buffers=2 drop=true sync=false"
+                )
+            else:
+                preview_branch = (
+                    f"t. ! {preview_queue} ! fakesink sync=false"
+                )
         # The snap branch is gated by a valve so jpegenc only runs when the
         # user actually presses the shutter. Running jpegenc on every frame
         # at 30 fps on a Halium phone causes memory pile-up and OOM crash.
         # On capture: open valve, wait for new-sample signal, close valve.
-        snapshot_branch = (
-            "t. ! queue leaky=downstream max-size-buffers=2 "
-            "   ! valve name=shutter drop=true "
-            "   ! videoconvert ! jpegenc quality=92 "
-            "   ! appsink name=snap emit-signals=true max-buffers=1 drop=true sync=false"
-            if (has_jpeg and has_appsink)
-            else ""
-        )
+        #
+        # On Halium the valve sits BEFORE the queue — with valve drop=true
+        # (the default state), no buffers flow, and the queue stays empty.
+        # If the queue were upstream of the valve it would always hold the
+        # last 2 source-pool buffers even while idle, just adding pressure
+        # on droidcamsrc's pool.
+        if has_jpeg and has_appsink:
+            if on_halium:
+                snapshot_branch = (
+                    "t. ! valve name=shutter drop=true "
+                    "   ! queue leaky=downstream max-size-buffers=2 "
+                    "   ! videoconvert ! jpegenc quality=92 "
+                    "   ! appsink name=snap emit-signals=true "
+                    "             max-buffers=1 drop=true sync=false"
+                )
+            else:
+                snapshot_branch = (
+                    "t. ! queue leaky=downstream max-size-buffers=2 "
+                    "   ! valve name=shutter drop=true "
+                    "   ! videoconvert ! jpegenc quality=92 "
+                    "   ! appsink name=snap emit-signals=true "
+                    "             max-buffers=1 drop=true sync=false"
+                )
+        else:
+            snapshot_branch = ""
 
         parts = ["videoconvert ! tee name=t", preview_branch]
         if snapshot_branch:
