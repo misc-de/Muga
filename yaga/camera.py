@@ -131,20 +131,9 @@ def camera_supported() -> bool:
         gst = _gst()
     except CameraError:
         return False
-    # Note: we deliberately don't require gtk4paintablesink here. If the
-    # sink is missing the window still opens and surfaces a sticky toast
-    # with an install hint — better UX than a silently-disabled button.
     return (
         gst.ElementFactory.find("v4l2src") is not None
         or gst.ElementFactory.find("autovideosrc") is not None
-    )
-
-
-def _missing_preview_message() -> str:
-    """Translation-free hint string for the install pkg the user is missing."""
-    return (
-        "Camera preview requires gtk4paintablesink — "
-        "install gst-plugins-rs (Arch/Manjaro: pacman -S gst-plugins-rs)."
     )
 
 
@@ -436,6 +425,8 @@ class CameraWindow(Adw.Window):
         self._pipeline: Any = None
         self._bus: Any = None
         self._appsink: Any = None
+        self._preview_appsink: Any = None
+        self._preview_signal_id: int | None = None
         self._videocrop: Any = None
         self._capsfilter: Any = None
         self._devices: list[dict[str, Any]] = _enumerate_devices(self._Gst)
@@ -662,12 +653,6 @@ class CameraWindow(Adw.Window):
         if not self._devices:
             self._shutter.set_sensitive(False)
             self._show_toast(self._("No camera detected"))
-        elif self._Gst.ElementFactory.find("gtk4paintablesink") is None:
-            # No point starting a pipeline that can't show a preview.
-            # Disable capture and surface a hint so the user knows it's a
-            # missing package rather than broken hardware.
-            self._shutter.set_sensitive(False)
-            self._show_toast(self._(_missing_preview_message()), sticky=True)
         else:
             GLib.idle_add(self._start_pipeline)
 
@@ -694,7 +679,7 @@ class CameraWindow(Adw.Window):
 
     def _build_pipeline_description(self, device: dict[str, Any]) -> str:
         gst = self._Gst
-        has_preview = gst.ElementFactory.find("gtk4paintablesink") is not None
+        has_gtk_sink = gst.ElementFactory.find("gtk4paintablesink") is not None
         has_jpeg = gst.ElementFactory.find("jpegenc") is not None
         has_appsink = gst.ElementFactory.find("appsink") is not None
         has_videocrop = gst.ElementFactory.find("videocrop") is not None
@@ -729,12 +714,27 @@ class CameraWindow(Adw.Window):
             if has_videocrop else ""
         )
 
-        preview_branch = (
-            "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
-            "   ! gtk4paintablesink name=preview"
-            if has_preview
-            else "t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false"
-        )
+        # Two preview paths:
+        #   - gtk4paintablesink (Rust plugin, fast) when available
+        #   - appsink RGBA + Gdk.MemoryTexture fallback otherwise
+        # The appsink path is universal because appsink ships in
+        # gst-plugins-base, but it costs one RGBA convert per frame.
+        if has_gtk_sink:
+            preview_branch = (
+                "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
+                "   ! gtk4paintablesink name=preview"
+            )
+        elif has_appsink:
+            preview_branch = (
+                "t. ! queue leaky=downstream max-size-buffers=2 "
+                "   ! videoconvert ! video/x-raw,format=RGBA "
+                "   ! appsink name=preview_sink emit-signals=true "
+                "             max-buffers=1 drop=true sync=false"
+            )
+        else:
+            preview_branch = (
+                "t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false"
+            )
         snapshot_branch = (
             "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
             "   ! jpegenc quality=92 "
@@ -789,6 +789,16 @@ class CameraWindow(Adw.Window):
                     self._picture.set_paintable(paintable)
             except Exception:
                 LOGGER.debug("Could not bind preview paintable", exc_info=True)
+        else:
+            # Appsink fallback path: hook new-sample, convert each RGBA
+            # buffer into a Gdk.MemoryTexture, swap it onto the picture
+            # from the main loop.
+            preview_app = self._pipeline.get_by_name("preview_sink")
+            if preview_app is not None:
+                self._preview_appsink = preview_app
+                self._preview_signal_id = preview_app.connect(
+                    "new-sample", self._on_preview_sample
+                )
 
         # Mirror the preview only when the active device looks like a
         # front/user-facing camera. Saved frames stay unflipped — the mirror
@@ -810,6 +820,13 @@ class CameraWindow(Adw.Window):
         return False
 
     def _stop_pipeline(self) -> None:
+        if self._preview_appsink is not None and self._preview_signal_id is not None:
+            try:
+                self._preview_appsink.disconnect(self._preview_signal_id)
+            except Exception:
+                pass
+        self._preview_signal_id = None
+        self._preview_appsink = None
         if self._bus is not None:
             try:
                 self._bus.remove_signal_watch()
@@ -830,6 +847,50 @@ class CameraWindow(Adw.Window):
         self._appsink = None
         self._videocrop = None
         self._capsfilter = None
+
+    def _on_preview_sample(self, sink: Any) -> Any:
+        """Fallback preview path — invoked on the streaming thread when
+        gtk4paintablesink isn't installed. Pulls one RGBA buffer, wraps
+        it in a Gdk.MemoryTexture, then hands the texture to the picture
+        widget from the main loop.
+
+        Memory copy budget: one bytes(...) per frame (~1.2 MB at 640x480
+        RGBA, ~36 MB/s at 30 fps). Negligible on any modern desktop and
+        not worth the complexity of zero-copy buffer-pool tricks.
+        """
+        gst = self._Gst
+        try:
+            sample = sink.emit("pull-sample")
+        except Exception:
+            return gst.FlowReturn.OK
+        if sample is None:
+            return gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        caps = sample.get_caps()
+        if buf is None or caps is None or caps.get_size() == 0:
+            return gst.FlowReturn.OK
+        s = caps.get_structure(0)
+        ok_w, w = s.get_int("width")
+        ok_h, h = s.get_int("height")
+        if not (ok_w and ok_h) or w <= 0 or h <= 0:
+            return gst.FlowReturn.OK
+        ok, mapinfo = buf.map(gst.MapFlags.READ)
+        if not ok:
+            return gst.FlowReturn.OK
+        try:
+            data = GLib.Bytes.new(bytes(mapinfo.data))
+        finally:
+            buf.unmap(mapinfo)
+        try:
+            texture = Gdk.MemoryTexture.new(
+                w, h, Gdk.MemoryFormat.R8G8B8A8, data, w * 4,
+            )
+        except Exception:
+            LOGGER.debug("MemoryTexture.new failed", exc_info=True)
+            return gst.FlowReturn.OK
+        # set_paintable must run on the main loop.
+        GLib.idle_add(self._picture.set_paintable, texture)
+        return gst.FlowReturn.OK
 
     def _on_bus_message(self, _bus: Any, message: Any) -> None:
         gst = self._Gst
