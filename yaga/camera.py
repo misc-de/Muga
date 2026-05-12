@@ -597,6 +597,12 @@ class CameraWindow(Adw.Window):
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
         self._preview_frame_count = 0
+        self._source_frame_count = 0
+        self._sink_frame_count = 0
+        self._source_probe_pad: Any = None
+        self._source_probe_id: int | None = None
+        self._sink_probe_pad: Any = None
+        self._sink_probe_id: int | None = None
         self._valve: Any = None
         self._capture_signal_id: int | None = None
         self._capture_timeout_id: int | None = None
@@ -1114,8 +1120,21 @@ class CameraWindow(Adw.Window):
         self._valve = pipeline.get_by_name("shutter")
         self._capsfilter = capsfilter
         self._preview_frame_count = 0
+        self._source_frame_count = 0
+        self._sink_frame_count = 0
         self._zoom = 1.0
         self._picture.set_zoom(1.0)
+
+        # Diagnostic buffer probes. Tells us — without enabling GST_DEBUG —
+        # whether droidcamsrc is producing a continuous stream and whether
+        # those buffers reach the sink. Crucial for "one frame then freeze"
+        # debugging: if source >> sink, the stall is downstream; if both
+        # stop at 1, the source itself stops producing.
+        if src_pad is not None:
+            self._source_probe_pad = src_pad
+            self._source_probe_id = src_pad.add_probe(
+                gst.PadProbeType.BUFFER, self._on_source_buffer,
+            )
 
         self._bus = pipeline.get_bus()
         if self._bus is not None:
@@ -1138,6 +1157,17 @@ class CameraWindow(Adw.Window):
                     "new-sample", self._on_preview_sample
                 )
 
+        # Probe the preview sink's input so we can compare source-side vs
+        # sink-side buffer counts in the logs.
+        preview_sink_element = sink or pipeline.get_by_name("preview_sink")
+        if preview_sink_element is not None:
+            sink_pad = preview_sink_element.get_static_pad("sink")
+            if sink_pad is not None:
+                self._sink_probe_pad = sink_pad
+                self._sink_probe_id = sink_pad.add_probe(
+                    gst.PadProbeType.BUFFER, self._on_sink_buffer,
+                )
+
         self._picture.set_mirrored(device.get("location") == "front")
 
         result = pipeline.set_state(gst.State.PLAYING)
@@ -1145,10 +1175,6 @@ class CameraWindow(Adw.Window):
             self._fail(self._("Could not start camera"))
             return False
 
-        # Stderr diagnostic — print which preview path is live so log
-        # excerpts immediately reveal whether frames should be flowing via
-        # gtk4paintablesink (no Python in the hot path) or via the appsink
-        # callback. Helps a lot when debugging "no preview" reports.
         import sys
         preview_path = (
             "gtk4paintablesink" if pipeline.get_by_name("preview") is not None
@@ -1156,8 +1182,15 @@ class CameraWindow(Adw.Window):
             else "fakesink"
         )
         src_factory = source.get_factory().get_name() if source.get_factory() else "?"
+        result_nick = {
+            gst.StateChangeReturn.SUCCESS: "SUCCESS",
+            gst.StateChangeReturn.ASYNC: "ASYNC",
+            gst.StateChangeReturn.NO_PREROLL: "NO_PREROLL",
+            gst.StateChangeReturn.FAILURE: "FAILURE",
+        }.get(result, str(result))
         print(
-            f"[yaga.camera] pipeline PLAYING source={src_factory} preview={preview_path}",
+            f"[yaga.camera] pipeline PLAYING source={src_factory} "
+            f"preview={preview_path} set_state={result_nick}",
             file=sys.stderr, flush=True,
         )
 
@@ -1178,6 +1211,20 @@ class CameraWindow(Adw.Window):
                 pass
         self._preview_signal_id = None
         self._preview_appsink = None
+        if self._source_probe_pad is not None and self._source_probe_id is not None:
+            try:
+                self._source_probe_pad.remove_probe(self._source_probe_id)
+            except Exception:
+                pass
+        self._source_probe_pad = None
+        self._source_probe_id = None
+        if self._sink_probe_pad is not None and self._sink_probe_id is not None:
+            try:
+                self._sink_probe_pad.remove_probe(self._sink_probe_id)
+            except Exception:
+                pass
+        self._sink_probe_pad = None
+        self._sink_probe_id = None
         if self._bus is not None:
             try:
                 self._bus.remove_signal_watch()
@@ -1197,6 +1244,39 @@ class CameraWindow(Adw.Window):
             self._pipeline = None
         self._appsink = None
         self._capsfilter = None
+
+    def _on_source_buffer(self, _pad: Any, _info: Any) -> Any:
+        # Called on the streaming thread for every buffer the source emits.
+        # Print the first few and then a heartbeat every 60 frames so we
+        # can tell whether droidcamsrc is actually producing continuously.
+        gst = self._Gst
+        self._source_frame_count += 1
+        n = self._source_frame_count
+        if n <= 3 or n % 60 == 0:
+            import sys
+            print(
+                f"[yaga.camera] source buffer #{n}",
+                file=sys.stderr, flush=True,
+            )
+        return gst.PadProbeReturn.OK
+
+    def _on_sink_buffer(self, _pad: Any, _info: Any) -> Any:
+        # Called on the streaming thread just before the preview sink
+        # consumes a buffer. Compare against _source_frame_count: if the
+        # source counter keeps climbing but this one stalls, the freeze is
+        # downstream (queue, sink retention). If both stop together, the
+        # source itself has stopped producing.
+        gst = self._Gst
+        self._sink_frame_count += 1
+        n = self._sink_frame_count
+        if n <= 3 or n % 60 == 0:
+            import sys
+            print(
+                f"[yaga.camera] sink buffer #{n} "
+                f"(source so far: {self._source_frame_count})",
+                file=sys.stderr, flush=True,
+            )
+        return gst.PadProbeReturn.OK
 
     def _on_preview_sample(self, sink: Any) -> Any:
         """Fallback preview path — invoked on the streaming thread when
@@ -1255,7 +1335,9 @@ class CameraWindow(Adw.Window):
 
     def _on_bus_message(self, _bus: Any, message: Any) -> None:
         gst = self._Gst
-        if message.type == gst.MessageType.ERROR:
+        import sys
+        t = message.type
+        if t == gst.MessageType.ERROR:
             err, dbg = message.parse_error()
             err_msg = err.message if err else "?"
             dbg_text = (dbg or "").strip()
@@ -1268,6 +1350,38 @@ class CameraWindow(Adw.Window):
             # the toast tells the user something they can act on.
             hint = self._interpret_v4l2_error(err_msg, dbg_text)
             self._fail(hint if hint else f"Camera error: {err_msg}")
+        elif t == gst.MessageType.WARNING:
+            err, dbg = message.parse_warning()
+            print(
+                f"[yaga.camera] bus WARNING from {message.src.get_name() if message.src else '?'}: "
+                f"{err.message if err else '?'} | {(dbg or '').strip()}",
+                file=sys.stderr, flush=True,
+            )
+        elif t == gst.MessageType.INFO:
+            err, dbg = message.parse_info()
+            print(
+                f"[yaga.camera] bus INFO from {message.src.get_name() if message.src else '?'}: "
+                f"{err.message if err else '?'} | {(dbg or '').strip()}",
+                file=sys.stderr, flush=True,
+            )
+        elif t == gst.MessageType.EOS:
+            print(
+                f"[yaga.camera] bus EOS from {message.src.get_name() if message.src else '?'}",
+                file=sys.stderr, flush=True,
+            )
+        elif t == gst.MessageType.STATE_CHANGED:
+            if message.src is self._pipeline:
+                old, new, pending = message.parse_state_changed()
+                print(
+                    f"[yaga.camera] pipeline state {old.value_nick} -> {new.value_nick} "
+                    f"(pending {pending.value_nick})",
+                    file=sys.stderr, flush=True,
+                )
+        elif t == gst.MessageType.STREAM_START:
+            print(
+                f"[yaga.camera] stream-start from {message.src.get_name() if message.src else '?'}",
+                file=sys.stderr, flush=True,
+            )
 
     def _interpret_v4l2_error(self, message: str, debug: str) -> str | None:
         combined = (message + " " + debug).lower()
