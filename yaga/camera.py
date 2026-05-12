@@ -596,6 +596,7 @@ class CameraWindow(Adw.Window):
         self._appsink: Any = None
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
+        self._preview_frame_count = 0
         self._valve: Any = None
         self._capture_signal_id: int | None = None
         self._capture_timeout_id: int | None = None
@@ -845,33 +846,32 @@ class CameraWindow(Adw.Window):
         has_jpeg = gst.ElementFactory.find("jpegenc") is not None
         has_appsink = gst.ElementFactory.find("appsink") is not None
 
-        # gtk4paintablesink holds onto the rendered GdkPaintable buffer
-        # for re-paint, which works fine with pipewire/v4l2 sources that
-        # have ample buffer pools. droidcamsrc's pool is tiny — once
-        # gtk4paintablesink owns one frame the source can't refill, so
-        # the preview freezes after the first frame. Force the appsink +
-        # GdkMemoryTexture path on Halium devices, where we explicitly
-        # copy each buffer's bytes (the source buffer is released back to
-        # the pool the instant pull-sample returns).
-        force_appsink_preview = (
-            device.get("source_factory") == "droidcamsrc" and has_appsink
+        # Larger queue on Halium because droidcamsrc's buffer pool is
+        # tiny — a bigger downstream queue absorbs more without back-
+        # pressuring the source. Combined with leaky=downstream, this
+        # also drops the oldest frames once full, keeping the pool fluid.
+        on_halium = device.get("source_factory") == "droidcamsrc"
+        preview_queue = (
+            "queue leaky=downstream max-size-buffers=8 max-size-time=0 max-size-bytes=0"
+            if on_halium else
+            "queue leaky=downstream max-size-buffers=2"
         )
 
-        if has_gtk_sink and not force_appsink_preview:
+        if has_gtk_sink:
             preview_branch = (
-                "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
+                f"t. ! {preview_queue} ! videoconvert "
                 "   ! gtk4paintablesink name=preview"
             )
         elif has_appsink:
             preview_branch = (
-                "t. ! queue leaky=downstream max-size-buffers=2 "
-                "   ! videoconvert ! video/x-raw,format=RGBA "
-                "   ! appsink name=preview_sink emit-signals=true "
-                "             max-buffers=1 drop=true sync=false"
+                f"t. ! {preview_queue} "
+                "   ! videoconvert "
+                "   ! appsink name=preview_sink emit-signals=true caps=video/x-raw,format=RGBA "
+                "             max-buffers=2 drop=true sync=false"
             )
         else:
             preview_branch = (
-                "t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false"
+                f"t. ! {preview_queue} ! fakesink sync=false"
             )
         # The snap branch is gated by a valve so jpegenc only runs when the
         # user actually presses the shutter. Running jpegenc on every frame
@@ -1067,6 +1067,7 @@ class CameraWindow(Adw.Window):
         self._appsink = pipeline.get_by_name("snap")
         self._valve = pipeline.get_by_name("shutter")
         self._capsfilter = capsfilter
+        self._preview_frame_count = 0
         self._zoom = 1.0
         self._picture.set_zoom(1.0)
 
@@ -1097,6 +1098,22 @@ class CameraWindow(Adw.Window):
         if result == gst.StateChangeReturn.FAILURE:
             self._fail(self._("Could not start camera"))
             return False
+
+        # Stderr diagnostic — print which preview path is live so log
+        # excerpts immediately reveal whether frames should be flowing via
+        # gtk4paintablesink (no Python in the hot path) or via the appsink
+        # callback. Helps a lot when debugging "no preview" reports.
+        import sys
+        preview_path = (
+            "gtk4paintablesink" if pipeline.get_by_name("preview") is not None
+            else "appsink" if pipeline.get_by_name("preview_sink") is not None
+            else "fakesink"
+        )
+        src_factory = source.get_factory().get_name() if source.get_factory() else "?"
+        print(
+            f"[yaga.camera] pipeline PLAYING source={src_factory} preview={preview_path}",
+            file=sys.stderr, flush=True,
+        )
 
         self._shutter.set_sensitive(self._appsink is not None)
         if self._appsink is None:
@@ -1161,6 +1178,17 @@ class CameraWindow(Adw.Window):
         ok_h, h = s.get_int("height")
         if not (ok_w and ok_h) or w <= 0 or h <= 0:
             return gst.FlowReturn.OK
+        # First-frame diagnostic — print to stderr so users on phones can
+        # confirm frames are reaching the Python side at all (LOGGER.info
+        # wouldn't show without console-handler configuration).
+        if self._preview_frame_count == 0:
+            import sys
+            print(
+                f"[yaga.camera] first preview frame {w}x{h} "
+                f"format={s.get_string('format') or '?'}",
+                file=sys.stderr, flush=True,
+            )
+        self._preview_frame_count += 1
         ok, mapinfo = buf.map(gst.MapFlags.READ)
         if not ok:
             return gst.FlowReturn.OK
