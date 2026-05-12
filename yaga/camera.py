@@ -201,6 +201,19 @@ def _device_path(props: Any) -> str:
     return ""
 
 
+def _is_pipewire_device(props: Any) -> bool:
+    if props is None or not hasattr(props, "get_string"):
+        return False
+    # Pipewire-provided devices carry these node.* keys; v4l2deviceprovider
+    # entries do not. Either is a reliable discriminator.
+    try:
+        return bool(props.get_string("node.description")) or bool(
+            props.get_string("node.name")
+        )
+    except Exception:
+        return False
+
+
 def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
     devices: list[dict[str, Any]] = []
     try:
@@ -222,6 +235,7 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
                 "source_factory": "v4l2src" if path.startswith("/dev/video") else "",
                 "location": _classify_location(props, display),
                 "caps": caps,
+                "pipewire": _is_pipewire_device(props),
             })
         monitor.stop()
     except Exception:
@@ -235,32 +249,35 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
                 "source_factory": "v4l2src",
                 "location": "unknown",
                 "caps": None,
+                "pipewire": False,
             })
 
-    # UVC drivers expose multiple /dev/video* nodes per physical camera
-    # (capture + metadata + ISP variants). Dedupe by display name and keep
-    # the entry with the richest raw-caps surface so the resolution picker
-    # has the most modes to offer.
-    by_name: dict[str, dict[str, Any]] = {}
+    # The DeviceMonitor aggregates *all* registered providers, so a single
+    # physical camera typically appears twice (once from pipewiredevice-
+    # provider, once from v4l2deviceprovider) with different display names.
+    # Dedupe by /dev path, and within a path prefer the pipewire-sourced
+    # entry — it carries the cleaner node.description name and the
+    # libcamera location property when libcamera-via-PipeWire is in use.
+    by_path: dict[str, dict[str, Any]] = {}
     for d in devices:
         if _is_ir_name(d["name"]):
             LOGGER.debug("Filtering IR device: %s", d["name"])
             continue
-        # Pure metadata-only nodes have no raw modes — drop them.
         if not _resolutions_from_caps(d.get("caps")):
             LOGGER.debug("Filtering metadata-only device: %s (%s)", d["name"], d["path"])
             continue
-        key = d["name"] or d["path"]
-        existing = by_name.get(key)
+        key = d["path"] or d["name"]
+        existing = by_path.get(key)
         if existing is None:
-            by_name[key] = d
+            by_path[key] = d
             continue
-        # Prefer the device with more raw resolutions.
-        if len(_resolutions_from_caps(d.get("caps"))) > len(
-            _resolutions_from_caps(existing.get("caps"))
-        ):
-            by_name[key] = d
-    return list(by_name.values())
+        if d["pipewire"] and not existing["pipewire"]:
+            by_path[key] = d
+        elif d["pipewire"] == existing["pipewire"] and len(
+            _resolutions_from_caps(d.get("caps"))
+        ) > len(_resolutions_from_caps(existing.get("caps"))):
+            by_path[key] = d
+    return list(by_path.values())
 
 
 def _resolutions_from_caps(caps: Any) -> list[tuple[int, int]]:
