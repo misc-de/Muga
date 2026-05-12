@@ -147,43 +147,39 @@ def _droidcamsrc_available(gst: Any) -> bool:
     return gst.ElementFactory.find("droidcamsrc") is not None
 
 
-def _probe_droidcam_count(gst: Any, max_to_try: int = 4) -> int:
-    """Probe how many camera-device IDs droidcamsrc accepts. Creates a
-    throwaway element per ID and checks if it can transition to READY
-    (which opens the Android HAL handle without starting capture). Stops
-    at the first id that fails — Android cameras are usually contiguous
-    from 0."""
+def _droidcam_camera_count(gst: Any) -> int:
+    """Return how many camera-device IDs droidcamsrc exposes, derived
+    from its GParamSpec range (the property is clamped to [min, max]).
+    We avoid the alternative — actually transitioning probe elements to
+    READY — because that opens the Android camera HAL once per ID and
+    rapid open/close cycles wedge the HAL on some phones (the real
+    pipeline opens later but the camera no longer streams)."""
     if not _droidcamsrc_available(gst):
         return 0
-    count = 0
-    for cam_id in range(max_to_try):
-        el = gst.ElementFactory.make("droidcamsrc", f"_probe_{cam_id}")
-        if el is None:
-            break
-        try:
-            el.set_property("camera-device", cam_id)
-            ret = el.set_state(gst.State.READY)
-            if ret == gst.StateChangeReturn.FAILURE:
-                el.set_state(gst.State.NULL)
-                break
-            # Wait briefly for ASYNC transitions to settle.
-            el.get_state(500 * gst.MSECOND)
-            count += 1
-        except Exception:
-            break
-        finally:
-            try:
-                el.set_state(gst.State.NULL)
-            except Exception:
-                pass
-    return count
+    el = gst.ElementFactory.make("droidcamsrc", "_introspect")
+    if el is None:
+        return 0
+    try:
+        pspec = el.find_property("camera-device")
+        if pspec is None:
+            return 2
+        max_id = getattr(pspec, "maximum", 1)
+        # Some drivers expose pspec.maximum as INT32_MAX rather than the
+        # real ceiling. Cap at a conservative 4 to avoid offering 2-billion
+        # phantom cameras.
+        if max_id > 8:
+            max_id = 3
+        return max(1, int(max_id) + 1)
+    finally:
+        del el
 
 
 def _enumerate_droidcam_devices(gst: Any) -> list[dict[str, Any]]:
-    """Return one device dict per droidcamsrc camera-device that probed
-    successfully. Names mirror conventional phone labels: camera 0 is
-    'Back camera', 1 is 'Front camera', extras are 'Back camera N'."""
-    count = _probe_droidcam_count(gst)
+    """Return one device dict per droidcamsrc camera-device the driver
+    exposes via its property-spec range. Names mirror conventional
+    phone labels: camera 0 is 'Back camera', 1 is 'Front camera',
+    extras are 'Back camera N'."""
+    count = _droidcam_camera_count(gst)
     if count == 0:
         return []
     out: list[dict[str, Any]] = []
