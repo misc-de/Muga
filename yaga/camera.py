@@ -853,61 +853,30 @@ class CameraWindow(Adw.Window):
         has_appsink = gst.ElementFactory.find("appsink") is not None
 
         on_halium = device.get("source_factory") == "droidcamsrc"
-        # Halium / droidcamsrc has a tiny source buffer pool (~4 frames).
-        # Any element downstream that keeps refs to those buffers starves
-        # the pool and the source stops producing — the "first frame, then
-        # freeze" symptom. Two countermeasures, applied only on Halium:
-        #   1. Force videoconvert to ACTUALLY convert (NV21 → RGBA) right
-        #      after the tee. gtk4paintablesink/appsink both accept NV21
-        #      natively, so without a forced format change videoconvert
-        #      runs in passthrough and the source buffer survives all the
-        #      way to the sink (which retains it for repaint).
-        #   2. Place the preview queue AFTER that conversion, so the queue
-        #      holds RGBA buffers from videoconvert's own pool — not
-        #      source-pool buffers.
-        if on_halium:
-            preview_queue = (
-                "queue leaky=downstream max-size-buffers=4 "
-                "max-size-time=0 max-size-bytes=0"
+        preview_queue = "queue leaky=downstream max-size-buffers=2"
+        # sync=false on the preview sink: with sync=true (the default), the
+        # sink compares buffer timestamps to the pipeline clock and drops
+        # anything it considers "late", emitting a "buffers are being
+        # dropped / computer too slow" warning. On phones that's a noisy,
+        # CPU-wasting loop. There's no audio to sync to here — we want the
+        # newest frame, not "the frame the clock says is due now".
+        if has_gtk_sink:
+            preview_branch = (
+                f"t. ! {preview_queue} ! videoconvert "
+                "   ! gtk4paintablesink name=preview sync=false"
             )
-            if has_gtk_sink:
-                preview_branch = (
-                    "t. ! videoconvert ! video/x-raw,format=RGBA "
-                    f"   ! {preview_queue} "
-                    "   ! gtk4paintablesink name=preview"
-                )
-            elif has_appsink:
-                preview_branch = (
-                    "t. ! videoconvert ! video/x-raw,format=RGBA "
-                    f"   ! {preview_queue} "
-                    "   ! appsink name=preview_sink emit-signals=true "
-                    "             caps=video/x-raw,format=RGBA "
-                    "             max-buffers=2 drop=true sync=false"
-                )
-            else:
-                preview_branch = (
-                    "t. ! videoconvert ! video/x-raw,format=RGBA "
-                    f"   ! {preview_queue} ! fakesink sync=false"
-                )
+        elif has_appsink:
+            preview_branch = (
+                f"t. ! {preview_queue} "
+                "   ! videoconvert "
+                "   ! appsink name=preview_sink emit-signals=true "
+                "             caps=video/x-raw,format=RGBA "
+                "             max-buffers=2 drop=true sync=false"
+            )
         else:
-            preview_queue = "queue leaky=downstream max-size-buffers=2"
-            if has_gtk_sink:
-                preview_branch = (
-                    f"t. ! {preview_queue} ! videoconvert "
-                    "   ! gtk4paintablesink name=preview"
-                )
-            elif has_appsink:
-                preview_branch = (
-                    f"t. ! {preview_queue} "
-                    "   ! videoconvert "
-                    "   ! appsink name=preview_sink emit-signals=true "
-                    "             caps=video/x-raw,format=RGBA "
-                    "             max-buffers=2 drop=true sync=false"
-                )
-            else:
-                preview_branch = (
-                    f"t. ! {preview_queue} ! fakesink sync=false"
-                )
+            preview_branch = (
+                f"t. ! {preview_queue} ! fakesink sync=false"
+            )
         # The snap branch is gated by a valve so jpegenc only runs when the
         # user actually presses the shutter. Running jpegenc on every frame
         # at 30 fps on a Halium phone causes memory pile-up and OOM crash.
@@ -1253,33 +1222,27 @@ class CameraWindow(Adw.Window):
         self._capsfilter = None
 
     def _on_source_buffer(self, _pad: Any, _info: Any) -> Any:
-        # Called on the streaming thread for every buffer the source emits.
-        # Print the first few and then a heartbeat every 60 frames so we
-        # can tell whether droidcamsrc is actually producing continuously.
+        # First-frames diagnostic so logs show whether the source is
+        # actually producing. Silent after the first few; the upstream
+        # preview path is the source of truth for "is it running?".
         gst = self._Gst
         self._source_frame_count += 1
-        n = self._source_frame_count
-        if n <= 3 or n % 60 == 0:
+        if self._source_frame_count <= 3:
             import sys
             print(
-                f"[yaga.camera] source buffer #{n}",
+                f"[yaga.camera] source buffer #{self._source_frame_count}",
                 file=sys.stderr, flush=True,
             )
         return gst.PadProbeReturn.OK
 
     def _on_sink_buffer(self, _pad: Any, _info: Any) -> Any:
-        # Called on the streaming thread just before the preview sink
-        # consumes a buffer. Compare against _source_frame_count: if the
-        # source counter keeps climbing but this one stalls, the freeze is
-        # downstream (queue, sink retention). If both stop together, the
-        # source itself has stopped producing.
+        # Same idea as the source probe, on the preview sink's input.
         gst = self._Gst
         self._sink_frame_count += 1
-        n = self._sink_frame_count
-        if n <= 3 or n % 60 == 0:
+        if self._sink_frame_count <= 3:
             import sys
             print(
-                f"[yaga.camera] sink buffer #{n} "
+                f"[yaga.camera] sink buffer #{self._sink_frame_count} "
                 f"(source so far: {self._source_frame_count})",
                 file=sys.stderr, flush=True,
             )
@@ -1364,13 +1327,6 @@ class CameraWindow(Adw.Window):
                 f"{err.message if err else '?'} | {(dbg or '').strip()}",
                 file=sys.stderr, flush=True,
             )
-        elif t == gst.MessageType.INFO:
-            err, dbg = message.parse_info()
-            print(
-                f"[yaga.camera] bus INFO from {message.src.get_name() if message.src else '?'}: "
-                f"{err.message if err else '?'} | {(dbg or '').strip()}",
-                file=sys.stderr, flush=True,
-            )
         elif t == gst.MessageType.EOS:
             print(
                 f"[yaga.camera] bus EOS from {message.src.get_name() if message.src else '?'}",
@@ -1379,16 +1335,12 @@ class CameraWindow(Adw.Window):
         elif t == gst.MessageType.STATE_CHANGED:
             if message.src is self._pipeline:
                 old, new, pending = message.parse_state_changed()
-                print(
-                    f"[yaga.camera] pipeline state {old.value_nick} -> {new.value_nick} "
-                    f"(pending {pending.value_nick})",
-                    file=sys.stderr, flush=True,
-                )
-        elif t == gst.MessageType.STREAM_START:
-            print(
-                f"[yaga.camera] stream-start from {message.src.get_name() if message.src else '?'}",
-                file=sys.stderr, flush=True,
-            )
+                if new == gst.State.PLAYING or pending != gst.State.VOID_PENDING:
+                    print(
+                        f"[yaga.camera] pipeline state {old.value_nick} -> "
+                        f"{new.value_nick} (pending {pending.value_nick})",
+                        file=sys.stderr, flush=True,
+                    )
 
     def _interpret_v4l2_error(self, message: str, debug: str) -> str | None:
         combined = (message + " " + debug).lower()
@@ -2044,9 +1996,11 @@ class CameraWindow(Adw.Window):
         )
         if self._valve is not None:
             self._valve.set_property("drop", False)
-        # Safety timeout — if no sample reaches us in 2 s, give up cleanly.
+        # Safety timeout — if no sample reaches us, give up cleanly.
+        # On Halium phones jpegenc has no hardware path and can take well
+        # over a second per frame at full resolution, so 2 s was too tight.
         self._capture_timeout_id = GLib.timeout_add_seconds(
-            2, self._on_capture_timeout
+            5, self._on_capture_timeout
         )
 
     def _close_valve_and_disconnect(self) -> None:
