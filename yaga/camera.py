@@ -24,6 +24,9 @@ except (ValueError, ImportError):
     GExiv2 = None  # type: ignore
     _HAS_GEXIV2 = False
 
+from . import camera_controls
+from .camera_controls import V4l2Control
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -438,6 +441,11 @@ class CameraWindow(Adw.Window):
         self._frame_size: tuple[int, int] = (0, 0)
         self._selected_resolution: tuple[int, int] | None = None
         self._flash_source: int | None = None
+        self._controls: dict[str, V4l2Control] = {}
+        self._controls_built: bool = False
+        # Per-device cache so re-opening the popover after a camera switch
+        # doesn't trigger another v4l2-ctl probe.
+        self._controls_cache: dict[str, dict[str, V4l2Control]] = {}
 
         overlay = Gtk.Overlay()
         self.set_content(overlay)
@@ -537,6 +545,16 @@ class CameraWindow(Adw.Window):
         self._res_button.set_visible(False)
         self._res_popover: Gtk.Popover | None = None
         top_right.append(self._res_button)
+
+        # Manual-controls gear — only shown when v4l2-ctl is installed.
+        self._gear_button = Gtk.MenuButton()
+        self._gear_button.set_icon_name("emblem-system-symbolic")
+        self._gear_button.add_css_class("camera-iconbtn")
+        self._gear_button.set_tooltip_text(self._("Camera controls"))
+        self._gear_button.set_visible(False)
+        self._gear_popover: Gtk.Popover | None = None
+        self._gear_button.connect("notify::active", self._on_gear_toggled)
+        top_right.append(self._gear_button)
 
         # Shutter — large red circular button, right-centered.
         self._shutter = Gtk.Button()
@@ -706,6 +724,7 @@ class CameraWindow(Adw.Window):
         # Now that the pipeline has been built, the device's caps are known —
         # populate the resolution picker for this device.
         self._populate_resolutions(device)
+        self._reset_controls_for_device(device)
         return False
 
     def _stop_pipeline(self) -> None:
@@ -793,6 +812,327 @@ class CameraWindow(Adw.Window):
         self._res_button.set_popover(popover)
         self._res_button.set_label(f"{current[0]}×{current[1]}")
         self._res_button.set_visible(True)
+
+    # ------------------------------------------------------------------
+    # V4L2 controls panel
+    # ------------------------------------------------------------------
+
+    def _reset_controls_for_device(self, device: dict[str, Any]) -> None:
+        """Probe the active device for v4l2 controls and rebuild the gear
+        popover. Called whenever the pipeline (re)starts on a new device.
+        """
+        path = device.get("path") or ""
+        if not camera_controls.controls_supported() or not path:
+            self._gear_button.set_visible(False)
+            return
+        ctrls = self._controls_cache.get(path)
+        if ctrls is None:
+            ctrls = camera_controls.probe_controls(path)
+            self._controls_cache[path] = ctrls
+        self._controls = ctrls
+        # Discard any popover that was built for the previous device.
+        if self._gear_popover is not None:
+            self._gear_button.set_popover(None)
+            self._gear_popover = None
+        self._controls_built = False
+        # Hide the gear if the device has nothing user-tunable at all.
+        has_any = any(
+            camera_controls.resolve(ctrls, logical) is not None
+            for logical in (
+                "auto_exposure", "exposure_absolute",
+                "auto_white_balance", "white_balance_temp",
+                "auto_focus", "focus_absolute",
+                "gain", "brightness", "contrast", "saturation",
+            )
+        )
+        self._gear_button.set_visible(has_any)
+
+    def _on_gear_toggled(self, _btn: Gtk.MenuButton, _pspec: Any) -> None:
+        # The popover content is built lazily so we don't pay the widget
+        # creation cost for users who never open it.
+        if self._gear_button.get_active() and not self._controls_built:
+            self._build_controls_popover()
+
+    def _build_controls_popover(self) -> None:
+        popover = Gtk.Popover()
+        popover.set_autohide(True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_top(10); box.set_margin_bottom(10)
+        box.set_margin_start(10); box.set_margin_end(10)
+        box.set_size_request(280, -1)
+        popover.set_child(box)
+
+        # Exposure section.
+        exp_auto = camera_controls.resolve(self._controls, "auto_exposure")
+        exp_abs = camera_controls.resolve(self._controls, "exposure_absolute")
+        exp_slider: Gtk.Scale | None = None
+        if exp_auto is not None or exp_abs is not None:
+            self._add_section_header(box, self._("Exposure"))
+            if exp_auto is not None and exp_auto.type == "menu":
+                manual_v, auto_v = self._auto_manual_values(exp_auto.menu)
+                if manual_v is not None and auto_v is not None:
+                    auto_switch = self._switch_row(
+                        box, self._("Auto"), exp_auto.value == auto_v
+                    )
+                    auto_switch.connect(
+                        "notify::active",
+                        lambda sw, _p: self._apply_auto(
+                            exp_auto, sw.get_active(), auto_v, manual_v, [exp_slider]
+                        ),
+                    )
+            if exp_abs is not None and exp_abs.type == "int":
+                exp_slider = self._slider_row(
+                    box, self._("Time"), exp_abs,
+                    lambda v, ctrl=exp_abs: camera_controls.set_control(
+                        self._current_device_path(), ctrl.name, v
+                    ),
+                )
+                exp_slider.set_sensitive(not exp_abs.inactive)
+
+        # White balance section.
+        wb_auto = camera_controls.resolve(self._controls, "auto_white_balance")
+        wb_temp = camera_controls.resolve(self._controls, "white_balance_temp")
+        wb_slider: Gtk.Scale | None = None
+        if wb_auto is not None or wb_temp is not None:
+            self._add_section_header(box, self._("White balance"))
+            if wb_auto is not None:
+                if wb_auto.type == "bool":
+                    wb_switch = self._switch_row(
+                        box, self._("Auto"), bool(wb_auto.value)
+                    )
+                    wb_switch.connect(
+                        "notify::active",
+                        lambda sw, _p: self._apply_bool(
+                            wb_auto, sw.get_active(), [wb_slider]
+                        ),
+                    )
+                elif wb_auto.type == "menu":
+                    m_v, a_v = self._auto_manual_values(wb_auto.menu)
+                    if m_v is not None and a_v is not None:
+                        wb_switch = self._switch_row(
+                            box, self._("Auto"), wb_auto.value == a_v
+                        )
+                        wb_switch.connect(
+                            "notify::active",
+                            lambda sw, _p: self._apply_auto(
+                                wb_auto, sw.get_active(), a_v, m_v, [wb_slider]
+                            ),
+                        )
+            if wb_temp is not None and wb_temp.type == "int":
+                wb_slider = self._slider_row(
+                    box, self._("Temperature"), wb_temp,
+                    lambda v, ctrl=wb_temp: camera_controls.set_control(
+                        self._current_device_path(), ctrl.name, v
+                    ),
+                )
+                wb_slider.set_sensitive(not wb_temp.inactive)
+
+        # Focus section.
+        focus_auto = camera_controls.resolve(self._controls, "auto_focus")
+        focus_abs = camera_controls.resolve(self._controls, "focus_absolute")
+        focus_slider: Gtk.Scale | None = None
+        if focus_auto is not None or focus_abs is not None:
+            self._add_section_header(box, self._("Focus"))
+            if focus_auto is not None and focus_auto.type == "bool":
+                fsw = self._switch_row(box, self._("Auto"), bool(focus_auto.value))
+                fsw.connect(
+                    "notify::active",
+                    lambda sw, _p: self._apply_bool(
+                        focus_auto, sw.get_active(), [focus_slider]
+                    ),
+                )
+            if focus_abs is not None and focus_abs.type == "int":
+                focus_slider = self._slider_row(
+                    box, self._("Position"), focus_abs,
+                    lambda v, ctrl=focus_abs: camera_controls.set_control(
+                        self._current_device_path(), ctrl.name, v
+                    ),
+                )
+                focus_slider.set_sensitive(not focus_abs.inactive)
+
+        # Image section (always present if we have any of these).
+        image_controls: list[tuple[str, str]] = [
+            ("gain", self._("Gain")),
+            ("brightness", self._("Brightness")),
+            ("contrast", self._("Contrast")),
+            ("saturation", self._("Saturation")),
+        ]
+        image_added = False
+        for logical, label in image_controls:
+            ctrl = camera_controls.resolve(self._controls, logical)
+            if ctrl is None or ctrl.type != "int":
+                continue
+            if not image_added:
+                self._add_section_header(box, self._("Image"))
+                image_added = True
+            self._slider_row(
+                box, label, ctrl,
+                lambda v, c=ctrl: camera_controls.set_control(
+                    self._current_device_path(), c.name, v
+                ),
+            )
+
+        # Reset button at the bottom — restores driver defaults across all
+        # exposed controls so the user can recover from a tweak experiment.
+        reset = Gtk.Button(label=self._("Reset to defaults"))
+        reset.add_css_class("flat")
+        reset.set_margin_top(8)
+        reset.connect("clicked", lambda _b: self._reset_controls_to_default())
+        box.append(reset)
+
+        self._gear_popover = popover
+        self._gear_button.set_popover(popover)
+        self._controls_built = True
+
+    def _add_section_header(self, parent: Gtk.Box, text: str) -> None:
+        label = Gtk.Label(label=text, xalign=0.0)
+        label.add_css_class("heading")
+        label.set_margin_top(4)
+        parent.append(label)
+
+    def _switch_row(self, parent: Gtk.Box, text: str, active: bool) -> Gtk.Switch:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl = Gtk.Label(label=text, xalign=0.0)
+        lbl.set_hexpand(True)
+        row.append(lbl)
+        sw = Gtk.Switch()
+        sw.set_active(active)
+        sw.set_valign(Gtk.Align.CENTER)
+        row.append(sw)
+        parent.append(row)
+        return sw
+
+    def _slider_row(
+        self,
+        parent: Gtk.Box,
+        text: str,
+        ctrl: V4l2Control,
+        on_change: Callable[[int], Any],
+    ) -> Gtk.Scale:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lbl = Gtk.Label(label=text, xalign=0.0)
+        lbl.set_size_request(80, -1)
+        row.append(lbl)
+        lo = ctrl.min if ctrl.min is not None else 0
+        hi = ctrl.max if ctrl.max is not None else 100
+        step = max(1, ctrl.step or 1)
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, lo, hi, step)
+        scale.set_draw_value(False)
+        scale.set_hexpand(True)
+        if ctrl.value is not None:
+            scale.set_value(ctrl.value)
+
+        # Debounce writes — dragging a slider fires value-changed dozens of
+        # times per second; we don't need to launch a subprocess per tick.
+        pending: dict[str, Any] = {"timeout": None, "value": None}
+
+        def fire() -> bool:
+            pending["timeout"] = None
+            v = pending["value"]
+            if v is None:
+                return False
+            on_change(int(v))
+            return False
+
+        def on_value_changed(s: Gtk.Scale) -> None:
+            pending["value"] = s.get_value()
+            if pending["timeout"] is not None:
+                GLib.source_remove(pending["timeout"])
+            pending["timeout"] = GLib.timeout_add(80, fire)
+
+        scale.connect("value-changed", on_value_changed)
+        row.append(scale)
+        parent.append(row)
+        return scale
+
+    def _auto_manual_values(self, menu: dict[int, str]) -> tuple[int | None, int | None]:
+        """For a v4l2 exposure-style menu, pick the (manual, auto) values.
+        'Manual' is the obvious one; 'auto' falls back through "Auto Mode",
+        "Aperture Priority Mode", then anything else."""
+        manual: int | None = None
+        auto: int | None = None
+        for v, label in menu.items():
+            if "manual" in label.lower():
+                manual = v
+                break
+        for v, label in menu.items():
+            if v == manual:
+                continue
+            if "auto" in label.lower():
+                auto = v
+                break
+        if auto is None:
+            for v, label in menu.items():
+                if v == manual:
+                    continue
+                if "aperture" in label.lower():
+                    auto = v
+                    break
+        if auto is None:
+            for v in menu:
+                if v != manual:
+                    auto = v
+                    break
+        return manual, auto
+
+    def _apply_auto(
+        self,
+        ctrl: V4l2Control,
+        auto_on: bool,
+        auto_value: int,
+        manual_value: int,
+        dependents: list[Gtk.Scale | None],
+    ) -> None:
+        target = auto_value if auto_on else manual_value
+        ok = camera_controls.set_control(
+            self._current_device_path(), ctrl.name, target
+        )
+        if not ok:
+            return
+        ctrl.value = target
+        # When auto is on, manual sliders are masked by the kernel — disable
+        # them locally to mirror that without needing a re-probe.
+        for dep in dependents:
+            if dep is not None:
+                dep.set_sensitive(not auto_on)
+
+    def _apply_bool(
+        self,
+        ctrl: V4l2Control,
+        on: bool,
+        dependents: list[Gtk.Scale | None],
+    ) -> None:
+        ok = camera_controls.set_control(
+            self._current_device_path(), ctrl.name, 1 if on else 0
+        )
+        if not ok:
+            return
+        ctrl.value = 1 if on else 0
+        for dep in dependents:
+            if dep is not None:
+                dep.set_sensitive(not on)
+
+    def _reset_controls_to_default(self) -> None:
+        path = self._current_device_path()
+        if not path:
+            return
+        for ctrl in self._controls.values():
+            if ctrl.default is None or ctrl.readonly:
+                continue
+            camera_controls.set_control(path, ctrl.name, ctrl.default)
+        # Force a rebuild on next open so the UI reflects the reset values.
+        self._controls_cache.pop(path, None)
+        self._controls = camera_controls.probe_controls(path)
+        self._controls_cache[path] = self._controls
+        if self._gear_popover is not None:
+            self._gear_button.set_popover(None)
+            self._gear_popover = None
+        self._controls_built = False
+        self._show_toast(self._("Controls reset"))
+
+    def _current_device_path(self) -> str:
+        device = self._current_device()
+        return device.get("path") or "" if device else ""
 
     @staticmethod
     def _aspect_label(w: int, h: int) -> str:
