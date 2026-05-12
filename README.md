@@ -20,9 +20,9 @@ Yaga is a gallery app that feels right at home on a modern GNOME desktop. It sca
 <img width="270" alt="Screenshot from 2026-05-09 17:51:42" src="https://github.com/user-attachments/assets/dbb491da-fe3a-4009-b95a-0cef134a45a0" />
 <img width="270" alt="Screenshot from 2026-05-09 18:22:19" src="https://github.com/user-attachments/assets/acdcd327-486c-419c-8073-1c03cb40a053" />
 <img width="270" alt="Screenshot from 2026-05-09 18:22:26" src="https://github.com/user-attachments/assets/97eab779-7d17-4cfa-b1fa-4fb995099506" />
-<img width="270" alt="Screenshot from 2026-05-09 17:32:20" src="https://github.com/user-attachments/assets/e09fe9e7-311e-4802-88e3-2221d0b8ae04" />
+<img width="270" alt="Screenshot from 2026-05-12 06:55:23" src="https://github.com/user-attachments/assets/2ca36f72-40ce-44ce-a80d-b6a8c4871c6d" />
 <img width="270" alt="Screenshot from 2026-05-11 06:37:03" src="https://github.com/user-attachments/assets/3f5a73a4-3025-41c1-b8e7-22b00edabd87" />
-<img width="270" alt="Screenshot from 2026-05-09 17:32:36" src="https://github.com/user-attachments/assets/0c34fd96-ef2c-4655-abc0-79b93a00bd5d" />
+<img width="270" alt="Screenshot from 2026-05-12 06:55:39" src="https://github.com/user-attachments/assets/0d34eda0-5137-4336-a189-ca29a7542c62" />
 
 ---
 
