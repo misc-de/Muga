@@ -134,7 +134,81 @@ def camera_supported() -> bool:
     return (
         gst.ElementFactory.find("v4l2src") is not None
         or gst.ElementFactory.find("autovideosrc") is not None
+        or gst.ElementFactory.find("droidcamsrc") is not None
     )
+
+
+def _droidcamsrc_available(gst: Any) -> bool:
+    """Whether gst-droid's droidcamsrc is installed. Its presence on a
+    system is a strong signal we're on Halium/Hybris (FuriOS, Droidian,
+    UBports, postmarketOS-on-Halium), where the regular /dev/video*
+    nodes don't expose real cameras — the camera HAL goes through
+    Android via libhybris instead."""
+    return gst.ElementFactory.find("droidcamsrc") is not None
+
+
+def _probe_droidcam_count(gst: Any, max_to_try: int = 4) -> int:
+    """Probe how many camera-device IDs droidcamsrc accepts. Creates a
+    throwaway element per ID and checks if it can transition to READY
+    (which opens the Android HAL handle without starting capture). Stops
+    at the first id that fails — Android cameras are usually contiguous
+    from 0."""
+    if not _droidcamsrc_available(gst):
+        return 0
+    count = 0
+    for cam_id in range(max_to_try):
+        el = gst.ElementFactory.make("droidcamsrc", f"_probe_{cam_id}")
+        if el is None:
+            break
+        try:
+            el.set_property("camera-device", cam_id)
+            ret = el.set_state(gst.State.READY)
+            if ret == gst.StateChangeReturn.FAILURE:
+                el.set_state(gst.State.NULL)
+                break
+            # Wait briefly for ASYNC transitions to settle.
+            el.get_state(500 * gst.MSECOND)
+            count += 1
+        except Exception:
+            break
+        finally:
+            try:
+                el.set_state(gst.State.NULL)
+            except Exception:
+                pass
+    return count
+
+
+def _enumerate_droidcam_devices(gst: Any) -> list[dict[str, Any]]:
+    """Return one device dict per droidcamsrc camera-device that probed
+    successfully. Names mirror conventional phone labels: camera 0 is
+    'Back camera', 1 is 'Front camera', extras are 'Back camera N'."""
+    count = _probe_droidcam_count(gst)
+    if count == 0:
+        return []
+    out: list[dict[str, Any]] = []
+    for cam_id in range(count):
+        if cam_id == 0:
+            name = "Back camera"
+            location = "back"
+        elif cam_id == 1:
+            name = "Front camera"
+            location = "front"
+        else:
+            name = f"Back camera {cam_id}"
+            location = "back"
+        out.append({
+            "name": name,
+            "path": "",
+            "source_factory": "droidcamsrc",
+            "location": location,
+            "caps": None,
+            "pipewire": False,
+            "kinds": {"raw"},
+            "gst_device": None,
+            "droidcam_id": cam_id,
+        })
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -219,6 +293,19 @@ def _is_pipewire_device(props: Any) -> bool:
 
 
 def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
+    # On Halium/Hybris (FuriOS, Droidian, UBports), the only real cameras
+    # are reachable via droidcamsrc — the /dev/video* nodes there expose
+    # ISP / encoder helpers, not capture devices, and v4l2src fails with
+    # ENOTTY when it tries to enumerate formats. Skip the v4l2/pipewire
+    # path entirely when droidcamsrc is available.
+    droidcam_devs = _enumerate_droidcam_devices(gst)
+    if droidcam_devs:
+        LOGGER.debug(
+            "Halium environment detected — using %d droidcamsrc devices",
+            len(droidcam_devs),
+        )
+        return droidcam_devs
+
     devices: list[dict[str, Any]] = []
     try:
         monitor = gst.DeviceMonitor.new()
@@ -800,14 +887,32 @@ class CameraWindow(Adw.Window):
 
     def _make_source_element(self, device: dict[str, Any]) -> Any:
         """Pick the correct source element. Falls back through:
-          (a) Gst.Device.create_element() — picks pipewiresrc for
+          (a) droidcamsrc when the device dict tags itself as such (Halium
+              / Hybris phones). Uses the named viewfinder pad downstream.
+          (b) Gst.Device.create_element() — picks pipewiresrc for
               PipeWire-managed cameras, v4l2src for raw v4l2 nodes.
               Critical when PipeWire holds an exclusive lock on the
               /dev/videoN node (direct v4l2src would fail with ENOTTY).
-          (b) Manual v4l2src device=... — for the /dev backup-scan
+          (c) Manual v4l2src device=... — for the /dev backup-scan
               path or when create_element returns nothing.
         """
         gst = self._Gst
+        factory = device.get("source_factory") or ""
+        if factory == "droidcamsrc":
+            src = gst.ElementFactory.make("droidcamsrc", "src")
+            if src is not None:
+                try:
+                    src.set_property("camera-device", device.get("droidcam_id", 0))
+                except Exception:
+                    LOGGER.debug("droidcamsrc camera-device set failed", exc_info=True)
+                # mode-image gives the viewfinder + imgsrc pads (which is
+                # what we need for stills). mode-video also exposes vidsrc
+                # but we don't record video yet.
+                try:
+                    src.set_property("mode", 1)  # 1 = image, 2 = video
+                except Exception:
+                    pass
+                return src
         gst_device = device.get("gst_device")
         if gst_device is not None:
             try:
@@ -825,6 +930,29 @@ class CameraWindow(Adw.Window):
         if gst.ElementFactory.find("autovideosrc") is not None:
             return gst.ElementFactory.make("autovideosrc", "src")
         return None
+
+    def _source_output_pad(self, source: Any) -> Any:
+        """Get the right output pad. droidcamsrc uses request pads named
+        vfsrc / imgsrc / vidsrc; everything else has a static src pad."""
+        # Try named viewfinder first (droidcamsrc convention).
+        pad = source.get_static_pad("vfsrc")
+        if pad is not None:
+            return pad
+        templates = []
+        try:
+            templates = [
+                t.name_template for t in source.get_pad_template_list() or []
+            ]
+        except Exception:
+            pass
+        if "vfsrc" in templates:
+            try:
+                pad = source.request_pad_simple("vfsrc")
+                if pad is not None:
+                    return pad
+            except Exception:
+                LOGGER.debug("request_pad_simple(vfsrc) failed", exc_info=True)
+        return source.get_static_pad("src")
 
     def _start_pipeline(self) -> bool:
         device = self._current_device()
@@ -882,13 +1010,32 @@ class CameraWindow(Adw.Window):
             pipeline.add(jpegdec)
         pipeline.add(downstream)
 
-        link_chain: list[Any] = [source]
-        if capsfilter is not None:
-            link_chain.append(capsfilter)
+        # Link the chain. For droidcamsrc the first link has to go through
+        # the named viewfinder request-pad (vfsrc); for everything else
+        # the source's static src pad is fine and Element.link() handles
+        # it transparently.
+        src_pad = self._source_output_pad(source)
+        if src_pad is None:
+            self._fail(self._("Source element has no usable output pad"))
+            return False
+        chain_tail = [downstream]
         if jpegdec is not None:
-            link_chain.append(jpegdec)
-        link_chain.append(downstream)
-        for a, b in zip(link_chain, link_chain[1:]):
+            chain_tail.insert(0, jpegdec)
+        if capsfilter is not None:
+            chain_tail.insert(0, capsfilter)
+        # First link: source-pad → first-tail's sink pad.
+        first_tail = chain_tail[0]
+        first_sink = first_tail.get_static_pad("sink")
+        if first_sink is None:
+            self._fail(self._("Downstream element has no sink pad"))
+            return False
+        if src_pad.link(first_sink) != gst.PadLinkReturn.OK:
+            fa = source.get_factory().get_name() if source.get_factory() else "?"
+            fb = first_tail.get_factory().get_name() if first_tail.get_factory() else "?"
+            self._fail(f"Could not link {fa} → {fb}")
+            return False
+        # Remaining links go via Element.link() since they're all static.
+        for a, b in zip(chain_tail, chain_tail[1:]):
             if not a.link(b):
                 fa = a.get_factory().get_name() if a.get_factory() else "?"
                 fb = b.get_factory().get_name() if b.get_factory() else "?"
