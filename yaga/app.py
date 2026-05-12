@@ -31,6 +31,7 @@ from .settings_window import SettingsWindow
 from .scanner import MediaScanner
 from .thumbnails import Thumbnailer
 from .viewer import ViewerWindow
+from .camera import CameraWindow, camera_supported
 
 LOGGER = logging.getLogger(__name__)
 
@@ -366,6 +367,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._sort_popover.set_child(self._build_sort_controls())
         self.sort_button.set_popover(self._sort_popover)
         self.header.pack_end(self.sort_button)
+
+        self.camera_button = Gtk.Button.new_from_icon_name("camera-photo-symbolic")
+        self.camera_button.set_tooltip_text(self._("Open camera"))
+        self.camera_button.connect("clicked", self._open_camera)
+        self.camera_button.set_sensitive(camera_supported())
+        self.header.pack_end(self.camera_button)
 
         # ── Selection-mode header widgets (hidden until long-press activates) ──
         # Swapped layout: trash sits on the LEFT (start), close on the RIGHT
@@ -2212,6 +2219,16 @@ class GalleryWindow(Adw.ApplicationWindow):
         # dialog. Returning False on close-request lets the close proceed.
         self._settings_dialog = None
         return False
+
+    def _open_camera(self, _button: Gtk.Button) -> None:
+        save_dir = Path(self.settings.photos_dir)
+        win = CameraWindow(
+            self,
+            save_dir=save_dir,
+            translator=self._,
+            on_captured=lambda _p: self.refresh(scan=True, scope="current"),
+        )
+        win.present()
 
     def _show_privacy_info(self, _button: Gtk.Button) -> None:
         """Show privacy and help information dialog."""
