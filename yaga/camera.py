@@ -845,7 +845,19 @@ class CameraWindow(Adw.Window):
         has_jpeg = gst.ElementFactory.find("jpegenc") is not None
         has_appsink = gst.ElementFactory.find("appsink") is not None
 
-        if has_gtk_sink:
+        # gtk4paintablesink holds onto the rendered GdkPaintable buffer
+        # for re-paint, which works fine with pipewire/v4l2 sources that
+        # have ample buffer pools. droidcamsrc's pool is tiny — once
+        # gtk4paintablesink owns one frame the source can't refill, so
+        # the preview freezes after the first frame. Force the appsink +
+        # GdkMemoryTexture path on Halium devices, where we explicitly
+        # copy each buffer's bytes (the source buffer is released back to
+        # the pool the instant pull-sample returns).
+        force_appsink_preview = (
+            device.get("source_factory") == "droidcamsrc" and has_appsink
+        )
+
+        if has_gtk_sink and not force_appsink_preview:
             preview_branch = (
                 "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
                 "   ! gtk4paintablesink name=preview"
@@ -909,11 +921,16 @@ class CameraWindow(Adw.Window):
                     src.set_property("camera-device", device.get("droidcam_id", 0))
                 except Exception:
                     LOGGER.debug("droidcamsrc camera-device set failed", exc_info=True)
-                # mode-image gives the viewfinder + imgsrc pads (which is
-                # what we need for stills). mode-video also exposes vidsrc
-                # but we don't record video yet.
+                # mode=2 (video) keeps the viewfinder rolling continuously
+                # without the per-frame Photography reconfiguration that
+                # mode=1 (image) does — on the user's FuriOS device that
+                # extra reconfigure causes the visible stream of
+                # "setting focus-mode 6 / flash-mode 0 not supported"
+                # warnings, and after the first frame the preview stops
+                # updating. We don't need imgsrc anyway because the snap
+                # appsink branch encodes JPEGs from the viewfinder feed.
                 try:
-                    src.set_property("mode", 1)  # 1 = image, 2 = video
+                    src.set_property("mode", 2)  # 2 = video
                 except Exception:
                     pass
                 return src
