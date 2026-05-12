@@ -26,6 +26,7 @@ except (ValueError, ImportError):
 
 from . import camera_controls
 from .camera_controls import V4l2Control
+from .camera_geo import GeoClient
 
 LOGGER = logging.getLogger(__name__)
 
@@ -448,6 +449,7 @@ class CameraWindow(Adw.Window):
         self._controls_cache: dict[str, dict[str, V4l2Control]] = {}
         self._focus_point: tuple[float, float] | None = None
         self._focus_hide_source: int | None = None
+        self._geo: GeoClient | None = None
 
         overlay = Gtk.Overlay()
         self.set_content(overlay)
@@ -568,6 +570,17 @@ class CameraWindow(Adw.Window):
         self._gear_popover: Gtk.Popover | None = None
         self._gear_button.connect("notify::active", self._on_gear_toggled)
         top_right.append(self._gear_button)
+
+        # Geotag opt-in — default OFF; enabling spins up a GeoClue client
+        # and embeds GPS into EXIF on subsequent captures. We don't persist
+        # this across sessions on purpose; geotagging is intentional state
+        # the user re-confirms each time they open the camera.
+        self._geo_button = Gtk.ToggleButton()
+        self._geo_button.set_icon_name("mark-location-symbolic")
+        self._geo_button.add_css_class("camera-iconbtn")
+        self._geo_button.set_tooltip_text(self._("Geotag photos"))
+        self._geo_button.connect("toggled", self._on_geo_toggled)
+        top_right.append(self._geo_button)
 
         # Shutter — large red circular button, right-centered.
         self._shutter = Gtk.Button()
@@ -1294,6 +1307,49 @@ class CameraWindow(Adw.Window):
         return True
 
     # ------------------------------------------------------------------
+    # Geotagging
+    # ------------------------------------------------------------------
+
+    def _on_geo_toggled(self, btn: Gtk.ToggleButton) -> None:
+        if btn.get_active():
+            if not _HAS_GEXIV2:
+                btn.set_active(False)
+                self._show_toast(self._("GExiv2 missing — geotag unavailable"))
+                return
+            self._geo = GeoClient(app_id="yaga")
+            ok = self._geo.start(
+                accuracy=5,
+                on_update=self._on_geo_update,
+                on_error=lambda msg: GLib.idle_add(self._on_geo_error, msg),
+            )
+            if not ok:
+                btn.set_active(False)
+                self._geo = None
+                self._show_toast(self._("GeoClue not available"))
+                return
+            self._show_toast(self._("Locating…"))
+        else:
+            if self._geo is not None:
+                self._geo.stop()
+                self._geo = None
+
+    def _on_geo_update(self, location: dict[str, Any] | None) -> None:
+        # Signal arrives on the main loop already (GDBus dispatches there),
+        # so it's safe to touch widgets without idle_add. Toast only on the
+        # first fix to avoid spamming as location refines.
+        if location is None:
+            return
+        if getattr(self, "_geo_toasted", False):
+            return
+        self._geo_toasted = True
+        self._show_toast(self._("Location ready"))
+
+    def _on_geo_error(self, message: str) -> bool:
+        self._show_toast(message)
+        self._geo_button.set_active(False)
+        return False
+
+    # ------------------------------------------------------------------
     # Tap-to-focus
     # ------------------------------------------------------------------
 
@@ -1445,6 +1501,21 @@ class CameraWindow(Adw.Window):
             md.set_tag_string("Exif.Image.DateTime", now)
             md.set_tag_string("Exif.Photo.DateTimeOriginal", now)
             md.set_tag_string("Exif.Photo.DateTimeDigitized", now)
+
+            # Geotag if the user has opted in and we have a fresh fix.
+            if self._geo is not None:
+                location = self._geo.latest()
+                if location is not None:
+                    try:
+                        md.set_gps_info(
+                            location["lon"], location["lat"], location.get("alt", 0.0)
+                        )
+                        md.set_tag_string(
+                            "Exif.GPSInfo.GPSProcessingMethod", "GeoClue"
+                        )
+                    except Exception:
+                        LOGGER.debug("set_gps_info failed", exc_info=True)
+
             md.save_file(str(path))
         except Exception:
             LOGGER.debug("Could not write EXIF for %s", path, exc_info=True)
@@ -1532,4 +1603,7 @@ class CameraWindow(Adw.Window):
         if self._focus_hide_source is not None:
             GLib.source_remove(self._focus_hide_source)
             self._focus_hide_source = None
+        if self._geo is not None:
+            self._geo.stop()
+            self._geo = None
         return False
