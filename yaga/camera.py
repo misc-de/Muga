@@ -600,6 +600,9 @@ class CameraWindow(Adw.Window):
         self._appsink: Any = None
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
+        self._valve: Any = None
+        self._capture_signal_id: int | None = None
+        self._capture_timeout_id: int | None = None
         self._capsfilter: Any = None
         self._devices: list[dict[str, Any]] = _enumerate_devices(self._Gst)
         self._device_index = 0
@@ -862,10 +865,15 @@ class CameraWindow(Adw.Window):
             preview_branch = (
                 "t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false"
             )
+        # The snap branch is gated by a valve so jpegenc only runs when the
+        # user actually presses the shutter. Running jpegenc on every frame
+        # at 30 fps on a Halium phone causes memory pile-up and OOM crash.
+        # On capture: open valve, wait for new-sample signal, close valve.
         snapshot_branch = (
-            "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
-            "   ! jpegenc quality=92 "
-            "   ! appsink name=snap emit-signals=false max-buffers=1 drop=true sync=false"
+            "t. ! queue leaky=downstream max-size-buffers=2 "
+            "   ! valve name=shutter drop=true "
+            "   ! videoconvert ! jpegenc quality=92 "
+            "   ! appsink name=snap emit-signals=true max-buffers=1 drop=true sync=false"
             if (has_jpeg and has_appsink)
             else ""
         )
@@ -1044,6 +1052,7 @@ class CameraWindow(Adw.Window):
 
         self._pipeline = pipeline
         self._appsink = pipeline.get_by_name("snap")
+        self._valve = pipeline.get_by_name("shutter")
         self._capsfilter = capsfilter
         self._zoom = 1.0
         self._picture.set_zoom(1.0)
@@ -1083,6 +1092,9 @@ class CameraWindow(Adw.Window):
         return False
 
     def _stop_pipeline(self) -> None:
+        # Tear down any in-flight capture state before disposing the pipeline.
+        self._close_valve_and_disconnect()
+        self._valve = None
         if self._preview_appsink is not None and self._preview_signal_id is not None:
             try:
                 self._preview_appsink.disconnect(self._preview_signal_id)
@@ -1815,24 +1827,62 @@ class CameraWindow(Adw.Window):
             return
         self._busy_capture = True
         self._shutter.set_sensitive(False)
-        sample = self._appsink.get_property("last-sample")
-        if sample is None:
-            GLib.timeout_add(150, self._capture_retry)
-            return
-        self._write_sample(sample)
-        self._busy_capture = False
-        self._shutter.set_sensitive(True)
+        # Hook a one-shot new-sample listener, then open the valve so a
+        # single frame flows down to jpegenc + appsink. The valve gating
+        # means jpegenc isn't burning CPU on every preview frame, which is
+        # critical on Halium phones (otherwise the preview pipeline OOMs).
+        self._capture_signal_id = self._appsink.connect(
+            "new-sample", self._on_capture_sample
+        )
+        if self._valve is not None:
+            self._valve.set_property("drop", False)
+        # Safety timeout — if no sample reaches us in 2 s, give up cleanly.
+        self._capture_timeout_id = GLib.timeout_add_seconds(
+            2, self._on_capture_timeout
+        )
 
-    def _capture_retry(self) -> bool:
-        if self._appsink is None:
-            return False
-        sample = self._appsink.get_property("last-sample")
+    def _close_valve_and_disconnect(self) -> None:
+        if self._valve is not None:
+            try:
+                self._valve.set_property("drop", True)
+            except Exception:
+                LOGGER.debug("valve close failed", exc_info=True)
+        if self._capture_signal_id is not None and self._appsink is not None:
+            try:
+                self._appsink.disconnect(self._capture_signal_id)
+            except Exception:
+                pass
+        self._capture_signal_id = None
+        if self._capture_timeout_id is not None:
+            GLib.source_remove(self._capture_timeout_id)
+            self._capture_timeout_id = None
+
+    def _on_capture_sample(self, sink: Any) -> Any:
+        gst = self._Gst
+        try:
+            sample = sink.emit("pull-sample")
+        except Exception:
+            sample = None
+        # Disconnect + close valve from the main loop, then write the file.
+        GLib.idle_add(self._finish_capture, sample)
+        return gst.FlowReturn.OK
+
+    def _finish_capture(self, sample: Any) -> bool:
+        self._close_valve_and_disconnect()
         if sample is None:
             self._show_toast(self._("No frame available"))
-            self._busy_capture = False
-            self._shutter.set_sensitive(True)
-            return False
-        self._write_sample(sample)
+        else:
+            self._write_sample(sample)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        return False
+
+    def _on_capture_timeout(self) -> bool:
+        # Reached only when no sample showed up — pipeline stalled or the
+        # camera produces no frames. Reset state and tell the user.
+        self._capture_timeout_id = None
+        self._close_valve_and_disconnect()
+        self._show_toast(self._("No frame available"))
         self._busy_capture = False
         self._shutter.set_sensitive(True)
         return False
