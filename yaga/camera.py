@@ -240,6 +240,12 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
                 "location": _classify_location(props, display),
                 "caps": caps,
                 "pipewire": _is_pipewire_device(props),
+                # Stash the Gst.Device so we can build the correct source
+                # element later via create_element(). For PipeWire-managed
+                # cameras that gives us a pipewiresrc rather than a raw
+                # v4l2src, which is essential when PipeWire holds an
+                # exclusive lock on /dev/videoN.
+                "gst_device": dev,
             })
         monitor.stop()
     except Exception:
@@ -254,6 +260,7 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
                 "location": "unknown",
                 "caps": None,
                 "pipewire": False,
+                "gst_device": None,
             })
 
     # The DeviceMonitor aggregates *all* registered providers, so a single
@@ -310,6 +317,7 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
                 "caps": None,
                 "pipewire": False,
                 "kinds": set(),
+                "gst_device": None,
             })
     return result
 
@@ -741,56 +749,16 @@ class CameraWindow(Adw.Window):
             return None
         return self._devices[self._device_index % len(self._devices)]
 
-    def _build_pipeline_description(self, device: dict[str, Any]) -> str:
-        """Build a deliberately minimal pipeline. We learned the hard way
-        that adding constraints (io-mode, capsfilter at full resolution,
-        videocrop) breaks negotiation on cameras that worked fine with
-        a bare v4l2src ! videoconvert ! tee chain. Only add a capsfilter
-        when the user explicitly picked a resolution from the menu — and
-        even then, only on the resolution+framerate (not the pixel
-        format), so v4l2 stays free to pick raw or MJPG."""
+    def _build_downstream_description(self, device: dict[str, Any]) -> str:
+        """Build everything from the first videoconvert onwards. The source
+        (and optional capsfilter / jpegdec) are added programmatically in
+        _start_pipeline so we can use Gst.Device.create_element(), which
+        picks pipewiresrc vs v4l2src per the device's provider."""
         gst = self._Gst
         has_gtk_sink = gst.ElementFactory.find("gtk4paintablesink") is not None
         has_jpeg = gst.ElementFactory.find("jpegenc") is not None
         has_appsink = gst.ElementFactory.find("appsink") is not None
-        has_jpegdec = gst.ElementFactory.find("jpegdec") is not None
 
-        path = device.get("path") or ""
-        factory = device.get("source_factory") or ""
-        if factory == "v4l2src" and path and gst.ElementFactory.find("v4l2src"):
-            src = f'v4l2src device="{path}"'
-        else:
-            src = "autovideosrc"
-
-        # Constrain to the user-picked resolution if any. The kind is
-        # recorded so we know whether to insert jpegdec for MJPG modes —
-        # but raw modes negotiate without any explicit format constraint.
-        cap_filter = ""
-        decoder = ""
-        if self._selected_resolution is not None:
-            sel_w, sel_h = self._selected_resolution
-            kind = "raw"
-            for w, h, k in _modes_from_caps(device.get("caps")):
-                if w == sel_w and h == sel_h:
-                    kind = k
-                    if k == "raw":
-                        break
-            if kind == "jpeg":
-                cap_filter = (
-                    f' ! capsfilter name=resfilter '
-                    f'caps="image/jpeg,width={sel_w},height={sel_h}"'
-                )
-                if has_jpegdec:
-                    decoder = " ! jpegdec"
-            else:
-                cap_filter = (
-                    f' ! capsfilter name=resfilter '
-                    f'caps="video/x-raw,width={sel_w},height={sel_h}"'
-                )
-
-        # Two preview paths:
-        #   - gtk4paintablesink (Rust plugin, fast) when available
-        #   - appsink RGBA + Gdk.MemoryTexture fallback otherwise
         if has_gtk_sink:
             preview_branch = (
                 "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
@@ -815,13 +783,48 @@ class CameraWindow(Adw.Window):
             else ""
         )
 
-        parts = [
-            f"{src}{cap_filter}{decoder} ! videoconvert ! tee name=t",
-            preview_branch,
-        ]
+        parts = ["videoconvert ! tee name=t", preview_branch]
         if snapshot_branch:
             parts.append(snapshot_branch)
         return " ".join(parts)
+
+    def _selected_format_kind(self, device: dict[str, Any]) -> str:
+        """For the user-picked resolution, was it advertised as raw or jpeg?"""
+        if self._selected_resolution is None:
+            return "raw"
+        sel_w, sel_h = self._selected_resolution
+        for w, h, k in _modes_from_caps(device.get("caps")):
+            if w == sel_w and h == sel_h:
+                return k
+        return "raw"
+
+    def _make_source_element(self, device: dict[str, Any]) -> Any:
+        """Pick the correct source element. Falls back through:
+          (a) Gst.Device.create_element() — picks pipewiresrc for
+              PipeWire-managed cameras, v4l2src for raw v4l2 nodes.
+              Critical when PipeWire holds an exclusive lock on the
+              /dev/videoN node (direct v4l2src would fail with ENOTTY).
+          (b) Manual v4l2src device=... — for the /dev backup-scan
+              path or when create_element returns nothing.
+        """
+        gst = self._Gst
+        gst_device = device.get("gst_device")
+        if gst_device is not None:
+            try:
+                src = gst_device.create_element("src")
+                if src is not None:
+                    return src
+            except Exception:
+                LOGGER.debug("Gst.Device.create_element failed", exc_info=True)
+        path = device.get("path") or ""
+        if path and gst.ElementFactory.find("v4l2src") is not None:
+            src = gst.ElementFactory.make("v4l2src", "src")
+            if src is not None:
+                src.set_property("device", path)
+                return src
+        if gst.ElementFactory.find("autovideosrc") is not None:
+            return gst.ElementFactory.make("autovideosrc", "src")
+        return None
 
     def _start_pipeline(self) -> bool:
         device = self._current_device()
@@ -830,33 +833,80 @@ class CameraWindow(Adw.Window):
         gst = self._Gst
         self._stop_pipeline()
 
-        # NOTE: we deliberately do NOT probe v4l2 controls here. Opening
-        # the device with v4l2-ctl just before v4l2src tries to open it
-        # corrupts the descriptor state on some UVC kernels, surfacing
-        # later as ENUM_FMT returning ENOTTY ("Inappropriate ioctl"). The
-        # probe runs lazily when the gear popover is opened.
+        # v4l2 controls are probed lazily on gear-popover open; doing it
+        # before the source opens the device corrupts descriptor state
+        # on some UVC kernels (ENUM_FMT -> ENOTTY).
         self._mark_controls_dirty_for_device(device)
 
-        desc = self._build_pipeline_description(device)
-        LOGGER.debug("Camera pipeline: %s", desc)
+        source = self._make_source_element(device)
+        if source is None:
+            self._fail(self._("No camera source element available"))
+            return False
+
+        # Optional capsfilter pinning the user-picked resolution. Format
+        # (raw vs jpeg) is also pinned because for MJPG we have to insert
+        # jpegdec, and the two need to agree.
+        capsfilter = None
+        jpegdec = None
+        if self._selected_resolution is not None:
+            sel_w, sel_h = self._selected_resolution
+            kind = self._selected_format_kind(device)
+            capsfilter = gst.ElementFactory.make("capsfilter", "resfilter")
+            if kind == "jpeg":
+                caps_str = f"image/jpeg,width={sel_w},height={sel_h}"
+                if gst.ElementFactory.find("jpegdec") is not None:
+                    jpegdec = gst.ElementFactory.make("jpegdec", "jpegdec")
+            else:
+                caps_str = f"video/x-raw,width={sel_w},height={sel_h}"
+            capsfilter.set_property("caps", gst.Caps.from_string(caps_str))
+
+        bin_desc = self._build_downstream_description(device)
+        LOGGER.debug(
+            "Camera pipeline: src=%s caps=%s downstream=%s",
+            source.get_factory().get_name() if source.get_factory() else "?",
+            (capsfilter.get_property("caps").to_string()
+                if capsfilter is not None else "<auto>"),
+            bin_desc,
+        )
         try:
-            self._pipeline = gst.parse_launch(desc)
+            downstream = gst.parse_bin_from_description(bin_desc, True)
         except Exception as exc:
             self._fail(f"Pipeline error: {exc}")
             return False
 
-        self._appsink = self._pipeline.get_by_name("snap")
-        self._capsfilter = self._pipeline.get_by_name("resfilter")
-        # Reset widget zoom for the new pipeline.
+        pipeline = gst.Pipeline.new("yaga-camera")
+        pipeline.add(source)
+        if capsfilter is not None:
+            pipeline.add(capsfilter)
+        if jpegdec is not None:
+            pipeline.add(jpegdec)
+        pipeline.add(downstream)
+
+        link_chain: list[Any] = [source]
+        if capsfilter is not None:
+            link_chain.append(capsfilter)
+        if jpegdec is not None:
+            link_chain.append(jpegdec)
+        link_chain.append(downstream)
+        for a, b in zip(link_chain, link_chain[1:]):
+            if not a.link(b):
+                fa = a.get_factory().get_name() if a.get_factory() else "?"
+                fb = b.get_factory().get_name() if b.get_factory() else "?"
+                self._fail(f"Could not link {fa} → {fb}")
+                return False
+
+        self._pipeline = pipeline
+        self._appsink = pipeline.get_by_name("snap")
+        self._capsfilter = capsfilter
         self._zoom = 1.0
         self._picture.set_zoom(1.0)
 
-        self._bus = self._pipeline.get_bus()
+        self._bus = pipeline.get_bus()
         if self._bus is not None:
             self._bus.add_signal_watch()
             self._bus.connect("message", self._on_bus_message)
 
-        sink = self._pipeline.get_by_name("preview")
+        sink = pipeline.get_by_name("preview")
         if sink is not None:
             try:
                 paintable = sink.get_property("paintable")
@@ -865,22 +915,16 @@ class CameraWindow(Adw.Window):
             except Exception:
                 LOGGER.debug("Could not bind preview paintable", exc_info=True)
         else:
-            # Appsink fallback path: hook new-sample, convert each RGBA
-            # buffer into a Gdk.MemoryTexture, swap it onto the picture
-            # from the main loop.
-            preview_app = self._pipeline.get_by_name("preview_sink")
+            preview_app = pipeline.get_by_name("preview_sink")
             if preview_app is not None:
                 self._preview_appsink = preview_app
                 self._preview_signal_id = preview_app.connect(
                     "new-sample", self._on_preview_sample
                 )
 
-        # Mirror the preview only when the active device looks like a
-        # front/user-facing camera. Saved frames stay unflipped — the mirror
-        # is widget-side only.
         self._picture.set_mirrored(device.get("location") == "front")
 
-        result = self._pipeline.set_state(gst.State.PLAYING)
+        result = pipeline.set_state(gst.State.PLAYING)
         if result == gst.StateChangeReturn.FAILURE:
             self._fail(self._("Could not start camera"))
             return False
@@ -888,9 +932,6 @@ class CameraWindow(Adw.Window):
         self._shutter.set_sensitive(self._appsink is not None)
         if self._appsink is None:
             self._show_toast(self._("Capture unavailable"))
-
-        # Now that the pipeline has been built, the device's caps are known —
-        # populate the resolution picker for this device.
         self._populate_resolutions(device)
         return False
 
