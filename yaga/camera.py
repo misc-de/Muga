@@ -1023,6 +1023,14 @@ class CameraWindow(Adw.Window):
         # Optional capsfilter pinning the user-picked resolution. Format
         # (raw vs jpeg) is also pinned because for MJPG we have to insert
         # jpegdec, and the two need to agree.
+        #
+        # On Halium without a user pick, cap the source to a 720p/24fps
+        # ceiling. droidcamsrc otherwise negotiates the HAL's max (often
+        # 1080p@30) and the resulting GPU/memory bandwidth — videoconvert,
+        # tee fan-out, gtk4paintablesink GL upload — competes with phosh
+        # for the same GPU and the compositor crashes under sustained
+        # load. 720p@24 is well below most HAL modes so droidcamsrc still
+        # has a valid mode to pick.
         capsfilter = None
         jpegdec = None
         if self._selected_resolution is not None:
@@ -1035,6 +1043,15 @@ class CameraWindow(Adw.Window):
                     jpegdec = gst.ElementFactory.make("jpegdec", "jpegdec")
             else:
                 caps_str = f"video/x-raw,width={sel_w},height={sel_h}"
+            capsfilter.set_property("caps", gst.Caps.from_string(caps_str))
+        elif device.get("source_factory") == "droidcamsrc":
+            capsfilter = gst.ElementFactory.make("capsfilter", "halium_default_cap")
+            caps_str = (
+                "video/x-raw,"
+                "width=(int)[1,1280],"
+                "height=(int)[1,720],"
+                "framerate=(fraction)[1/1,24/1]"
+            )
             capsfilter.set_property("caps", gst.Caps.from_string(caps_str))
 
         bin_desc = self._build_downstream_description(device)
