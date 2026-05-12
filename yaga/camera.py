@@ -258,11 +258,13 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
 
     # The DeviceMonitor aggregates *all* registered providers, so a single
     # physical camera typically appears twice (once from pipewiredevice-
-    # provider, once from v4l2deviceprovider) with different display names.
-    # Dedupe by /dev path, and within a path prefer the pipewire-sourced
-    # entry — it carries the cleaner node.description name and the
-    # libcamera location property when libcamera-via-PipeWire is in use.
+    # provider, once from v4l2deviceprovider) — but only when both report
+    # the same non-empty /dev path. We deliberately do NOT dedupe by name
+    # because phones expose multiple physical sensors (front + 2x back)
+    # under identical "Integrated Camera" display names, and libcamera-
+    # abstracted devices may have empty paths altogether.
     by_path: dict[str, dict[str, Any]] = {}
+    unmatched: list[dict[str, Any]] = []
     for d in devices:
         if _is_ir_name(d["name"]):
             LOGGER.debug("Filtering IR device: %s", d["name"])
@@ -274,19 +276,23 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
             )
             continue
         d["kinds"] = kinds
-        key = d["path"] or d["name"]
-        existing = by_path.get(key)
+        path = d["path"]
+        if not path:
+            # No /dev path — can't be safely merged with any other entry.
+            unmatched.append(d)
+            continue
+        existing = by_path.get(path)
         if existing is None:
-            by_path[key] = d
+            by_path[path] = d
             continue
         if d["pipewire"] and not existing["pipewire"]:
-            by_path[key] = d
+            by_path[path] = d
         elif d["pipewire"] == existing["pipewire"] and len(
             _modes_from_caps(d.get("caps"))
         ) > len(_modes_from_caps(existing.get("caps"))):
-            by_path[key] = d
+            by_path[path] = d
 
-    result = list(by_path.values())
+    result = list(by_path.values()) + unmatched
 
     # Last-resort backup: if the monitor surfaced nothing usable (which can
     # happen when pipewire is in a transient state or only advertises odd
@@ -412,10 +418,15 @@ def _grid_overlay() -> Gtk.DrawingArea:
 
 
 class MirroredPicture(Gtk.Picture):
-    """Gtk.Picture that can render its content horizontally flipped.
+    """Gtk.Picture that can render its content horizontally flipped and/or
+    zoomed about its center.
 
-    Only the on-screen render is flipped — captured frames are unaffected,
-    so text in front-cam selfies still reads correctly in saved files.
+    Only the on-screen render is transformed — captured frames are
+    unaffected, so text in front-cam selfies still reads correctly in
+    saved files and zoom is purely a viewfinder affordance. Implementing
+    zoom widget-side (rather than via a videocrop pipeline element) keeps
+    the GStreamer chain minimal, which avoids negotiation failures on
+    cameras whose only modes are MJPG.
     """
 
     __gtype_name__ = "YagaMirroredPicture"
@@ -423,6 +434,7 @@ class MirroredPicture(Gtk.Picture):
     def __init__(self) -> None:
         super().__init__()
         self._mirrored = False
+        self._zoom = 1.0
 
     def set_mirrored(self, mirrored: bool) -> None:
         if self._mirrored == mirrored:
@@ -430,14 +442,34 @@ class MirroredPicture(Gtk.Picture):
         self._mirrored = mirrored
         self.queue_draw()
 
+    def set_zoom(self, zoom: float) -> None:
+        zoom = max(1.0, min(8.0, zoom))
+        if abs(zoom - self._zoom) < 0.01:
+            return
+        self._zoom = zoom
+        self.queue_draw()
+
+    def get_zoom(self) -> float:
+        return self._zoom
+
     def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
-        if not self._mirrored:
+        zoom = self._zoom
+        mirror = self._mirrored
+        if zoom == 1.0 and not mirror:
             Gtk.Picture.do_snapshot(self, snapshot)
             return
         w = self.get_width()
+        h = self.get_height()
         snapshot.save()
-        snapshot.translate(Graphene.Point().init(w, 0))
-        snapshot.scale(-1.0, 1.0)
+        if mirror:
+            snapshot.translate(Graphene.Point().init(w, 0))
+            snapshot.scale(-1.0, 1.0)
+        if zoom != 1.0:
+            cx = w / 2 if not mirror else w / 2
+            cy = h / 2
+            snapshot.translate(Graphene.Point().init(cx, cy))
+            snapshot.scale(zoom, zoom)
+            snapshot.translate(Graphene.Point().init(-cx, -cy))
         Gtk.Picture.do_snapshot(self, snapshot)
         snapshot.restore()
 
@@ -473,7 +505,6 @@ class CameraWindow(Adw.Window):
         self._appsink: Any = None
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
-        self._videocrop: Any = None
         self._capsfilter: Any = None
         self._devices: list[dict[str, Any]] = _enumerate_devices(self._Gst)
         self._device_index = 0
@@ -487,7 +518,6 @@ class CameraWindow(Adw.Window):
         self._zoom = 1.0
         self._zoom_base = 1.0
         self._zoom_max = 4.0
-        self._frame_size: tuple[int, int] = (0, 0)
         self._selected_resolution: tuple[int, int] | None = None
         self._flash_source: int | None = None
         self._controls: dict[str, V4l2Control] = {}
@@ -711,99 +741,56 @@ class CameraWindow(Adw.Window):
             return None
         return self._devices[self._device_index % len(self._devices)]
 
-    def _pick_default_mode(
-        self, device: dict[str, Any]
-    ) -> tuple[int, int, str] | None:
-        """Pick a (w, h, kind) tuple for the device's startup mode. Prefers
-        raw <=1920x1080 (decoder-free, smaller buffers), falls back to the
-        largest jpeg mode <=1920x1080, then the smallest available mode of
-        either kind. Returns None when the device's caps are empty (the
-        /dev backup-scan path)."""
-        modes = _modes_from_caps(device.get("caps"))
-        if not modes:
-            return None
-        capped = [m for m in modes if m[0] <= 1920 and m[1] <= 1080]
-        if capped:
-            # Prefer raw over jpeg at the same effective resolution.
-            capped.sort(key=lambda m: (-(m[0] * m[1]), 0 if m[2] == "raw" else 1))
-            return capped[0]
-        return modes[-1]
-
     def _build_pipeline_description(self, device: dict[str, Any]) -> str:
+        """Build a deliberately minimal pipeline. We learned the hard way
+        that adding constraints (io-mode, capsfilter at full resolution,
+        videocrop) breaks negotiation on cameras that worked fine with
+        a bare v4l2src ! videoconvert ! tee chain. Only add a capsfilter
+        when the user explicitly picked a resolution from the menu — and
+        even then, only on the resolution+framerate (not the pixel
+        format), so v4l2 stays free to pick raw or MJPG."""
         gst = self._Gst
         has_gtk_sink = gst.ElementFactory.find("gtk4paintablesink") is not None
         has_jpeg = gst.ElementFactory.find("jpegenc") is not None
         has_appsink = gst.ElementFactory.find("appsink") is not None
-        has_videocrop = gst.ElementFactory.find("videocrop") is not None
+        has_jpegdec = gst.ElementFactory.find("jpegdec") is not None
 
         path = device.get("path") or ""
         factory = device.get("source_factory") or ""
         if factory == "v4l2src" and path and gst.ElementFactory.find("v4l2src"):
-            # io-mode=2 forces MMAP buffers. The default ("auto") sometimes
-            # picks USERPTR which fails with ENOMEM on UVC kernels that
-            # can't pin the requested page count. MMAP is the boring,
-            # universally supported choice.
-            src = f'v4l2src device="{path}" io-mode=2'
+            src = f'v4l2src device="{path}"'
         else:
             src = "autovideosrc"
 
-        # Explicit caps right after the source. Without them, v4l2src
-        # negotiates with downstream and may pick an oversized buffer pool
-        # at the camera's max mode. We pin the resolution AND format
-        # (video/x-raw vs image/jpeg) to whatever this device advertises,
-        # inserting jpegdec when the device is MJPG-only (common on UVC
-        # cameras whose only raw-mode is sub-VGA).
-        mode: tuple[int, int, str] | None
+        # Constrain to the user-picked resolution if any. The kind is
+        # recorded so we know whether to insert jpegdec for MJPG modes —
+        # but raw modes negotiate without any explicit format constraint.
+        cap_filter = ""
+        decoder = ""
         if self._selected_resolution is not None:
-            # User-picked from the resolution menu; remember which kind
-            # supports that (w,h).
             sel_w, sel_h = self._selected_resolution
-            modes = _modes_from_caps(device.get("caps"))
             kind = "raw"
-            for w, h, k in modes:
+            for w, h, k in _modes_from_caps(device.get("caps")):
                 if w == sel_w and h == sel_h:
                     kind = k
                     if k == "raw":
                         break
-            mode = (sel_w, sel_h, kind)
-        else:
-            mode = self._pick_default_mode(device)
-
-        decoder = ""
-        if mode is not None:
-            w, h, kind = mode
             if kind == "jpeg":
                 cap_filter = (
                     f' ! capsfilter name=resfilter '
-                    f'caps="image/jpeg,width={w},height={h},framerate=30/1"'
+                    f'caps="image/jpeg,width={sel_w},height={sel_h}"'
                 )
-                if gst.ElementFactory.find("jpegdec") is not None:
+                if has_jpegdec:
                     decoder = " ! jpegdec"
-                else:
-                    LOGGER.warning(
-                        "Device only advertises MJPG but jpegdec is missing; "
-                        "pipeline likely won't link"
-                    )
             else:
                 cap_filter = (
                     f' ! capsfilter name=resfilter '
-                    f'caps="video/x-raw,width={w},height={h},framerate=30/1"'
+                    f'caps="video/x-raw,width={sel_w},height={sel_h}"'
                 )
-        else:
-            # No caps known (backup-scanned device) — let downstream
-            # negotiate but constrain framerate to 30/1.
-            cap_filter = ' ! capsfilter name=resfilter caps="video/x-raw,framerate=30/1"'
-
-        crop = (
-            " ! videocrop name=zoom left=0 right=0 top=0 bottom=0"
-            if has_videocrop else ""
-        )
 
         # Two preview paths:
         #   - gtk4paintablesink (Rust plugin, fast) when available
         #   - appsink RGBA + Gdk.MemoryTexture fallback otherwise
-        # The appsink path is universal because appsink ships in
-        # gst-plugins-base, but it costs one RGBA convert per frame.
         if has_gtk_sink:
             preview_branch = (
                 "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
@@ -829,7 +816,7 @@ class CameraWindow(Adw.Window):
         )
 
         parts = [
-            f"{src}{cap_filter}{decoder}{crop} ! videoconvert ! tee name=t",
+            f"{src}{cap_filter}{decoder} ! videoconvert ! tee name=t",
             preview_branch,
         ]
         if snapshot_branch:
@@ -857,12 +844,10 @@ class CameraWindow(Adw.Window):
             return False
 
         self._appsink = self._pipeline.get_by_name("snap")
-        self._videocrop = self._pipeline.get_by_name("zoom")
         self._capsfilter = self._pipeline.get_by_name("resfilter")
-        self._frame_size = (0, 0)
-        # Reset zoom for the new pipeline; otherwise stale crop values from
-        # the previous device leak through if it had a different frame size.
+        # Reset widget zoom for the new pipeline.
         self._zoom = 1.0
+        self._picture.set_zoom(1.0)
 
         self._bus = self._pipeline.get_bus()
         if self._bus is not None:
@@ -933,7 +918,6 @@ class CameraWindow(Adw.Window):
                 pass
             self._pipeline = None
         self._appsink = None
-        self._videocrop = None
         self._capsfilter = None
 
     def _on_preview_sample(self, sink: Any) -> Any:
@@ -1456,51 +1440,13 @@ class CameraWindow(Adw.Window):
         self._grid.set_visible(self._grid_on)
 
     # ------------------------------------------------------------------
-    # Zoom (digital, via videocrop)
+    # Zoom (digital, widget-snapshot only)
     # ------------------------------------------------------------------
-
-    def _frame_dimensions(self) -> tuple[int, int]:
-        if self._frame_size[0] > 0:
-            return self._frame_size
-        if self._videocrop is None:
-            return (0, 0)
-        try:
-            pad = self._videocrop.get_static_pad("sink")
-            if pad is None:
-                return (0, 0)
-            caps = pad.get_current_caps()
-            if caps is None or caps.get_size() == 0:
-                return (0, 0)
-            s = caps.get_structure(0)
-            ok_w, w = s.get_int("width")
-            ok_h, h = s.get_int("height")
-            if ok_w and ok_h:
-                self._frame_size = (w, h)
-                return self._frame_size
-        except Exception:
-            return (0, 0)
-        return (0, 0)
 
     def _apply_zoom(self, zoom: float) -> None:
         zoom = max(1.0, min(self._zoom_max, zoom))
         self._zoom = zoom
-        if self._videocrop is None:
-            return
-        w, h = self._frame_dimensions()
-        if w == 0 or h == 0:
-            return
-        # videocrop edges cannot reach the center pixel; clamp generously.
-        max_crop_w = max(0, w // 2 - 2)
-        max_crop_h = max(0, h // 2 - 2)
-        crop_w = min(max_crop_w, int(w * (1 - 1 / zoom) / 2))
-        crop_h = min(max_crop_h, int(h * (1 - 1 / zoom) / 2))
-        try:
-            self._videocrop.set_property("left", crop_w)
-            self._videocrop.set_property("right", crop_w)
-            self._videocrop.set_property("top", crop_h)
-            self._videocrop.set_property("bottom", crop_h)
-        except Exception:
-            LOGGER.debug("videocrop set-property failed", exc_info=True)
+        self._picture.set_zoom(zoom)
 
     def _on_zoom_begin(self, _gesture: Gtk.GestureZoom, _seq: Any) -> None:
         self._zoom_base = self._zoom
@@ -1509,7 +1455,6 @@ class CameraWindow(Adw.Window):
         self._apply_zoom(self._zoom_base * scale)
 
     def _on_scroll(self, _ctl: Gtk.EventControllerScroll, _dx: float, dy: float) -> bool:
-        # Ctrl-less wheel zooms — matches Snapshot's affordance.
         if dy == 0:
             return False
         factor = 0.9 if dy > 0 else 1.1
