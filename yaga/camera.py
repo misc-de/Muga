@@ -267,9 +267,13 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
         if _is_ir_name(d["name"]):
             LOGGER.debug("Filtering IR device: %s", d["name"])
             continue
-        if not _resolutions_from_caps(d.get("caps")):
-            LOGGER.debug("Filtering metadata-only device: %s (%s)", d["name"], d["path"])
+        kinds = _device_kinds(d.get("caps"))
+        if not kinds:
+            LOGGER.debug(
+                "Filtering metadata-only device: %s (%s)", d["name"], d["path"]
+            )
             continue
+        d["kinds"] = kinds
         key = d["path"] or d["name"]
         existing = by_path.get(key)
         if existing is None:
@@ -278,19 +282,41 @@ def _enumerate_devices(gst: Any) -> list[dict[str, Any]]:
         if d["pipewire"] and not existing["pipewire"]:
             by_path[key] = d
         elif d["pipewire"] == existing["pipewire"] and len(
-            _resolutions_from_caps(d.get("caps"))
-        ) > len(_resolutions_from_caps(existing.get("caps"))):
+            _modes_from_caps(d.get("caps"))
+        ) > len(_modes_from_caps(existing.get("caps"))):
             by_path[key] = d
-    return list(by_path.values())
+
+    result = list(by_path.values())
+
+    # Last-resort backup: if the monitor surfaced nothing usable (which can
+    # happen when pipewire is in a transient state or only advertises odd
+    # caps), scan /dev directly and assume each video node is openable.
+    # The pipeline-builder will fail visibly if a given node isn't a
+    # capture device.
+    if not result:
+        LOGGER.debug("No usable devices from monitor — scanning /dev")
+        for path in sorted(Path("/dev").glob("video*")):
+            result.append({
+                "name": path.name,
+                "path": str(path),
+                "source_factory": "v4l2src",
+                "location": "unknown",
+                "caps": None,
+                "pipewire": False,
+                "kinds": set(),
+            })
+    return result
 
 
-def _resolutions_from_caps(caps: Any) -> list[tuple[int, int]]:
-    """Extract de-duplicated (w, h) pairs from a GstCaps. Only raw video for
-    now — MJPEG-only resolutions are skipped to keep pipeline construction
-    deterministic."""
+def _modes_from_caps(caps: Any) -> list[tuple[int, int, str]]:
+    """Extract (w, h, kind) tuples from a GstCaps where kind is 'raw' for
+    video/x-raw structures and 'jpeg' for image/jpeg. UVC cameras typically
+    advertise their highest resolutions only via MJPG, so dropping those
+    would either leave us with tiny modes or — when raw isn't advertised
+    at all — make the camera look like it doesn't exist."""
     if caps is None:
         return []
-    sizes: set[tuple[int, int]] = set()
+    out: dict[tuple[int, int, str], None] = {}
     try:
         n = caps.get_size()
     except Exception:
@@ -299,14 +325,34 @@ def _resolutions_from_caps(caps: Any) -> list[tuple[int, int]]:
         s = caps.get_structure(i)
         if s is None:
             continue
-        if s.get_name() != "video/x-raw":
+        name = s.get_name()
+        if name == "video/x-raw":
+            kind = "raw"
+        elif name == "image/jpeg":
+            kind = "jpeg"
+        else:
             continue
         ok_w, w = s.get_int("width")
         ok_h, h = s.get_int("height")
         if ok_w and ok_h and w > 0 and h > 0:
-            sizes.add((w, h))
-    out = sorted(sizes, key=lambda wh: -(wh[0] * wh[1]))
-    return out
+            out[(w, h, kind)] = None
+    return sorted(out.keys(), key=lambda whk: -(whk[0] * whk[1]))
+
+
+def _resolutions_from_caps(caps: Any) -> list[tuple[int, int]]:
+    """Back-compat shim: just the (w, h) pairs, prefer raw over jpeg when
+    the same resolution exists in both."""
+    seen: dict[tuple[int, int], str] = {}
+    for w, h, kind in _modes_from_caps(caps):
+        prev = seen.get((w, h))
+        if prev is None or (prev == "jpeg" and kind == "raw"):
+            seen[(w, h)] = kind
+    return sorted(seen.keys(), key=lambda wh: -(wh[0] * wh[1]))
+
+
+def _device_kinds(caps: Any) -> set[str]:
+    """Which capture formats a device advertises: {'raw', 'jpeg'}."""
+    return {k for _w, _h, k in _modes_from_caps(caps)}
 
 
 # ----------------------------------------------------------------------
@@ -665,17 +711,23 @@ class CameraWindow(Adw.Window):
             return None
         return self._devices[self._device_index % len(self._devices)]
 
-    def _pick_default_resolution(self, device: dict[str, Any]) -> tuple[int, int] | None:
-        """Pick a sensible startup resolution: the device's largest raw
-        mode, clamped to <=1920x1080 to keep buffer pools modest. Returning
-        None means "let downstream negotiate freely"."""
-        raw = _resolutions_from_caps(device.get("caps"))
-        if not raw:
+    def _pick_default_mode(
+        self, device: dict[str, Any]
+    ) -> tuple[int, int, str] | None:
+        """Pick a (w, h, kind) tuple for the device's startup mode. Prefers
+        raw <=1920x1080 (decoder-free, smaller buffers), falls back to the
+        largest jpeg mode <=1920x1080, then the smallest available mode of
+        either kind. Returns None when the device's caps are empty (the
+        /dev backup-scan path)."""
+        modes = _modes_from_caps(device.get("caps"))
+        if not modes:
             return None
-        for w, h in raw:
-            if w <= 1920 and h <= 1080:
-                return (w, h)
-        return raw[-1]  # smallest
+        capped = [m for m in modes if m[0] <= 1920 and m[1] <= 1080]
+        if capped:
+            # Prefer raw over jpeg at the same effective resolution.
+            capped.sort(key=lambda m: (-(m[0] * m[1]), 0 if m[2] == "raw" else 1))
+            return capped[0]
+        return modes[-1]
 
     def _build_pipeline_description(self, device: dict[str, Any]) -> str:
         gst = self._Gst
@@ -695,18 +747,51 @@ class CameraWindow(Adw.Window):
         else:
             src = "autovideosrc"
 
-        # Explicit raw-video caps right after the source. Without these,
-        # v4l2src negotiates with downstream and may try to expose MJPG
-        # (which our pipeline can't decode) or pick an oversized buffer
-        # pool by defaulting to the camera's max resolution.
-        resolution = self._selected_resolution or self._pick_default_resolution(device)
-        if resolution is not None:
-            w, h = resolution
-            cap_filter = (
-                f' ! capsfilter name=resfilter '
-                f'caps="video/x-raw,width={w},height={h},framerate=30/1"'
-            )
+        # Explicit caps right after the source. Without them, v4l2src
+        # negotiates with downstream and may pick an oversized buffer pool
+        # at the camera's max mode. We pin the resolution AND format
+        # (video/x-raw vs image/jpeg) to whatever this device advertises,
+        # inserting jpegdec when the device is MJPG-only (common on UVC
+        # cameras whose only raw-mode is sub-VGA).
+        mode: tuple[int, int, str] | None
+        if self._selected_resolution is not None:
+            # User-picked from the resolution menu; remember which kind
+            # supports that (w,h).
+            sel_w, sel_h = self._selected_resolution
+            modes = _modes_from_caps(device.get("caps"))
+            kind = "raw"
+            for w, h, k in modes:
+                if w == sel_w and h == sel_h:
+                    kind = k
+                    if k == "raw":
+                        break
+            mode = (sel_w, sel_h, kind)
         else:
+            mode = self._pick_default_mode(device)
+
+        decoder = ""
+        if mode is not None:
+            w, h, kind = mode
+            if kind == "jpeg":
+                cap_filter = (
+                    f' ! capsfilter name=resfilter '
+                    f'caps="image/jpeg,width={w},height={h},framerate=30/1"'
+                )
+                if gst.ElementFactory.find("jpegdec") is not None:
+                    decoder = " ! jpegdec"
+                else:
+                    LOGGER.warning(
+                        "Device only advertises MJPG but jpegdec is missing; "
+                        "pipeline likely won't link"
+                    )
+            else:
+                cap_filter = (
+                    f' ! capsfilter name=resfilter '
+                    f'caps="video/x-raw,width={w},height={h},framerate=30/1"'
+                )
+        else:
+            # No caps known (backup-scanned device) — let downstream
+            # negotiate but constrain framerate to 30/1.
             cap_filter = ' ! capsfilter name=resfilter caps="video/x-raw,framerate=30/1"'
 
         crop = (
@@ -743,7 +828,10 @@ class CameraWindow(Adw.Window):
             else ""
         )
 
-        parts = [f"{src}{cap_filter}{crop} ! videoconvert ! tee name=t", preview_branch]
+        parts = [
+            f"{src}{cap_filter}{decoder}{crop} ! videoconvert ! tee name=t",
+            preview_branch,
+        ]
         if snapshot_branch:
             parts.append(snapshot_branch)
         return " ".join(parts)
@@ -916,9 +1004,10 @@ class CameraWindow(Adw.Window):
     # ------------------------------------------------------------------
 
     def _populate_resolutions(self, device: dict[str, Any]) -> None:
+        # Uses raw-or-jpeg union so devices that only expose MJPG (most
+        # UVC cams at high resolutions) still get a working picker.
         resolutions = _resolutions_from_caps(device.get("caps"))
         if len(resolutions) < 2:
-            # Only one (or zero) raw mode — no menu needed.
             self._res_button.set_visible(False)
             return
 
