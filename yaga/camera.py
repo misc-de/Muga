@@ -830,10 +830,12 @@ class CameraWindow(Adw.Window):
         gst = self._Gst
         self._stop_pipeline()
 
-        # Probe V4L2 controls BEFORE the pipeline opens the device. Doing
-        # it after start-streaming triggers a buffer-pool re-allocation on
-        # some UVC drivers, which surfaces as "Failed to allocate memory".
-        self._reset_controls_for_device(device)
+        # NOTE: we deliberately do NOT probe v4l2 controls here. Opening
+        # the device with v4l2-ctl just before v4l2src tries to open it
+        # corrupts the descriptor state on some UVC kernels, surfacing
+        # later as ENUM_FMT returning ENOTTY ("Inappropriate ioctl"). The
+        # probe runs lazily when the gear popover is opened.
+        self._mark_controls_dirty_for_device(device)
 
         desc = self._build_pipeline_description(device)
         LOGGER.debug("Camera pipeline: %s", desc)
@@ -968,14 +970,44 @@ class CameraWindow(Adw.Window):
         gst = self._Gst
         if message.type == gst.MessageType.ERROR:
             err, dbg = message.parse_error()
-            # Surface the full GError + debug detail to stderr so users can
-            # paste it back — the toast truncates and hides the dbg text.
+            err_msg = err.message if err else "?"
+            dbg_text = (dbg or "").strip()
             LOGGER.error(
                 "GStreamer pipeline error: %s (debug: %s)",
-                err.message if err else "?",
-                (dbg or "").strip() or "<none>",
+                err_msg, dbg_text or "<none>",
             )
-            self._fail(f"Camera error: {err.message if err else err}")
+
+            # Best-effort interpretation of common v4l2 failure modes so
+            # the toast tells the user something they can act on.
+            hint = self._interpret_v4l2_error(err_msg, dbg_text)
+            self._fail(hint if hint else f"Camera error: {err_msg}")
+
+    def _interpret_v4l2_error(self, message: str, debug: str) -> str | None:
+        combined = (message + " " + debug).lower()
+        device = self._current_device()
+        name = device.get("name") if device else None
+        path = device.get("path") if device else ""
+        suffix = f" ({path})" if path else ""
+        if "inappropriate ioctl" in combined or "enotty" in combined:
+            return self._(
+                "Camera node%s isn't a v4l2 capture device. Try the "
+                "switch-camera button or open a different node."
+            ) % suffix
+        if "busy" in combined or "ebusy" in combined or "resource busy" in combined:
+            return self._(
+                "Camera%s is in use by another app — close it and retry."
+            ) % suffix
+        if "permission" in combined or "eacces" in combined:
+            return self._(
+                "No permission to open %s. Add yourself to the 'video' "
+                "group: sudo usermod -a -G video $USER"
+            ) % (path or self._("camera"))
+        if "not-negotiated" in combined or "no common" in combined:
+            return self._(
+                "Camera and preview pipeline couldn't agree on a format. "
+                "Pick a lower resolution from the menu."
+            )
+        return None
 
     def _fail(self, message: str) -> None:
         LOGGER.warning("Camera pipeline failed: %s", message)
@@ -1045,27 +1077,44 @@ class CameraWindow(Adw.Window):
     # V4L2 controls panel
     # ------------------------------------------------------------------
 
-    def _reset_controls_for_device(self, device: dict[str, Any]) -> None:
-        """Probe the active device for v4l2 controls and rebuild the gear
-        popover. Called whenever the pipeline (re)starts on a new device.
-        """
+    def _mark_controls_dirty_for_device(self, device: dict[str, Any]) -> None:
+        """Cheap pre-pipeline-start state reset. Does NOT touch the device
+        via v4l2-ctl — that runs only when the user actually opens the
+        gear popover. We still show the gear unconditionally when
+        v4l2-ctl is installed; if the device turns out to have nothing
+        tunable, the post-probe code hides it."""
         path = device.get("path") or ""
-        if not camera_controls.controls_supported() or not path:
-            self._gear_button.set_visible(False)
-            return
-        ctrls = self._controls_cache.get(path)
-        if ctrls is None:
-            ctrls = camera_controls.probe_controls(path)
-            self._controls_cache[path] = ctrls
-        self._controls = ctrls
-        # Discard any popover that was built for the previous device.
+        self._controls = {}
         if self._gear_popover is not None:
             self._gear_button.set_popover(None)
             self._gear_popover = None
         self._controls_built = False
-        # Hide the gear if the device has nothing user-tunable at all.
+        # Show the gear if v4l2-ctl is available and we have a /dev path
+        # to probe. The probe itself happens on first popover-open.
+        self._gear_button.set_visible(
+            bool(path) and camera_controls.controls_supported()
+        )
+
+    def _ensure_controls_probed(self) -> None:
+        """Run the v4l2-ctl probe for the active device if we haven't yet.
+        Called when the gear popover is first opened — never at pipeline
+        start, so the probe can't interfere with v4l2src negotiation."""
+        device = self._current_device()
+        if device is None:
+            return
+        path = device.get("path") or ""
+        if not path or not camera_controls.controls_supported():
+            self._controls = {}
+            return
+        cached = self._controls_cache.get(path)
+        if cached is None:
+            cached = camera_controls.probe_controls(path)
+            self._controls_cache[path] = cached
+        self._controls = cached
+        # Now that we know what's tunable, hide the gear if it turned
+        # out to have nothing useful.
         has_any = any(
-            camera_controls.resolve(ctrls, logical) is not None
+            camera_controls.resolve(cached, logical) is not None
             for logical in (
                 "auto_exposure", "exposure_absolute",
                 "auto_white_balance", "white_balance_temp",
@@ -1076,9 +1125,8 @@ class CameraWindow(Adw.Window):
         self._gear_button.set_visible(has_any)
 
     def _on_gear_toggled(self, _btn: Gtk.MenuButton, _pspec: Any) -> None:
-        # The popover content is built lazily so we don't pay the widget
-        # creation cost for users who never open it.
         if self._gear_button.get_active() and not self._controls_built:
+            self._ensure_controls_probed()
             self._build_controls_popover()
 
     def _build_controls_popover(self) -> None:
