@@ -913,6 +913,13 @@ class CameraWindow(Adw.Window):
         # at 30 fps on a Halium phone causes memory pile-up and OOM crash.
         # On capture: open valve, wait for new-sample signal, close valve.
         #
+        # `async=false` on the snap appsink is critical: by default, an
+        # async sink blocks the pipeline's READY→PAUSED→PLAYING transition
+        # until it gets a preroll buffer. With the valve closed (drop=true)
+        # at startup, no buffer ever reaches the snap appsink, so without
+        # async=false the whole pipeline stays stuck at "pending PLAYING".
+        # The preview sink prerolls and drives playback by itself.
+        #
         # On Halium the valve sits BEFORE the queue — with valve drop=true
         # (the default state), no buffers flow, and the queue stays empty.
         # If the queue were upstream of the valve it would always hold the
@@ -925,7 +932,7 @@ class CameraWindow(Adw.Window):
                     "   ! queue leaky=downstream max-size-buffers=2 "
                     "   ! videoconvert ! jpegenc quality=92 "
                     "   ! appsink name=snap emit-signals=true "
-                    "             max-buffers=1 drop=true sync=false"
+                    "             max-buffers=1 drop=true sync=false async=false"
                 )
             else:
                 snapshot_branch = (
@@ -933,7 +940,7 @@ class CameraWindow(Adw.Window):
                     "   ! valve name=shutter drop=true "
                     "   ! videoconvert ! jpegenc quality=92 "
                     "   ! appsink name=snap emit-signals=true "
-                    "             max-buffers=1 drop=true sync=false"
+                    "             max-buffers=1 drop=true sync=false async=false"
                 )
         else:
             snapshot_branch = ""
