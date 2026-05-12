@@ -131,9 +131,20 @@ def camera_supported() -> bool:
         gst = _gst()
     except CameraError:
         return False
+    # Note: we deliberately don't require gtk4paintablesink here. If the
+    # sink is missing the window still opens and surfaces a sticky toast
+    # with an install hint — better UX than a silently-disabled button.
     return (
         gst.ElementFactory.find("v4l2src") is not None
         or gst.ElementFactory.find("autovideosrc") is not None
+    )
+
+
+def _missing_preview_message() -> str:
+    """Translation-free hint string for the install pkg the user is missing."""
+    return (
+        "Camera preview requires gtk4paintablesink — "
+        "install gst-plugins-rs (Arch/Manjaro: pacman -S gst-plugins-rs)."
     )
 
 
@@ -651,6 +662,12 @@ class CameraWindow(Adw.Window):
         if not self._devices:
             self._shutter.set_sensitive(False)
             self._show_toast(self._("No camera detected"))
+        elif self._Gst.ElementFactory.find("gtk4paintablesink") is None:
+            # No point starting a pipeline that can't show a preview.
+            # Disable capture and surface a hint so the user knows it's a
+            # missing package rather than broken hardware.
+            self._shutter.set_sensitive(False)
+            self._show_toast(self._(_missing_preview_message()), sticky=True)
         else:
             GLib.idle_add(self._start_pipeline)
 
@@ -663,6 +680,18 @@ class CameraWindow(Adw.Window):
             return None
         return self._devices[self._device_index % len(self._devices)]
 
+    def _pick_default_resolution(self, device: dict[str, Any]) -> tuple[int, int] | None:
+        """Pick a sensible startup resolution: the device's largest raw
+        mode, clamped to <=1920x1080 to keep buffer pools modest. Returning
+        None means "let downstream negotiate freely"."""
+        raw = _resolutions_from_caps(device.get("caps"))
+        if not raw:
+            return None
+        for w, h in raw:
+            if w <= 1920 and h <= 1080:
+                return (w, h)
+        return raw[-1]  # smallest
+
     def _build_pipeline_description(self, device: dict[str, Any]) -> str:
         gst = self._Gst
         has_preview = gst.ElementFactory.find("gtk4paintablesink") is not None
@@ -673,19 +702,32 @@ class CameraWindow(Adw.Window):
         path = device.get("path") or ""
         factory = device.get("source_factory") or ""
         if factory == "v4l2src" and path and gst.ElementFactory.find("v4l2src"):
-            src = f'v4l2src device="{path}"'
+            # io-mode=2 forces MMAP buffers. The default ("auto") sometimes
+            # picks USERPTR which fails with ENOMEM on UVC kernels that
+            # can't pin the requested page count. MMAP is the boring,
+            # universally supported choice.
+            src = f'v4l2src device="{path}" io-mode=2'
         else:
             src = "autovideosrc"
 
-        # Optional resolution capsfilter right after the source.
-        cap_filter = ""
-        if self._selected_resolution is not None:
-            w, h = self._selected_resolution
+        # Explicit raw-video caps right after the source. Without these,
+        # v4l2src negotiates with downstream and may try to expose MJPG
+        # (which our pipeline can't decode) or pick an oversized buffer
+        # pool by defaulting to the camera's max resolution.
+        resolution = self._selected_resolution or self._pick_default_resolution(device)
+        if resolution is not None:
+            w, h = resolution
             cap_filter = (
-                f' ! capsfilter name=resfilter caps="video/x-raw,width={w},height={h}"'
+                f' ! capsfilter name=resfilter '
+                f'caps="video/x-raw,width={w},height={h},framerate=30/1"'
             )
+        else:
+            cap_filter = ' ! capsfilter name=resfilter caps="video/x-raw,framerate=30/1"'
 
-        crop = " ! videocrop name=zoom left=0 right=0 top=0 bottom=0" if has_videocrop else ""
+        crop = (
+            " ! videocrop name=zoom left=0 right=0 top=0 bottom=0"
+            if has_videocrop else ""
+        )
 
         preview_branch = (
             "t. ! queue leaky=downstream max-size-buffers=2 ! videoconvert "
@@ -712,7 +754,14 @@ class CameraWindow(Adw.Window):
             return False
         gst = self._Gst
         self._stop_pipeline()
+
+        # Probe V4L2 controls BEFORE the pipeline opens the device. Doing
+        # it after start-streaming triggers a buffer-pool re-allocation on
+        # some UVC drivers, which surfaces as "Failed to allocate memory".
+        self._reset_controls_for_device(device)
+
         desc = self._build_pipeline_description(device)
+        LOGGER.debug("Camera pipeline: %s", desc)
         try:
             self._pipeline = gst.parse_launch(desc)
         except Exception as exc:
@@ -758,7 +807,6 @@ class CameraWindow(Adw.Window):
         # Now that the pipeline has been built, the device's caps are known —
         # populate the resolution picker for this device.
         self._populate_resolutions(device)
-        self._reset_controls_for_device(device)
         return False
 
     def _stop_pipeline(self) -> None:
@@ -771,6 +819,11 @@ class CameraWindow(Adw.Window):
         if self._pipeline is not None:
             try:
                 self._pipeline.set_state(self._Gst.State.NULL)
+                # Wait for the state-change to complete; the v4l2 device
+                # is only released once the transition has actually
+                # finished, and a subsequent start would otherwise race
+                # against the same descriptor.
+                self._pipeline.get_state(2 * self._Gst.SECOND)
             except Exception:
                 pass
             self._pipeline = None
@@ -781,8 +834,15 @@ class CameraWindow(Adw.Window):
     def _on_bus_message(self, _bus: Any, message: Any) -> None:
         gst = self._Gst
         if message.type == gst.MessageType.ERROR:
-            err, _dbg = message.parse_error()
-            self._fail(f"Camera error: {err}")
+            err, dbg = message.parse_error()
+            # Surface the full GError + debug detail to stderr so users can
+            # paste it back — the toast truncates and hides the dbg text.
+            LOGGER.error(
+                "GStreamer pipeline error: %s (debug: %s)",
+                err.message if err else "?",
+                (dbg or "").strip() or "<none>",
+            )
+            self._fail(f"Camera error: {err.message if err else err}")
 
     def _fail(self, message: str) -> None:
         LOGGER.warning("Camera pipeline failed: %s", message)
@@ -1577,12 +1637,14 @@ class CameraWindow(Adw.Window):
             return True
         return False
 
-    def _show_toast(self, text: str) -> None:
+    def _show_toast(self, text: str, sticky: bool = False) -> None:
         self._toast.set_text(text)
         self._toast.set_visible(True)
         if self._toast_timer is not None:
             GLib.source_remove(self._toast_timer)
-        self._toast_timer = GLib.timeout_add_seconds(3, self._hide_toast)
+            self._toast_timer = None
+        if not sticky:
+            self._toast_timer = GLib.timeout_add_seconds(3, self._hide_toast)
 
     def _hide_toast(self) -> bool:
         self._toast.set_visible(False)
