@@ -1045,12 +1045,15 @@ class CameraWindow(Adw.Window):
                 caps_str = f"video/x-raw,width={sel_w},height={sel_h}"
             capsfilter.set_property("caps", gst.Caps.from_string(caps_str))
         elif device.get("source_factory") == "droidcamsrc":
+            # Width/height only — no framerate constraint. Many Halium
+            # HALs only advertise discrete framerates (commonly just 30/1)
+            # and a [1, 24] range gives them no valid value, which
+            # silently stalls negotiation at READY->PAUSED.
             capsfilter = gst.ElementFactory.make("capsfilter", "halium_default_cap")
             caps_str = (
                 "video/x-raw,"
                 "width=(int)[1,1280],"
-                "height=(int)[1,720],"
-                "framerate=(fraction)[1/1,24/1]"
+                "height=(int)[1,720]"
             )
             capsfilter.set_property("caps", gst.Caps.from_string(caps_str))
 
