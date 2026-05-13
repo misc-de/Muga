@@ -675,6 +675,38 @@ class _RotatableIcon(Gtk.Image):
         snapshot.restore()
 
 
+class _RotatableSwitch(Gtk.Switch):
+    """Gtk.Switch that paints rotated around its centre, like the icons
+    and labels. The switch's input still hits the original axis-aligned
+    bounds, which is fine because a tap anywhere on the switch toggles
+    it — the rotation is purely visual."""
+
+    __gtype_name__ = "YagaRotatableSwitch"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._rotation_deg = 0.0
+
+    def set_rotation_deg(self, deg: float) -> None:
+        if abs(deg - self._rotation_deg) < 0.5:
+            return
+        self._rotation_deg = deg
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
+        if self._rotation_deg == 0:
+            Gtk.Switch.do_snapshot(self, snapshot)
+            return
+        w = self.get_width()
+        h = self.get_height()
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(w / 2, h / 2))
+        snapshot.rotate(self._rotation_deg)
+        snapshot.translate(Graphene.Point().init(-w / 2, -h / 2))
+        Gtk.Switch.do_snapshot(self, snapshot)
+        snapshot.restore()
+
+
 class _RotatableLabel(Gtk.Label):
     """Same snapshot-rotation trick as _RotatableIcon but for text, so
     the timer's "3s" / "10s" label can rotate with device orientation.
@@ -1021,9 +1053,10 @@ class CameraWindow(Adw.Window):
         self._swipe_hint = _RotatableLabel()
         self._swipe_hint.set_label(self._("←  swipe  →"))
         self._swipe_hint.add_css_class("camera-swipe-hint")
+        # Initial alignment; overwritten by _position_swipe_hint as
+        # soon as the layout runs for the actual orientation.
         self._swipe_hint.set_halign(Gtk.Align.CENTER)
         self._swipe_hint.set_valign(Gtk.Align.END)
-        self._swipe_hint.set_margin_bottom(180)
         self._swipe_hint.set_visible(False)
         self._swipe_hint.set_can_target(False)
         self._swipe_hint.set_opacity(0.0)
@@ -2419,6 +2452,10 @@ class CameraWindow(Adw.Window):
             self._position_record_dot()
         except Exception:
             LOGGER.debug("record-dot reposition failed", exc_info=True)
+        try:
+            self._position_swipe_hint()
+        except Exception:
+            LOGGER.debug("swipe-hint reposition failed", exc_info=True)
 
         neutral = (self._handedness == "neutral")
         right = (self._handedness == "right")
@@ -2698,6 +2735,15 @@ class CameraWindow(Adw.Window):
     # Quality picker (photo: jpegenc quality, video: bitrate)
     # ------------------------------------------------------------------
 
+    def _orient_seq(self, items: list) -> list:
+        """Order children so the first item lands at the user's
+        top/left regardless of device orientation. BOTTOM_UP and
+        RIGHT_UP flip the user-view axis vs the widget axis, so we
+        reverse the children for those."""
+        if self._device_orientation in (ORIENT_BOTTOM_UP, ORIENT_RIGHT_UP):
+            return list(reversed(items))
+        return list(items)
+
     def _build_quality_popover(self) -> Gtk.Popover:
         # Orientation-aware layout: in landscape, the whole popover
         # content is transposed so it reads right in the user's view.
@@ -2764,7 +2810,6 @@ class CameraWindow(Adw.Window):
             header = _rotated_text(title)
             header.set_xalign(0)
             header.add_css_class("heading")
-            sec.append(header)
             row = Gtk.Box(orientation=inner_orient, spacing=6)
             for label, value in presets:
                 btn = _rotated_button(label, lambda _b, v=value: on_pick(v))
@@ -2772,7 +2817,11 @@ class CameraWindow(Adw.Window):
                     btn.add_css_class("suggested-action")
                 store.append((btn, value))
                 row.append(btn)
-            sec.append(row)
+            # Header above buttons in user's view — _orient_seq flips
+            # widget child order for BOTTOM_UP / RIGHT_UP so the visual
+            # ends up consistent across all four orientations.
+            for w in self._orient_seq([header, row]):
+                sec.append(w)
             box.append(sec)
 
         if self._capture_mode == "photo":
@@ -2801,7 +2850,6 @@ class CameraWindow(Adw.Window):
             size_header = _rotated_text(self._("Photo size"))
             size_header.set_xalign(0)
             size_header.add_css_class("heading")
-            size_sec.append(size_header)
             size_row = Gtk.Box(orientation=inner_orient, spacing=6)
             size_presets: list[tuple[str, tuple[int, int] | None]] = [
                 (self._("Max"),  None),
@@ -2817,7 +2865,8 @@ class CameraWindow(Adw.Window):
                     btn.add_css_class("suggested-action")
                 self._image_size_buttons.append((btn, wh))
                 size_row.append(btn)
-            size_sec.append(size_row)
+            for w in self._orient_seq([size_header, size_row]):
+                size_sec.append(w)
             box.append(size_sec)
 
         elif self._capture_mode == "video":
@@ -2883,7 +2932,6 @@ class CameraWindow(Adw.Window):
         header = _rotated_text(self._("Handedness"))
         header.set_xalign(0)
         header.add_css_class("heading")
-        sec.append(header)
         row = Gtk.Box(orientation=inner_orient, spacing=6)
         presets: list[tuple[str, str]] = [
             (self._("Right"),   "right"),
@@ -2898,26 +2946,33 @@ class CameraWindow(Adw.Window):
             btn.connect("clicked", lambda _b, v=value: self._set_handedness(v))
             self._handedness_buttons.append((btn, value))
             row.append(btn)
-        sec.append(row)
+        for w in self._orient_seq([header, row]):
+            sec.append(w)
         box.append(sec)
 
         box.append(Gtk.Separator(orientation=inner_orient))
 
-        # Geotagging: real boolean via Gtk.Switch. Reflects the
-        # user-intent flag (self._geo_enabled) regardless of whether
-        # GeoClue is actually available on the system — captures just
-        # silently lack GPS if it isn't.
+        # Geotagging: real boolean via _RotatableSwitch so it rotates
+        # in sync with the rest of the chrome (Gtk.Switch is normally
+        # horizontal in widget-space, which appears vertical in
+        # landscape without rotation). The switch sits at the user's
+        # RIGHT regardless of orientation; achieved by reversing the
+        # widget child order on BOTTOM_UP / RIGHT_UP (handled by
+        # _orient_seq).
         gps_sec = Gtk.Box(orientation=gps_section_orient, spacing=12)
         gps_header = _rotated_text(self._("Geotagging"))
         gps_header.set_xalign(0)
         gps_header.add_css_class("heading")
-        gps_sec.append(gps_header)
-        self._geo_switch = Gtk.Switch()
+        gps_header.set_hexpand(True)
+        self._geo_switch = _RotatableSwitch()
         self._geo_switch.set_active(self._geo_enabled)
-        self._geo_switch.set_halign(Gtk.Align.START)
+        self._geo_switch.set_halign(Gtk.Align.END)
         self._geo_switch.set_valign(Gtk.Align.CENTER)
+        self._geo_switch.set_rotation_deg(label_rot)
+        self._rotatable_icons.append(self._geo_switch)
         self._geo_switch.connect("state-set", self._on_geo_switch_state_set)
-        gps_sec.append(self._geo_switch)
+        for w in self._orient_seq([gps_header, self._geo_switch]):
+            gps_sec.append(w)
         # Kept for legacy _on_geo_error which used to set_active.
         self._geo_button = None
         box.append(gps_sec)
@@ -3552,6 +3607,39 @@ class CameraWindow(Adw.Window):
             self._record_dot.set_margin_top(28)
         else:
             self._record_dot.set_margin_bottom(28)
+
+    def _position_swipe_hint(self) -> None:
+        """Place the swipe hint at the user's bottom-centre. In portrait
+        that's below the shutter (which lives in the lower third);
+        in landscape the same user-bottom-centre lands between the
+        shutter (at the corner) and the image rect on the inward side.
+        """
+        hint = self._swipe_hint
+        hint.set_margin_top(0); hint.set_margin_bottom(0)
+        hint.set_margin_start(0); hint.set_margin_end(0)
+        orient = self._device_orientation
+        # (halign, valign, margin-edge) per orientation. The
+        # margin-edge name picks which margin we set to push the hint
+        # ~20 px inward from the screen edge.
+        mapping = {
+            ORIENT_NORMAL:    (Gtk.Align.CENTER, Gtk.Align.END,   "bottom"),
+            ORIENT_BOTTOM_UP: (Gtk.Align.CENTER, Gtk.Align.START, "top"),
+            ORIENT_LEFT_UP:   (Gtk.Align.END,    Gtk.Align.CENTER, "end"),
+            ORIENT_RIGHT_UP:  (Gtk.Align.START,  Gtk.Align.CENTER, "start"),
+        }
+        halign, valign, edge = mapping.get(
+            orient, (Gtk.Align.CENTER, Gtk.Align.END, "bottom")
+        )
+        hint.set_halign(halign)
+        hint.set_valign(valign)
+        if edge == "bottom":
+            hint.set_margin_bottom(20)
+        elif edge == "top":
+            hint.set_margin_top(20)
+        elif edge == "end":
+            hint.set_margin_end(20)
+        elif edge == "start":
+            hint.set_margin_start(20)
 
     def _capture_via_image_pipeline(self) -> None:
         """Stop the preview pipeline, build a droidcamsrc mode=1 ->
