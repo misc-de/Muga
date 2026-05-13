@@ -225,6 +225,19 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.status.set_text(text)
         self.status.set_visible(bool(text))
 
+    def _is_mobile_width(self) -> bool:
+        """Window narrower than 600px → mobile layout. Mirrors the
+        Adw.Breakpoint condition we set up for the refresh icon. Used
+        anywhere we need to honour the mobile-or-desktop split outside
+        of breakpoint-driven setters (e.g. visibility resets in
+        _exit_selection_mode). Falls back to True (= mobile) before
+        the window has been realised, since we'd rather hide the icon
+        than flash it on first paint on a phone."""
+        width = self.get_width()
+        if width <= 0:
+            return True
+        return width < 600
+
     def is_nc_visible(self) -> bool:
         """May the gallery show Nextcloud entries (tab, merged tiles, cached
         thumbnails)? Driven by the persistent "Nextcloud active" preference, so
@@ -1832,7 +1845,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.back_button.set_visible(self.current_folder is not None)
         self.new_folder_button.set_visible(True)
         self.search_button.set_visible(True)
-        self.refresh_button.set_visible(True)
+        # Refresh is desktop-only — on mobile, pull-to-refresh
+        # replaces it. Honour the same 600px mobile-breakpoint rule
+        # the constructor sets up; unconditional set_visible(True)
+        # would override the Adw breakpoint after a select→delete
+        # cycle and bring the icon back on phones.
+        self.refresh_button.set_visible(not self._is_mobile_width())
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)
         self.camera_button.set_visible(True)
@@ -2006,7 +2024,11 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _set_sel_busy(self, busy: bool, status: str) -> None:
         """Toggle the in-flight state for bulk delete/move. Disables the
         toolbar buttons while a worker thread runs and surfaces a status
-        line so the user sees the operation is making progress."""
+        line so the user sees the operation is making progress.
+
+        Status is always written — including when *status* is empty —
+        so the "Deleting N items…" message reliably disappears when
+        the worker hands control back via _set_sel_busy(False, '')."""
         self._sel_busy = busy
         for btn in (
             self._sel_cancel_btn,
@@ -2015,8 +2037,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._sel_share_btn,
         ):
             btn.set_sensitive(not busy)
-        if status:
-            self._set_status(status)
+        self._set_status(status)
 
     def _delete_item(self, item: MediaItem) -> None:
         try:
@@ -2027,7 +2048,9 @@ class GalleryWindow(Adw.ApplicationWindow):
                 except OSError:
                     pass
             self.database.delete_path(item.path, item.category)
-            self._set_status(self._("Deleted"))
+            # No status toast — the re-render is the visual
+            # confirmation (per user spec: "Bitte den Hinweis
+            # entfernen").
             self._render()
         except GLib.Error as e:
             if "Permission" in str(e):

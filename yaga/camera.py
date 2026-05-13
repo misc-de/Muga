@@ -498,7 +498,6 @@ class CameraWindow(Adw.Window):
                     self._image_resolution = (int(stored[0]), int(stored[1]))
                 except Exception:
                     self._image_resolution = None
-        self._flash_source: int | None = None
         self._controls: dict[str, V4l2Control] = {}
         self._controls_built: bool = False
         # Per-device cache so re-opening the popover after a camera switch
@@ -525,26 +524,6 @@ class CameraWindow(Adw.Window):
         # black bars; this places them on the image instead.
         self._chrome = _ImageChrome(self._picture)
         overlay.add_overlay(self._chrome)
-
-        # Screen-flash overlay — white box that briefly fades over the preview
-        # right after capture. No CSS needed; we toggle visibility + opacity.
-        self._flash = Gtk.Box()
-        self._flash.add_css_class("camera-flash")
-        self._flash.set_hexpand(True)
-        self._flash.set_vexpand(True)
-        self._flash.set_can_target(False)
-        self._flash.set_opacity(0.0)
-        self._flash.set_visible(False)
-        # Inline style so we don't depend on theme: a plain white fill.
-        try:
-            css = Gtk.CssProvider()
-            css.load_from_data(b".camera-flash { background-color: #fff; }")
-            self._flash.get_style_context().add_provider(
-                css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-            )
-        except Exception:
-            LOGGER.debug("camera cleanup/op failed", exc_info=True)
-        overlay.add_overlay(self._flash)
 
         # Tap-to-focus indicator — full-size invisible drawing area that
         # only paints when self._focus_point is set. Picture click coords
@@ -3241,7 +3220,6 @@ class CameraWindow(Adw.Window):
         else:
             _dlog("[yaga.camera] capture: writing sample")
             self._write_sample(sample)
-            self._flash_screen()
         self._busy_capture = False
         self._shutter.set_sensitive(True)
         return False
@@ -3632,7 +3610,6 @@ class CameraWindow(Adw.Window):
         if sample is not None:
             _dlog("[yaga.camera] image-capture: writing sample")
             self._write_sample(sample)
-            self._flash_screen()
         else:
             self._show_toast(self._("No frame available"))
         self._show_capture_spinner(False)
@@ -4246,31 +4223,6 @@ class CameraWindow(Adw.Window):
         gps_ifd[0x0006] = (int(round(abs(alt) * 100)), 100)  # Altitude
 
     # ------------------------------------------------------------------
-    # Screen-flash
-    # ------------------------------------------------------------------
-
-    def _flash_screen(self) -> None:
-        if self._flash_source is not None:
-            GLib.source_remove(self._flash_source)
-            self._flash_source = None
-        self._flash.set_opacity(0.85)
-        self._flash.set_visible(True)
-        # Fade in ~12 steps over ~240ms to keep the flash brief but visible.
-        self._flash_step = 0
-
-        def step() -> bool:
-            self._flash_step += 1
-            opacity = max(0.0, 0.85 - self._flash_step * 0.085)
-            self._flash.set_opacity(opacity)
-            if opacity <= 0.0:
-                self._flash.set_visible(False)
-                self._flash_source = None
-                return False
-            return True
-
-        self._flash_source = GLib.timeout_add(20, step)
-
-    # ------------------------------------------------------------------
     # Window chrome substitutes
     # ------------------------------------------------------------------
 
@@ -4367,7 +4319,7 @@ class CameraWindow(Adw.Window):
             LOGGER.debug("video-pipeline teardown failed", exc_info=True)
         # GLib sources.
         for src_attr in (
-            "_toast_timer", "_countdown_source", "_flash_source",
+            "_toast_timer", "_countdown_source",
             "_focus_hide_source", "_record_dot_blink_id",
             "_swipe_hint_pulse_id", "_image_timeout_id",
             "_video_finalize_source",

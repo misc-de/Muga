@@ -1,6 +1,6 @@
-# Yaga — Photo Gallery
+# Yaga — Photo Gallery & Camera
 
-A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and libadwaita.  
+A fast, clean photo and video gallery for Linux desktops and Linux phones (Phosh / FuriOS), built with GTK 4 and libadwaita.  
   
 ⚠️ **AI-assisted project**  
   
@@ -10,7 +10,7 @@ A fast, clean photo and video gallery for Linux desktops, built with GTK 4 and l
 
 ## What is Yaga?
 
-Yaga is a gallery app that feels right at home on a modern GNOME desktop. It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. And in addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
+Yaga is a gallery app that feels right at home on a modern GNOME desktop and adapts to Linux phones running Phosh (FuriOS, Droidian, UBports). It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. It now also includes a built-in **Camera** that captures photos and video — on phones running Halium / gst-droid the camera taps directly into the hardware (flash, torch, sensors). In addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
 
 ---
 
@@ -30,12 +30,21 @@ Yaga is a gallery app that feels right at home on a modern GNOME desktop. It sca
 
 - **Multiple libraries**  
 separate tabs for Photos, Pictures, Videos, Screenshots, and any extra folders you add
+- **Built-in camera**  
+capture photos and record video without leaving the app; swipe the shutter between photo and video modes. On Halium / gst-droid phones (FuriOS, Droidian, …) the camera drives the HAL directly:
+  - flash for photos and continuous torch (LED light) for video, persistent across sessions
+  - optional geotagging via GeoClue2, with EXIF written in place — no JPEG re-encode
+  - accelerometer-driven orientation; chrome rotates without rotating the framebuffer
+  - self-timer (3 / 10 s), pinch-to-zoom, tap-to-focus, JPEG quality presets, video bitrate presets
+  - handedness toggle (right / left / neutral) so the shutter button sits under your thumb
+- **Mobile-adaptive UI**  
+narrow-window breakpoints hide / re-order desktop-only chrome on phones; pull-to-refresh replaces the title-bar refresh icon
 - **Nextcloud sync**  
 browse your Nextcloud photo library directly, no FUSE or GVFS mount needed; thumbnails load on demand
 - **QR code scanner**  
 scan Nextcloud app-password QR codes straight from the camera to connect your account instantly
 - **Date grouping**  
-sort by date and photos are grouped under clear section headers (day / week / month / year)
+sort by date and photos are grouped under clear section headers (day / week / month / year). Long galleries use a sliding window: only the visible months stay in memory so jumping forward through years stays fast.
 - **Built-in editor**  
 crop, rotate, adjust brightness / contrast / colour channels, add frames for holidays and occasions, drop stickers
 - **Video playback**  
