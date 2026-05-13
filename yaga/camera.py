@@ -92,30 +92,6 @@ _CSS = b"""
 .shutter-button:hover > .shutter-core { background-color: #ff5247; }
 .shutter-button:active > .shutter-core { background-color: #c0322a; }
 .shutter-button:disabled > .shutter-core { background-color: #6a6a6a; }
-.record-button {
-    min-width: 52px;
-    min-height: 52px;
-    padding: 5px;
-    border-radius: 999px;
-    background-color: rgba(0, 0, 0, 0.45);
-    border: 2px solid rgba(255, 255, 255, 0.85);
-    box-shadow: none;
-}
-.record-button > .record-core {
-    background-color: #e8443b;
-    border-radius: 999px;
-    min-width: 32px;
-    min-height: 32px;
-}
-.record-button.recording > .record-core {
-    /* Square indicator while recording (stop affordance). */
-    border-radius: 4px;
-    min-width: 22px;
-    min-height: 22px;
-}
-.record-button:hover > .record-core { background-color: #ff5247; }
-.record-button:active > .record-core { background-color: #c0322a; }
-.record-button:disabled { opacity: 0.5; }
 """
 
 
@@ -560,15 +536,15 @@ class _ImageChrome(Gtk.DrawingArea):
                     cr.move_to(x, gy); cr.line_to(x + rw, gy)
                 cr.stroke()
 
-        # Corner brackets, inset from the image corners. The inset is
-        # generous (~20 px) so chrome buttons sitting just outside the
-        # bracket don't visually crowd it. Length scales gently with the
-        # smaller image dimension so the brackets stay proportional
-        # across resolutions and zoom levels.
+        # Corner brackets, inset ~50 px from the image edges. The wide
+        # inset leaves room for chrome buttons (close, gear, …) between
+        # the bracket and the actual image corner. Length scales gently
+        # with the smaller image dimension so the brackets stay
+        # proportional across resolutions and zoom levels.
         cr.set_source_rgba(1, 1, 1, 0.85)
         cr.set_line_width(2.0)
         cr.set_line_cap(1)
-        inset = 20.0
+        inset = 50.0
         length = max(12.0, min(rw, rh) * 0.06)
         for cx, cy, dx, dy in (
             (x + inset,       y + inset,       +1, +1),
@@ -828,8 +804,9 @@ class CameraWindow(Adw.Window):
         self._geo_button.connect("toggled", self._on_geo_toggled)
         top_right.append(self._geo_button)
 
-        # Shutter — large red circular button on the handedness side,
-        # vertically centred.
+        # Single capture button. Positioned on the handedness side and
+        # repositioned by _on_orientation_tick: lower-third in portrait,
+        # vertically centred in landscape.
         primary_align = (
             Gtk.Align.START if self._handedness == "left" else Gtk.Align.END
         )
@@ -839,7 +816,6 @@ class CameraWindow(Adw.Window):
         core.add_css_class("shutter-core")
         self._shutter.set_child(core)
         self._shutter.set_halign(primary_align)
-        self._shutter.set_valign(Gtk.Align.CENTER)
         if self._handedness == "left":
             self._shutter.set_margin_start(24)
         else:
@@ -847,30 +823,11 @@ class CameraWindow(Adw.Window):
         self._shutter.set_tooltip_text(self._("Capture"))
         self._shutter.connect("clicked", lambda _b: self._on_shutter())
         overlay.add_overlay(self._shutter)
-
-        # Record — smaller circular button above the shutter on the same
-        # side; positioned slightly toward the centre so it sits over the
-        # edge of the (letterboxed) image area, not flush with the screen
-        # edge like the shutter does.
-        self._record_button = Gtk.Button()
-        self._record_button.add_css_class("record-button")
-        record_core = Gtk.Box()
-        record_core.add_css_class("record-core")
-        self._record_button.set_child(record_core)
-        self._record_button.set_halign(primary_align)
-        self._record_button.set_valign(Gtk.Align.CENTER)
-        # Lift it above the shutter (the shutter is centred; this offset
-        # pushes the record button vertically up by ~110 px) and pull it
-        # 56 px toward the picture so it visually overlaps the image edge.
-        self._record_button.set_margin_bottom(220)
-        if self._handedness == "left":
-            self._record_button.set_margin_start(56)
-        else:
-            self._record_button.set_margin_end(56)
-        self._record_button.set_tooltip_text(self._("Record video"))
-        self._record_button.connect("clicked", lambda _b: self._on_record_clicked())
-        overlay.add_overlay(self._record_button)
-        self._recording = False
+        # Initial valign — overwritten as soon as the orientation tick
+        # fires with a real allocation.
+        self._shutter.set_valign(Gtk.Align.CENTER)
+        self._layout_landscape: bool | None = None
+        self.add_tick_callback(self._on_orientation_tick)
 
         # Camera-switch — only added when more than one capture device exists.
         # Sits in the bottom corner on the *opposite* side of the shutter
@@ -1938,22 +1895,31 @@ class CameraWindow(Adw.Window):
         else:
             self._start_countdown(delay)
 
-    def _on_record_clicked(self) -> None:
-        # Placeholder: full video-recording requires picking an encoder
-        # (droidvenc on Halium HW, x264enc software fallback) and adding
-        # a recording branch to the pipeline. The button + handedness
-        # plumbing is in place here so we can wire the rest in once the
-        # encoder choice is settled. Toggling the .recording CSS class so
-        # the visual still gives feedback.
-        self._recording = not self._recording
-        ctx = self._record_button.get_style_context()
-        if self._recording:
-            ctx.add_class("recording")
-            self._show_toast(self._("Video recording: not yet wired up"))
-            # Keep visual state consistent — the button stays in "stop"
-            # mode until pressed again, so the user can dismiss it.
+    def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
+        # Polls the window dimensions and repositions the shutter button:
+        # vertically centred in landscape, in the lower third in portrait.
+        # Hysteresis prevents flapping near 1:1 aspect ratios.
+        w = self.get_width()
+        h = self.get_height()
+        if w <= 0 or h <= 0:
+            return True  # GLib.SOURCE_CONTINUE
+        if self._layout_landscape:
+            landscape = w > h * 1.05
         else:
-            ctx.remove_class("recording")
+            landscape = w > h * 1.25
+        if landscape == self._layout_landscape:
+            return True
+        self._layout_landscape = landscape
+        if landscape:
+            self._shutter.set_valign(Gtk.Align.CENTER)
+            self._shutter.set_margin_bottom(0)
+        else:
+            # Lower third: vertical centre of the bottom 1/3 of the
+            # window. Button height is ~76 px so we subtract that to
+            # land its centre roughly at h * 5/6.
+            self._shutter.set_valign(Gtk.Align.END)
+            self._shutter.set_margin_bottom(max(48, h // 6))
+        return True
 
     def _refresh_timer_button(self) -> None:
         value = self._timer_choices[self._timer_idx]
