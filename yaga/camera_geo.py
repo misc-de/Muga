@@ -28,6 +28,13 @@ DBUS_PROPS_IFACE = "org.freedesktop.DBus.Properties"
 
 # Locations older than this are considered stale and not used for geotagging.
 LOCATION_TTL_SECONDS = 300
+# Coarsest accuracy (in metres) we still consider "good enough" to
+# embed in EXIF. Anything coarser is dropped — the user expected a fix
+# tighter than this, and writing a city-level coordinate to a photo
+# leaks more location than they asked for. The default lets normal GPS
+# / Wi-Fi triangulation fixes through (typically 5–50 m) but rejects
+# bare cell-tower fallback (often >1 km).
+LOCATION_MAX_ACCURACY_M = 200.0
 
 
 class GeoClient:
@@ -129,13 +136,21 @@ class GeoClient:
         self._client_path = None
 
     def latest(self) -> dict[str, Any] | None:
-        """Return the most recent location dict, or None if missing or
-        older than LOCATION_TTL_SECONDS. Keys: lat, lon, alt, accuracy."""
+        """Return the most recent location dict, or None if missing,
+        older than LOCATION_TTL_SECONDS, or coarser than
+        LOCATION_MAX_ACCURACY_M. Keys: lat, lon, alt, accuracy."""
         loc = self._location
         if loc is None:
             return None
         ts = loc.get("timestamp", 0.0)
         if time.time() - ts > LOCATION_TTL_SECONDS:
+            return None
+        # Drop coarse fixes — GeoClue can fall back to cell-tower
+        # accuracy (often >1 km) when GPS isn't available, and writing
+        # that into EXIF leaks more location than a user enabling
+        # geotagging meant to share.
+        acc = float(loc.get("accuracy") or 0.0)
+        if acc > LOCATION_MAX_ACCURACY_M:
             return None
         return loc
 

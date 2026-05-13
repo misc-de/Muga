@@ -312,9 +312,33 @@ class Settings:
             except OSError:
                 pass
             tmp = self._CRED_FILE.with_suffix(".tmp")
+            # Create the tmp file 0600 BEFORE writing the password.
+            # path.write_text() creates the file with umask-default
+            # permissions (usually 0644) and only chmod-s it after the
+            # write — for that window the password is world-readable on
+            # multi-user systems. os.open with O_CREAT|O_EXCL|0o600
+            # establishes the right mode atomically before any bytes
+            # land.
             try:
-                tmp.write_text(password, encoding="utf-8")
-                tmp.chmod(0o600)
+                fd = os.open(
+                    tmp,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC,
+                    0o600,
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(password)
+                        fh.flush()
+                        try:
+                            os.fsync(fh.fileno())
+                        except OSError:
+                            pass
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                    raise
                 os.replace(tmp, self._CRED_FILE)
             finally:
                 # If os.replace already moved tmp into place this is a

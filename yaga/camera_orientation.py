@@ -32,6 +32,7 @@ should fall back to a window-size heuristic.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import socket as _socket
 import struct
@@ -254,9 +255,16 @@ class _SensordBackend:
         args: Any = None,
         reply_type: Any = None,
     ) -> Any:
+        # 800 ms timeout instead of GLib's 3 s default — sensord
+        # normally replies in <10 ms; a 3 s call_sync on a stalled
+        # daemon blocks the GLib main loop and freezes the camera UI
+        # during window-open. Four of these stack up in start(); a
+        # short timeout caps the worst-case freeze at ~3 s instead of
+        # ~12 s while still leaving plenty of headroom for a healthy
+        # daemon.
         return self._bus.call_sync(
             SENSORD_BUS, path, iface, method, args,
-            reply_type, Gio.DBusCallFlags.NONE, 3000, None,
+            reply_type, Gio.DBusCallFlags.NONE, 800, None,
         )
 
     def _on_socket(self, _fd: int, condition: int) -> bool:
@@ -363,6 +371,11 @@ class _SensordBackend:
         self._stopped = was_stopped
 
     def _process_sample(self, x: float, y: float, _z: float) -> None:
+        if not math.isfinite(x) or not math.isfinite(y):
+            # A NaN axis from a flaky HAL would otherwise poison the
+            # EWMA and (via NaN-vs-positive comparisons in
+            # _classify_orientation) flip the device to BOTTOM_UP.
+            return
         if not self._smoothed_seeded:
             self._smoothed_x = x
             self._smoothed_y = y
@@ -413,7 +426,7 @@ class _IIOSensorProxyBackend:
         try:
             self._proxy.call_sync(
                 "ClaimAccelerometer", None,
-                Gio.DBusCallFlags.NONE, 5000, None,
+                Gio.DBusCallFlags.NONE, 1000, None,
             )
         except GLib.Error as exc:
             LOGGER.debug("ClaimAccelerometer failed: %s", exc.message)
@@ -442,7 +455,7 @@ class _IIOSensorProxyBackend:
         try:
             self._proxy.call_sync(
                 "ReleaseAccelerometer", None,
-                Gio.DBusCallFlags.NONE, 5000, None,
+                Gio.DBusCallFlags.NONE, 1000, None,
             )
         except GLib.Error as exc:
             LOGGER.debug("ReleaseAccelerometer failed: %s", exc.message)

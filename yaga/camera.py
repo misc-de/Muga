@@ -103,6 +103,97 @@ _VIDEO_BITRATE_TO_QUALITY: dict[int, int] = {
 }
 
 
+def _write_exif_app1_inplace(path: Path, exif_tiff: bytes) -> None:
+    """Patch a JPEG's APP1 (EXIF) segment in place — no decode / re-
+    encode of the pixel data. `exif_tiff` is the raw TIFF blob that
+    PIL.Image.Exif().tobytes() returns (no marker, no length, no
+    "Exif\\0\\0" prefix — we add those here).
+
+    JPEG layout we care about::
+
+        SOI            FF D8
+        APPn segs      FF Em LL LL .. payload (LL = big-endian length
+                                     including LL itself but not Em)
+        ...
+        SOS, data, EOI
+
+    We rewrite the file as:
+        SOI + new APP1 (EXIF) + every original segment EXCEPT the
+        existing APP1 segments + the rest of the file from SOS onward.
+
+    Atomic via tmp + os.replace so a crash mid-write doesn't leave a
+    truncated photo on disk.
+    """
+    raw = path.read_bytes()
+    if len(raw) < 4 or raw[0] != 0xFF or raw[1] != 0xD8:
+        # Not a JPEG (or empty) — nothing to patch.
+        return
+    # Build the new APP1 (EXIF) segment.
+    body = b"Exif\x00\x00" + exif_tiff
+    if len(body) > 0xFFFD:
+        # APP1 length field is uint16 and includes itself (2 bytes).
+        # Anything bigger needs the Extended-EXIF spec we don't support.
+        LOGGER.debug("EXIF payload too large (%d bytes); skipping", len(body))
+        return
+    import struct
+    new_app1 = b"\xFF\xE1" + struct.pack(">H", len(body) + 2) + body
+    # Walk the existing segments, skipping any existing APP1.
+    out = bytearray(b"\xFF\xD8")
+    out += new_app1
+    i = 2
+    while i + 1 < len(raw):
+        if raw[i] != 0xFF:
+            # Hit pixel data without seeing SOS — broken JPEG, bail and
+            # write back original bytes (we already inserted APP1 at
+            # the start, which is still a structurally valid file).
+            out += raw[i:]
+            break
+        marker = raw[i + 1]
+        if marker == 0xDA:  # SOS — everything from here is image data
+            out += raw[i:]
+            break
+        if marker in (0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,
+                      0xD8, 0xD9, 0x01):
+            # Standalone markers (no length). RST*, SOI, EOI, TEM.
+            # Append and advance 2.
+            out += raw[i:i + 2]
+            i += 2
+            continue
+        # Length-prefixed segment.
+        if i + 4 > len(raw):
+            break
+        seg_len = (raw[i + 2] << 8) | raw[i + 3]
+        seg_end = i + 2 + seg_len
+        if seg_end > len(raw):
+            break
+        if marker == 0xE1:
+            # Existing APP1 — could be EXIF or XMP. Skip EXIF, keep
+            # XMP (which uses the "http://ns.adobe.com/xap/1.0/\0"
+            # signature, distinguishable from "Exif\0\0").
+            seg = raw[i + 4:seg_end]
+            if seg.startswith(b"Exif\x00\x00"):
+                i = seg_end
+                continue
+        out += raw[i:seg_end]
+        i = seg_end
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(out)
+            fh.flush()
+            try:
+                _os.fsync(fh.fileno())
+            except OSError:
+                pass
+        _os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 def _is_halium_device(device: dict | None) -> bool:
     """True when the active source is gst-droid's droidcamsrc — the
     primary signal for the Halium/Hybris quirks path. Tolerant of None
@@ -393,7 +484,7 @@ class CameraWindow(Adw.Window):
                 css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         overlay.add_overlay(self._flash)
 
         # Tap-to-focus indicator — full-size invisible drawing area that
@@ -733,6 +824,13 @@ class CameraWindow(Adw.Window):
         # mapped (visible on screen). Doing this before "map" would
         # animate against an off-screen widget.
         self.connect("map", lambda _w: self._start_swipe_hint())
+        # Energy gating: when the camera window isn't visible (user
+        # switched apps, screen blanked, etc.), pause the GStreamer
+        # pipeline and stop the orientation + GeoClue subscriptions.
+        # Each is significant battery cost on a phone — 30 Hz video
+        # buffer pool churn especially. Resume on map.
+        self.connect("map", self._on_window_map)
+        self.connect("unmap", self._on_window_unmap)
 
         if not self._devices:
             self._shutter.set_sensitive(False)
@@ -885,7 +983,7 @@ class CameraWindow(Adw.Window):
         try:
             src.set_property("mode", 2)  # 2 = video
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         return src
 
     def _make_gst_device_source(self, device: dict[str, Any]) -> Any:
@@ -927,7 +1025,7 @@ class CameraWindow(Adw.Window):
                 t.name_template for t in source.get_pad_template_list() or []
             ]
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         if "vfsrc" in templates:
             try:
                 pad = source.request_pad_simple("vfsrc")
@@ -1167,11 +1265,16 @@ class CameraWindow(Adw.Window):
         # Tear down any in-flight capture state before disposing the pipeline.
         self._close_valve_and_disconnect()
         self._valve = None
+        # Clearing the busy flag here is the only place that catches
+        # the "user hit camera-switch (or something else that triggers
+        # _stop_pipeline) mid-capture" path — otherwise _busy_capture
+        # stays True forever and the shutter is locked.
+        self._busy_capture = False
         if self._preview_appsink is not None and self._preview_signal_id is not None:
             try:
                 self._preview_appsink.disconnect(self._preview_signal_id)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._preview_signal_id = None
         self._preview_appsink = None
         if (
@@ -1183,28 +1286,28 @@ class CameraWindow(Adw.Window):
                     self._preview_paintable_signal_id
                 )
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._preview_paintable_signal_id = None
         self._preview_paintable = None
         if self._source_probe_pad is not None and self._source_probe_id is not None:
             try:
                 self._source_probe_pad.remove_probe(self._source_probe_id)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._source_probe_pad = None
         self._source_probe_id = None
         if self._sink_probe_pad is not None and self._sink_probe_id is not None:
             try:
                 self._sink_probe_pad.remove_probe(self._sink_probe_id)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._sink_probe_pad = None
         self._sink_probe_id = None
         if self._bus is not None:
             try:
                 self._bus.remove_signal_watch()
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._bus = None
         if self._pipeline is not None:
             try:
@@ -1215,7 +1318,7 @@ class CameraWindow(Adw.Window):
                 # against the same descriptor.
                 self._pipeline.get_state(2 * self._Gst.SECOND)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._pipeline = None
         self._appsink = None
         self._imgsink = None
@@ -1861,15 +1964,6 @@ class CameraWindow(Adw.Window):
         # are swapped compared to the standard "compensate for device
         # orientation" cookbook.
         icon_rotation = _ICON_ROTATION_DEG.get(orientation, 0)
-        # Drop widgets that have been orphaned (popover rebuilds add
-        # fresh _RotatableLabels each time; the old ones lose their
-        # parent but stayed referenced here, causing the list to grow
-        # without bound).
-        self._rotatable_icons = [
-            w for w in self._rotatable_icons if w.get_parent() is not None
-        ]
-        for img in self._rotatable_icons:
-            img.set_rotation_deg(icon_rotation)
         # The Quality popover lays out its sections + button rows
         # differently in portrait vs. landscape (transposed orientation
         # + rotated text labels), so rebuild it whenever orientation
@@ -1883,6 +1977,16 @@ class CameraWindow(Adw.Window):
             self._settings_button.set_popover(self._build_settings_popover())
         except Exception:
             LOGGER.debug("settings popover rebuild failed", exc_info=True)
+        # Drop widgets that have been orphaned. Must run AFTER the
+        # popover rebuilds because set_popover() is what orphans the
+        # _RotatableLabels from the old popover — pruning before
+        # set_popover would leave the just-replaced labels in the list
+        # until the next layout cycle.
+        self._rotatable_icons = [
+            w for w in self._rotatable_icons if w.get_parent() is not None
+        ]
+        for img in self._rotatable_icons:
+            img.set_rotation_deg(icon_rotation)
         # Recording dot follows the orientation too.
         try:
             self._position_record_dot()
@@ -2436,7 +2540,7 @@ class CameraWindow(Adw.Window):
             try:
                 GLib.source_remove(self._settings_persist_source)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._settings_persist_source = GLib.timeout_add(
             _PERSIST_DELAY_MS, self._persist_settings_flush
         )
@@ -2519,7 +2623,7 @@ class CameraWindow(Adw.Window):
         try:
             self._timer_button.set_visible(photo_only)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Zoom (digital, widget-snapshot only)
@@ -2576,7 +2680,7 @@ class CameraWindow(Adw.Window):
                 try:
                     self._geo.stop()
                 except Exception:
-                    pass
+                    LOGGER.debug("camera cleanup/op failed", exc_info=True)
                 self._geo = None
         return False
 
@@ -2599,7 +2703,7 @@ class CameraWindow(Adw.Window):
             try:
                 client.stop()
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         return False
 
     # ------------------------------------------------------------------
@@ -2693,34 +2797,31 @@ class CameraWindow(Adw.Window):
         thread_name: str,
         extra_guard: Callable[[], bool] | None = None,
     ) -> None:
-        """Emit gst-droid's `start-capture` signal from a worker thread
-        with the full GST-PR#39 workaround:
+        """Emit gst-droid's `start-capture` signal after `delay_ms`,
+        on the GLib main loop.
 
-          - Wait `delay_ms` first so the HAL finishes its Photography
-            reconfigure before the emit lands (otherwise the buffer
-            pool asserts).
-          - Run on a daemon thread so the call doesn't compete with
-            the GLib main loop (the source thread of preview-frame
-            pulls — same-thread emit deadlocks droid_media_camera_*).
-          - Pin pipeline + src refs at thread start. If `_stop_pipeline`
-            tore down state in the scheduling window, the captured
-            refs are None and we bail instead of asserting on a stale
-            element.
-          - Verify pipeline state is PAUSED|PLAYING before emit so we
-            don't poke a NULL/READY pipeline.
+        Earlier versions ran the emit on a worker thread to avoid
+        droid_media_camera_take_picture deadlocking against the
+        preview-frame-pull thread. That deadlock is specifically about
+        the GStreamer *streaming* thread (where appsink new-sample
+        callbacks originate), not the GLib main loop — so a main-loop
+        emit is safe AND it serialises with `_stop_pipeline` /
+        `_image_teardown` automatically (single-threaded by virtue of
+        the GLib loop). The previous threaded version had a window
+        between get_state() and emit() in which teardown could drop
+        refs, leaving us emitting against an unparented element.
 
-        `extra_guard` runs after the pipeline check — used by the
-        photo path to also gate on `self._busy_capture`.
-        """
-        import threading
+        We keep the `thread_name` arg for call-site compatibility; it
+        is unused now."""
+        del thread_name  # kept for backwards-compat with callers
         gst = self._Gst
 
-        def _emit() -> None:
+        def _emit() -> bool:
             pipeline = get_pipeline()
             if pipeline is None:
-                return
+                return False
             if extra_guard is not None and not extra_guard():
-                return
+                return False
             try:
                 _, state, _ = pipeline.get_state(0)
                 if state not in (gst.State.PAUSED, gst.State.PLAYING):
@@ -2728,30 +2829,24 @@ class CameraWindow(Adw.Window):
                         f"[yaga.camera] {log_prefix}: skip start-capture, "
                         f"pipeline in {state}"
                     )
-                    return
+                    return False
             except Exception:
-                return
+                return False
             src = get_src(pipeline)
             if src is None:
-                return
+                return False
             try:
                 src.emit("start-capture")
                 _dlog(
-                    f"[yaga.camera] {log_prefix}: start-capture emitted "
-                    f"(worker thread)"
+                    f"[yaga.camera] {log_prefix}: start-capture emitted"
                 )
             except Exception as exc:
                 _dlog(
                     f"[yaga.camera] {log_prefix}: start-capture failed: {exc}"
                 )
-
-        def _schedule() -> bool:
-            threading.Thread(
-                target=_emit, name=thread_name, daemon=True,
-            ).start()
             return False
 
-        GLib.timeout_add(delay_ms, _schedule)
+        GLib.timeout_add(delay_ms, _emit)
 
     def _capture(self) -> None:
         if self._busy_capture:
@@ -2808,10 +2903,22 @@ class CameraWindow(Adw.Window):
                 self._capture_min_width = 0
                 _dlog(f"[yaga.camera] capture: caps swap failed: {exc}")
 
-        self._capture_signal_id = sink.connect(
-            "new-sample", self._on_capture_sample
-        )
-        self._capture_signal_sink = sink
+        # connect + emit + timeout setup wrapped so a mid-setup failure
+        # (e.g. OOM during GLib.timeout_add_seconds) doesn't leak the
+        # signal handler — a second _capture() would then connect again
+        # and produce duplicate saves.
+        try:
+            self._capture_signal_id = sink.connect(
+                "new-sample", self._on_capture_sample
+            )
+            self._capture_signal_sink = sink
+        except Exception:
+            LOGGER.debug("capture: sink connect failed", exc_info=True)
+            self._capture_signal_id = None
+            self._capture_signal_sink = None
+            self._busy_capture = False
+            self._shutter.set_sensitive(True)
+            return
 
         if sink is self._imgsink:
             # Trigger the HAL still-capture. There are two issues we
@@ -2841,10 +2948,18 @@ class CameraWindow(Adw.Window):
 
         # Safety timeout — generous because the HAL may take a moment
         # to capture (AF, exposure, encode) at full resolution, and the
-        # caps-swap path also has to wait for HAL reconfigure.
-        self._capture_timeout_id = GLib.timeout_add_seconds(
-            15, self._on_capture_timeout
-        )
+        # caps-swap path also has to wait for HAL reconfigure. Wrapped
+        # so a failure here also disconnects the signal handler above
+        # rather than leaving it dangling.
+        try:
+            self._capture_timeout_id = GLib.timeout_add_seconds(
+                15, self._on_capture_timeout
+            )
+        except Exception:
+            LOGGER.debug("capture: timeout setup failed", exc_info=True)
+            self._close_valve_and_disconnect()
+            self._busy_capture = False
+            self._shutter.set_sensitive(True)
 
     def _close_valve_and_disconnect(self) -> None:
         if self._valve is not None:
@@ -2856,7 +2971,7 @@ class CameraWindow(Adw.Window):
             try:
                 self._capture_signal_sink.disconnect(self._capture_signal_id)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._capture_signal_id = None
         self._capture_signal_sink = None
         if self._capture_timeout_id is not None:
@@ -2868,7 +2983,7 @@ class CameraWindow(Adw.Window):
                 self._capsfilter.set_property("caps", self._capture_saved_caps)
                 _dlog("[yaga.camera] capture: restored 720p preview cap")
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         self._capture_saved_caps = None
         self._capture_min_width = 0
 
@@ -2909,7 +3024,7 @@ class CameraWindow(Adw.Window):
             try:
                 sig_sink.disconnect(sig_id)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
         _dlog("[yaga.camera] capture: new-sample accepted")
         GLib.idle_add(self._finish_capture, sample)
         return gst.FlowReturn.OK
@@ -2996,7 +3111,7 @@ class CameraWindow(Adw.Window):
             try:
                 GLib.source_remove(self._record_dot_blink_id)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._record_dot_blink_id = None
         self._record_dot.set_visible(False)
         self._record_dot.set_opacity(1.0)
@@ -3182,11 +3297,11 @@ class CameraWindow(Adw.Window):
         try:
             src.set_property("camera-device", cam_id)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         try:
             src.set_property("mode", 1)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         pipeline.add(src)
 
         # vfsrc → fakesink. droidcamsrc's HAL setup expects a live
@@ -3287,7 +3402,7 @@ class CameraWindow(Adw.Window):
         try:
             sink.disconnect(sid)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
 
         caps = sample.get_caps()
         s = caps.get_structure(0) if caps is not None and caps.get_size() > 0 else None
@@ -3304,6 +3419,12 @@ class CameraWindow(Adw.Window):
             GLib.source_remove(self._image_timeout_id)
             self._image_timeout_id = None
         self._image_teardown()
+        # Kick the preview-restart idle FIRST so the heavy pipeline
+        # rebuild (mode=2, HAL reconfigure, gtk4paintablesink wiring)
+        # can run in parallel with the JPEG write + EXIF below. Both
+        # cost ~hundreds of ms on Halium; serialising them doubles
+        # the perceived snap-to-preview latency.
+        GLib.idle_add(self._start_pipeline)
         if sample is not None:
             _dlog("[yaga.camera] image-capture: writing sample")
             self._write_sample(sample)
@@ -3313,8 +3434,6 @@ class CameraWindow(Adw.Window):
         self._show_capture_spinner(False)
         self._busy_capture = False
         self._shutter.set_sensitive(True)
-        # Restart the preview pipeline.
-        GLib.idle_add(self._start_pipeline)
         return False
 
     def _on_image_capture_timeout(self) -> bool:
@@ -3354,14 +3473,14 @@ class CameraWindow(Adw.Window):
             try:
                 self._image_bus.remove_signal_watch()
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._image_bus = None
         if self._image_pipeline is not None:
             try:
                 self._image_pipeline.set_state(self._Gst.State.NULL)
                 self._image_pipeline.get_state(2 * self._Gst.SECOND)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._image_pipeline = None
         self._image_src = None
         self._image_signal_id = None
@@ -3379,7 +3498,7 @@ class CameraWindow(Adw.Window):
             if err is not None and err.message:
                 reason = err.message
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         if self._image_pipeline is None:
             return
         GLib.idle_add(self._image_capture_failed, reason)
@@ -3395,11 +3514,31 @@ class CameraWindow(Adw.Window):
         # FuriOS-camera pattern that side-steps gst-droid's "Cannot
         # record video in raw mode" entirely (no vidsrc, no
         # start-capture). Matroska accepts MJPEG natively.
+        #
+        # Reserve the name via O_CREAT|O_EXCL placeholder, then close
+        # immediately — filesink reopens-truncates by path. This closes
+        # most of the TOCTOU window vs `path.exists()` followed by
+        # filesink open; a symlink swap between placeholder-close and
+        # filesink-open is still possible on world-writable dirs, but
+        # the practical surface is now small.
         path = self._video_dir / f"{stamp}.mkv"
         i = 1
-        while path.exists():
-            path = self._video_dir / f"{stamp}_{i}.mkv"
-            i += 1
+        for _attempt in range(1000):
+            try:
+                fd = _os.open(
+                    path,
+                    _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL,
+                    0o644,
+                )
+                _os.close(fd)
+                return path
+            except FileExistsError:
+                path = self._video_dir / f"{stamp}_{i}.mkv"
+                i += 1
+            except OSError:
+                # Permission / disk error — fall through to the caller,
+                # which will see filesink fail and surface a toast.
+                return path
         return path
 
     def _start_video_recording(self) -> None:
@@ -3409,7 +3548,11 @@ class CameraWindow(Adw.Window):
                 "Video recording: only supported on Halium devices for now"
             ))
             return
-        if self._recording:
+        if self._recording or self._busy_capture:
+            # _recording is set inside _video_pipeline_build (~100 ms
+            # idle-deferred from here); _busy_capture catches the
+            # in-flight window between this method's entry and the
+            # pipeline actually coming up.
             return
         self._busy_capture = True
         self._shutter.set_sensitive(False)
@@ -3450,7 +3593,7 @@ class CameraWindow(Adw.Window):
             src.set_property("camera-device", cam_id)
             src.set_property("mode", 2)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         pipeline.add(src)
 
         # Upstream videoconvert + tee — fan out vfsrc to the preview
@@ -3482,7 +3625,7 @@ class CameraWindow(Adw.Window):
         try:
             prev_sink.set_property("sync", False)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         prev_queue.set_property("leaky", 2)
         prev_queue.set_property("max-size-buffers", 2)
         pipeline.add(prev_queue); pipeline.add(prev_convert); pipeline.add(prev_sink)
@@ -3514,7 +3657,7 @@ class CameraWindow(Adw.Window):
         try:
             jpegenc.set_property("quality", jpeg_q)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         filesink.set_property("location", str(path))
         filesink.set_property("sync", False)
         filesink.set_property("async", False)
@@ -3542,7 +3685,7 @@ class CameraWindow(Adw.Window):
             if paintable is not None:
                 self._picture.set_paintable(paintable)
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
 
         result = pipeline.set_state(gst.State.PLAYING)
         _dlog(f"[yaga.camera] video-record: pipeline PLAYING -> "
@@ -3562,6 +3705,10 @@ class CameraWindow(Adw.Window):
     def _stop_video_recording(self) -> None:
         if not self._recording or self._video_pipeline is None:
             return
+        if self._video_finalize_source is not None:
+            # EOS already sent, finalize timeout armed — second tap is a
+            # no-op until _video_finalize runs.
+            return
         _dlog("[yaga.camera] video-record: stop requested")
         self._shutter.set_sensitive(False)
         self._show_capture_spinner(True)
@@ -3571,7 +3718,7 @@ class CameraWindow(Adw.Window):
         try:
             self._video_pipeline.send_event(self._Gst.Event.new_eos())
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
         # Belt-and-braces timeout in case EOS doesn't land. Track the
         # source id so EOS arrival can cancel it — otherwise a second
         # recording started within 5 s would have the old timeout fire
@@ -3590,7 +3737,7 @@ class CameraWindow(Adw.Window):
             try:
                 GLib.source_remove(self._video_finalize_source)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._video_finalize_source = None
 
     def _video_finalize_timeout(self) -> bool:
@@ -3645,14 +3792,14 @@ class CameraWindow(Adw.Window):
             try:
                 self._video_bus.remove_signal_watch()
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._video_bus = None
         if self._video_pipeline is not None:
             try:
                 self._video_pipeline.set_state(self._Gst.State.NULL)
                 self._video_pipeline.get_state(2 * self._Gst.SECOND)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._video_pipeline = None
         self._video_src = None
         self._video_path = None
@@ -3663,7 +3810,7 @@ class CameraWindow(Adw.Window):
             _dlog(f"[yaga.camera] video-record bus error: "
                 f"{err.message if err else '?'} | {(dbg or '').strip()}")
         except Exception:
-            pass
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
 
     def _write_sample(self, sample: Any) -> None:
         buf = sample.get_buffer() if sample is not None else None
@@ -3714,13 +3861,35 @@ class CameraWindow(Adw.Window):
             self._show_toast(self._("Failed to save: %s") % exc)
             return
         stamp = time.strftime("%Y%m%d_%H%M%S")
+        # O_CREAT|O_EXCL atomically creates a new file or fails. Combined
+        # with a per-i bump on EEXIST, this closes the TOCTOU window
+        # between `path.exists()` and `path.write_bytes()` — on a shared
+        # save-dir, another local user could otherwise win the race and
+        # have us write into their symlink target.
         path = self._save_dir / f"{stamp}.jpg"
         i = 1
-        while path.exists():
-            path = self._save_dir / f"{stamp}_{i}.jpg"
-            i += 1
+        fd = -1
+        for _attempt in range(1000):
+            try:
+                fd = _os.open(
+                    path,
+                    _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL,
+                    0o644,
+                )
+                break
+            except FileExistsError:
+                path = self._save_dir / f"{stamp}_{i}.jpg"
+                i += 1
+            except OSError as exc:
+                _dlog(f"[yaga.camera] capture: open {path} failed: {exc}")
+                self._show_toast(self._("Failed to save: %s") % exc)
+                return
+        if fd < 0:
+            self._show_toast(self._("Failed to save: too many collisions"))
+            return
         try:
-            path.write_bytes(data)
+            with _os.fdopen(fd, "wb") as fh:
+                fh.write(data)
         except OSError as exc:
             _dlog(f"[yaga.camera] capture: write {path} failed: {exc}")
             self._show_toast(self._("Failed to save: %s") % exc)
@@ -3803,15 +3972,20 @@ class CameraWindow(Adw.Window):
     def _write_exif_pillow(self, path: Path) -> None:
         """Pillow-based EXIF writer used when GExiv2 isn't installed.
         Covers Make/Model/Software/DateTime/Orientation, plus GPS when
-        the user has the geo toggle on and there's a fresh fix."""
+        the user has the geo toggle on and there's a fresh fix.
+
+        Builds the EXIF blob via PIL.Image.Exif() (which doesn't
+        require opening the source JPEG) and patches the file's APP1
+        segment in place. Avoids the decode-then-re-encode cycle of
+        Image.save("JPEG", quality=...), which lost ~5-10 quality
+        points per save and stalled the UI 200-600 ms on a phone."""
         try:
-            from PIL import Image
+            from PIL.Image import Exif
         except ImportError:
             return
         basics = self._current_exif_basics()
         try:
-            img = Image.open(str(path))
-            exif = img.getexif()
+            exif = Exif()
             # 0th IFD (image-level metadata).
             exif[0x010F] = basics["make"]           # Make
             if basics["model"]:
@@ -3829,12 +4003,7 @@ class CameraWindow(Adw.Window):
                 if loc is not None:
                     gps = exif.get_ifd(0x8825)
                     self._pillow_set_gps(gps, loc)
-            data = img.tobytes  # touch attr to ensure Pillow has decoded
-            img.save(
-                str(path), "JPEG",
-                exif=exif.tobytes(),
-                quality=max(0, min(100, self._jpeg_quality)),
-            )
+            _write_exif_app1_inplace(path, exif.tobytes())
         except Exception:
             LOGGER.debug("Could not write EXIF (Pillow) for %s", path, exc_info=True)
 
@@ -3922,6 +4091,50 @@ class CameraWindow(Adw.Window):
         self._toast_timer = None
         return False
 
+    def _on_window_unmap(self, _win: Any) -> None:
+        # Pipeline → PAUSED stops buffer-pool churn (the biggest single
+        # battery cost while the window is hidden). We keep state alive
+        # so re-mapping doesn't pay the full PIPELINE_STARTUP_MS again.
+        if self._pipeline is not None:
+            try:
+                self._pipeline.set_state(self._Gst.State.PAUSED)
+            except Exception:
+                LOGGER.debug("pipeline pause on unmap failed", exc_info=True)
+        # Orientation: the sensord 10 Hz stream and D-Bus subscription
+        # serve no purpose while we aren't drawing.
+        if self._orientation is not None:
+            try:
+                self._orientation.stop()
+            except Exception:
+                LOGGER.debug("orientation stop on unmap failed", exc_info=True)
+        # GeoClue: stop the location subscription. Resume on map only
+        # when the user-intent flag is still set.
+        if self._geo is not None:
+            try:
+                self._geo.stop()
+            except Exception:
+                LOGGER.debug("geo stop on unmap failed", exc_info=True)
+            self._geo = None
+
+    def _on_window_map(self, _win: Any) -> None:
+        # Counterpart to _on_window_unmap. Wakes the pipeline + sensors
+        # back up. First-map skipped because the constructor already
+        # spun everything up.
+        if self._pipeline is not None:
+            try:
+                _, state, _ = self._pipeline.get_state(0)
+                if state == self._Gst.State.PAUSED:
+                    self._pipeline.set_state(self._Gst.State.PLAYING)
+            except Exception:
+                LOGGER.debug("pipeline resume on map failed", exc_info=True)
+        if self._orientation is not None:
+            try:
+                self._orientation.start(on_change=self._on_orientation_changed)
+            except Exception:
+                LOGGER.debug("orientation restart on map failed", exc_info=True)
+        if self._geo_enabled and self._geo is None:
+            self._try_start_geo_silent()
+
     def _on_close(self, _win: Any) -> bool:
         # Tear down ALL pipelines: the main preview AND any transient
         # capture/record pipeline that might still be running. Without
@@ -3948,7 +4161,7 @@ class CameraWindow(Adw.Window):
                 try:
                     GLib.source_remove(src_id)
                 except Exception:
-                    pass
+                    LOGGER.debug("camera cleanup/op failed", exc_info=True)
                 setattr(self, src_attr, None)
         # Flush any pending debounced settings write so values touched
         # within _PERSIST_DELAY_MS of close still make it to disk.
@@ -3956,19 +4169,19 @@ class CameraWindow(Adw.Window):
             try:
                 GLib.source_remove(self._settings_persist_source)
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._settings_persist_source = None
             self._persist_settings_flush()
         if self._geo is not None:
             try:
                 self._geo.stop()
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._geo = None
         if self._orientation is not None:
             try:
                 self._orientation.stop()
             except Exception:
-                pass
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._orientation = None
         return False
