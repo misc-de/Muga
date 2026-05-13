@@ -57,19 +57,24 @@ _CSS = b"""
     text-shadow: 0 0 24px rgba(0,0,0,0.7);
     font-feature-settings: "tnum";
 }
-/* All icon buttons in the options bar share this style, regardless of
- * underlying widget type (Button, ToggleButton, MenuButton). Pure
- * transparent background in every state - feedback comes from icon
- * color/opacity changes only, so we never get the "some pills, some
- * not" mismatch that Adwaita's default per-widget-class styling gives.
- */
+/* Icon-bar buttons. Adwaita gives each widget class (Button vs
+ * ToggleButton vs MenuButton) its own default pill/background, so we
+ * have to zero those out explicitly, including the inner-button child
+ * MenuButton wraps around its content. */
 .camera-iconbtn,
 .camera-iconbtn:hover,
 .camera-iconbtn:active,
 .camera-iconbtn:checked,
 .camera-iconbtn:focus,
 .camera-iconbtn:focus-visible,
-.camera-iconbtn:disabled {
+.camera-iconbtn:disabled,
+.camera-iconbtn > button,
+.camera-iconbtn > button:hover,
+.camera-iconbtn > button:active,
+.camera-iconbtn > button:checked,
+.camera-iconbtn > button:focus,
+.camera-iconbtn > button:focus-visible,
+.camera-iconbtn > button:disabled {
     background: none;
     background-image: none;
     background-color: transparent;
@@ -77,7 +82,6 @@ _CSS = b"""
     border-radius: 0;
     box-shadow: none;
     outline: none;
-    -gtk-outline-radius: 0;
     padding: 0;
     margin: 0;
 }
@@ -87,9 +91,9 @@ _CSS = b"""
     color: #fff;
     transition: none;
 }
-.camera-iconbtn > image { -gtk-icon-size: 26px; }
-/* Feedback states use only opacity + color (no fills) so the row stays
- * visually consistent - no rectangle here, pill there. */
+.camera-iconbtn > image,
+.camera-iconbtn > button > image { -gtk-icon-size: 26px; }
+/* Feedback via opacity / icon-color only so the row stays uniform. */
 .camera-iconbtn:hover    { opacity: 0.85; }
 .camera-iconbtn:active   { opacity: 0.60; }
 .camera-iconbtn:checked  { color: #fbb03b; }
@@ -541,9 +545,11 @@ class _ImageChrome(Gtk.DrawingArea):
         intr_w = paintable.get_intrinsic_width() if paintable is not None else 0
         intr_h = paintable.get_intrinsic_height() if paintable is not None else 0
         if intr_w <= 0 or intr_h <= 0:
-            # No frame yet — fall back to widget bounds so the brackets
-            # at least show up while the pipeline is still negotiating.
-            return (0.0, 0.0, float(w), float(h))
+            # No frame yet — return zero rect so the chrome draw skips
+            # painting brackets. Avoids the visible "jump" from full-
+            # widget bounds at startup to the real image rect once the
+            # first preview frame arrives.
+            return (0.0, 0.0, 0.0, 0.0)
         scale = min(w / intr_w, h / intr_h)
         img_w = intr_w * scale
         img_h = intr_h * scale
@@ -1154,6 +1160,12 @@ class CameraWindow(Adw.Window):
         # polling get_width/get_height never sees the transition. The
         # sensor signals it cleanly. If the sensor isn't available the
         # tick callback fills in.
+        # Pre-apply the portrait-normal layout BEFORE the window is
+        # shown, so the shutter/options-bar don't snap into place on
+        # the first sensor callback (which fires asynchronously a few
+        # hundred ms after window-show).
+        self._apply_layout_for(ORIENT_NORMAL)
+
         self._orientation = OrientationClient()
         if not self._orientation.start(self._on_orientation_changed):
             self._orientation = None
@@ -3656,10 +3668,14 @@ class CameraWindow(Adw.Window):
     def _build_video_path(self) -> Path:
         self._video_dir.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        path = self._video_dir / f"{stamp}.mp4"
+        # .mkv (Matroska) because we record MJPEG-in-Matroska — the
+        # FuriOS-camera pattern that side-steps gst-droid's "Cannot
+        # record video in raw mode" entirely (no vidsrc, no
+        # start-capture). Matroska accepts MJPEG natively.
+        path = self._video_dir / f"{stamp}.mkv"
         i = 1
         while path.exists():
-            path = self._video_dir / f"{stamp}_{i}.mp4"
+            path = self._video_dir / f"{stamp}_{i}.mkv"
             i += 1
         return path
 
@@ -3695,6 +3711,19 @@ class CameraWindow(Adw.Window):
         import sys
         gst = self._Gst
 
+        # FuriOS-camera pattern: tee from vfsrc (NOT vidsrc) and record
+        # MJPEG inside a Matroska container. This sidesteps gst-droid's
+        # "Cannot record video in raw mode" error entirely because we
+        # never touch vidsrc and never need start-capture. The recording
+        # branch is just gst-pipeline elements that run for as long as
+        # the pipeline is PLAYING; EOS finalises the MKV moov on stop.
+        #
+        # Pipeline:
+        #   droidcamsrc(mode=2)
+        #     ! tee name=t
+        #     t. ! queue ! videoconvert ! gtk4paintablesink   (preview)
+        #     t. ! queue ! videoconvert ! jpegenc ! mux.
+        #     matroskamux name=mux ! filesink location=...
         pipeline = gst.Pipeline.new("yaga-video-record")
         src = gst.ElementFactory.make("droidcamsrc", "src")
         if src is None:
@@ -3706,20 +3735,13 @@ class CameraWindow(Adw.Window):
             pass
         pipeline.add(src)
 
-        # vfsrc → queue → videoconvert → gtk4paintablesink: keep the
-        # user's preview live while recording so they can frame.
-        vf_queue = gst.ElementFactory.make("queue", "vf_queue")
-        vf_convert = gst.ElementFactory.make("videoconvert", "vf_convert")
-        vf_sink = gst.ElementFactory.make("gtk4paintablesink", "preview")
-        if None in (vf_queue, vf_convert, vf_sink):
-            return self._video_recording_failed("preview elements unavailable")
-        try:
-            vf_sink.set_property("sync", False)
-        except Exception:
-            pass
-        vf_queue.set_property("leaky", 2)
-        vf_queue.set_property("max-size-buffers", 2)
-        pipeline.add(vf_queue); pipeline.add(vf_convert); pipeline.add(vf_sink)
+        # Upstream videoconvert + tee — fan out vfsrc to the preview
+        # and recording branches.
+        up_convert = gst.ElementFactory.make("videoconvert", "up_convert")
+        tee = gst.ElementFactory.make("tee", "t")
+        if None in (up_convert, tee):
+            return self._video_recording_failed("videoconvert/tee unavailable")
+        pipeline.add(up_convert); pipeline.add(tee)
         vf_pad = src.get_static_pad("vfsrc")
         if vf_pad is None:
             try:
@@ -3728,81 +3750,66 @@ class CameraWindow(Adw.Window):
                 vf_pad = None
         if vf_pad is None:
             return self._video_recording_failed("vfsrc pad unavailable")
-        if vf_pad.link(vf_queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
-            return self._video_recording_failed("vfsrc -> queue link failed")
-        vf_queue.link(vf_convert)
-        vf_convert.link(vf_sink)
+        if vf_pad.link(up_convert.get_static_pad("sink")) != gst.PadLinkReturn.OK:
+            return self._video_recording_failed("vfsrc -> videoconvert link failed")
+        if not up_convert.link(tee):
+            return self._video_recording_failed("videoconvert -> tee link failed")
 
-        # vidsrc → queue → videoconvert → encoder → h264parse → mp4mux
-        # → filesink. The "cannot record video in raw mode" error we
-        # saw earlier confirms vidsrc on this HAL emits raw video, so
-        # we need a software h264 encoder inline. Prefer gst-droid's
-        # hardware droidvenc when it's installed; fall back to x264enc.
-        # The bitrate comes from the user-picked Video-quality preset.
-        path = self._build_video_path()
-        self._video_path = path
-        vid_queue = gst.ElementFactory.make("queue", "vid_queue")
-        vid_convert = gst.ElementFactory.make("videoconvert", "vid_convert")
-        encoder = gst.ElementFactory.make("droidvenc", "h264enc")
-        encoder_kind = "droidvenc"
-        if encoder is None:
-            encoder = gst.ElementFactory.make("x264enc", "h264enc")
-            encoder_kind = "x264enc"
-        h264parse = gst.ElementFactory.make("h264parse", "h264parse")
-        mp4mux = gst.ElementFactory.make("mp4mux", "mux")
-        filesink = gst.ElementFactory.make("filesink", "filesink")
-        if None in (vid_queue, vid_convert, encoder, h264parse, mp4mux, filesink):
-            return self._video_recording_failed(
-                "video-record elements unavailable (need an h264 encoder + mp4mux)"
-            )
-        vid_queue.set_property("max-size-buffers", 0)
-        vid_queue.set_property("max-size-time", 0)
-        vid_queue.set_property("max-size-bytes", 0)
-        # Encoder tuning. x264enc supports `bitrate` (kbps) and
-        # `tune=zerolatency` for live capture; droidvenc has the same
-        # bitrate property.
+        # Preview branch: tee -> queue -> videoconvert -> sink.
+        prev_queue = gst.ElementFactory.make("queue", "prev_queue")
+        prev_convert = gst.ElementFactory.make("videoconvert", "prev_convert")
+        prev_sink = gst.ElementFactory.make("gtk4paintablesink", "preview")
+        if None in (prev_queue, prev_convert, prev_sink):
+            return self._video_recording_failed("preview elements unavailable")
         try:
-            encoder.set_property("bitrate", int(self._video_bitrate_kbps))
+            prev_sink.set_property("sync", False)
         except Exception:
             pass
-        if encoder_kind == "x264enc":
-            try:
-                encoder.set_property("tune", "zerolatency")
-                encoder.set_property("speed-preset", "ultrafast")
-            except Exception:
-                pass
+        prev_queue.set_property("leaky", 2)
+        prev_queue.set_property("max-size-buffers", 2)
+        pipeline.add(prev_queue); pipeline.add(prev_convert); pipeline.add(prev_sink)
+        if not tee.link(prev_queue):
+            return self._video_recording_failed("tee -> prev_queue link failed")
+        prev_queue.link(prev_convert)
+        prev_convert.link(prev_sink)
+
+        # Recording branch: tee -> queue -> videoconvert -> jpegenc -> mux.
+        # jpegenc quality is the user's Video-quality preset mapped from
+        # kbps (rough but better than nothing): 2000 -> 70, 4000 -> 85,
+        # 8000 -> 92, 16000 -> 98. Clamps to [60, 98].
+        path = self._build_video_path()
+        self._video_path = path
+        kbps = max(2000, min(16000, int(self._video_bitrate_kbps)))
+        jpeg_q = {2000: 70, 4000: 85, 8000: 92, 16000: 98}.get(kbps, 85)
+        rec_queue = gst.ElementFactory.make("queue", "rec_queue")
+        rec_convert = gst.ElementFactory.make("videoconvert", "rec_convert")
+        jpegenc = gst.ElementFactory.make("jpegenc", "rec_jpegenc")
+        mkvmux = gst.ElementFactory.make("matroskamux", "mux")
+        filesink = gst.ElementFactory.make("filesink", "filesink")
+        if None in (rec_queue, rec_convert, jpegenc, mkvmux, filesink):
+            return self._video_recording_failed(
+                "video-record elements unavailable "
+                "(need jpegenc + matroskamux + filesink)"
+            )
+        rec_queue.set_property("leaky", 2)
+        rec_queue.set_property("max-size-buffers", 4)
+        try:
+            jpegenc.set_property("quality", jpeg_q)
+        except Exception:
+            pass
         filesink.set_property("location", str(path))
         filesink.set_property("sync", False)
-        pipeline.add(vid_queue); pipeline.add(vid_convert)
-        pipeline.add(encoder); pipeline.add(h264parse)
-        pipeline.add(mp4mux); pipeline.add(filesink)
-        vid_pad = src.get_static_pad("vidsrc")
-        if vid_pad is None:
-            try:
-                vid_pad = src.request_pad_simple("vidsrc")
-            except Exception:
-                vid_pad = None
-        if vid_pad is None:
-            pipeline.set_state(gst.State.NULL)
-            return self._video_recording_failed("vidsrc pad unavailable")
-        if vid_pad.link(vid_queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
-            pipeline.set_state(gst.State.NULL)
-            return self._video_recording_failed("vidsrc -> queue link failed")
-        if not vid_queue.link(vid_convert):
-            return self._video_recording_failed("queue -> videoconvert link failed")
-        if not vid_convert.link(encoder):
-            return self._video_recording_failed(
-                f"videoconvert -> {encoder_kind} link failed (caps?)"
-            )
-        if not encoder.link(h264parse):
-            return self._video_recording_failed(
-                f"{encoder_kind} -> h264parse link failed"
-            )
-        h264parse.link(mp4mux)
-        mp4mux.link(filesink)
+        filesink.set_property("async", False)
+        pipeline.add(rec_queue); pipeline.add(rec_convert)
+        pipeline.add(jpegenc); pipeline.add(mkvmux); pipeline.add(filesink)
+        if not tee.link(rec_queue):
+            return self._video_recording_failed("tee -> rec_queue link failed")
+        rec_queue.link(rec_convert)
+        rec_convert.link(jpegenc)
+        jpegenc.link(mkvmux)
+        mkvmux.link(filesink)
         print(
-            f"[yaga.camera] video-record: using {encoder_kind} "
-            f"@ {self._video_bitrate_kbps} kbps",
+            f"[yaga.camera] video-record: MJPEG-in-Matroska, jpeg quality={jpeg_q}",
             file=sys.stderr, flush=True,
         )
 
@@ -3816,7 +3823,7 @@ class CameraWindow(Adw.Window):
 
         # Hook the new gtk4paintablesink into the picture widget.
         try:
-            paintable = vf_sink.get_property("paintable")
+            paintable = prev_sink.get_property("paintable")
             if paintable is not None:
                 self._picture.set_paintable(paintable)
         except Exception:
@@ -3829,29 +3836,8 @@ class CameraWindow(Adw.Window):
             file=sys.stderr, flush=True,
         )
 
-        # Emit start-capture on a worker thread (same gst-droid PR#39
-        # deadlock dance as image capture).
-        def _emit_start():
-            try:
-                self._video_src.emit("start-capture")
-                print(
-                    "[yaga.camera] video-record: start-capture emitted",
-                    file=sys.stderr, flush=True,
-                )
-            except Exception as exc:
-                print(
-                    f"[yaga.camera] video-record: start-capture failed: {exc}",
-                    file=sys.stderr, flush=True,
-                )
-        def _schedule_start() -> bool:
-            import threading
-            threading.Thread(
-                target=_emit_start, name="yaga-vid-start", daemon=True,
-            ).start()
-            return False
-        GLib.timeout_add(500, _schedule_start)
-
-        # Mark recording state + UI feedback.
+        # No start-capture needed — pipeline is recording the moment
+        # it reaches PLAYING because the recording branch is inline.
         self._recording = True
         self._show_capture_spinner(False)
         self._busy_capture = False
@@ -3870,21 +3856,14 @@ class CameraWindow(Adw.Window):
         )
         self._shutter.set_sensitive(False)
         self._show_capture_spinner(True)
-        # 1. Tell the HAL we're done recording.
-        try:
-            self._video_src.emit("stop-capture")
-        except Exception as exc:
-            print(
-                f"[yaga.camera] video-record: stop-capture failed: {exc}",
-                file=sys.stderr, flush=True,
-            )
-        # 2. Send EOS so mp4mux finalises the file (writes the moov atom).
+        # Send EOS so matroskamux finalises the file (writes seek-
+        # cues + closing tags). No stop-capture call: we never used
+        # vidsrc/start-capture in the FuriOS pattern.
         try:
             self._video_pipeline.send_event(self._Gst.Event.new_eos())
         except Exception:
             pass
-        # 3. Bus EOS handler will tear down + restart preview.
-        # Belt-and-braces timeout in case EOS never lands.
+        # Belt-and-braces timeout in case EOS doesn't land.
         GLib.timeout_add_seconds(5, self._video_finalize_timeout)
 
     def _on_video_pipeline_eos(self, _bus: Any, _msg: Any) -> None:
