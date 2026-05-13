@@ -83,9 +83,24 @@ class GeoClient:
                 None,
             )
             self._set_property("DesktopId", GLib.Variant("s", self.app_id))
+            # Sensor-Suite uses level 8 (GPS-class precision per newer
+            # GeoClue versions; older versions clamp to 5 = EXACT, which
+            # is also the highest they expose). DistanceThreshold=0 and
+            # TimeThreshold=1 push GeoClue to emit updates as often as
+            # the upstream provider can, so a fresh location is available
+            # within a second of the geotag toggle being enabled.
             self._set_property(
-                "RequestedAccuracyLevel", GLib.Variant("u", max(0, min(5, accuracy)))
+                "RequestedAccuracyLevel", GLib.Variant("u", max(0, min(8, accuracy)))
             )
+            for prop, variant in (
+                ("DistanceThreshold", GLib.Variant("u", 0)),
+                ("TimeThreshold", GLib.Variant("u", 1)),
+            ):
+                try:
+                    self._set_property(prop, variant)
+                except Exception:
+                    # Older GeoClue versions don't expose these; fine.
+                    pass
             self._signal_id = self._client_proxy.connect("g-signal", self._on_signal)
             self._client_proxy.call_sync(
                 "Start", None, Gio.DBusCallFlags.NONE, 5000, None

@@ -646,6 +646,12 @@ class CameraWindow(Adw.Window):
         self.set_modal(False)
         self.set_decorated(False)
         self.set_default_size(820, 540)
+        # Fullscreen the camera window. Phosh's top status bar otherwise
+        # overlaps the window's top edge and eats clicks on the upper
+        # icon row (the user can see the icons but presses go to the
+        # system bar). Fullscreen also matches the typical phone-camera
+        # experience and means the picture rect uses the entire screen.
+        self.fullscreen()
         self.set_title(self._("Camera"))
         self.add_css_class("camera-root")
 
@@ -901,11 +907,16 @@ class CameraWindow(Adw.Window):
         zoom_gesture.connect("scale-changed", self._on_zoom_changed)
         self.add_controller(zoom_gesture)
 
-        # Tap-to-focus — attached to the picture so the chrome buttons,
-        # which sit above the picture in the overlay z-order, capture
-        # their own clicks first.
+        # Tap-to-focus — attached to the picture in TARGET phase so it
+        # only fires when the picture itself is the actual click target.
+        # Default BUBBLE would also fire for clicks consumed by overlay
+        # buttons (button is the target, gesture bubbles up through the
+        # picture's ancestor chain), making the icons feel non-responsive
+        # because the focus pulse paints on top of where the user just
+        # pressed.
         click = Gtk.GestureClick()
         click.set_button(1)
+        click.set_propagation_phase(Gtk.PropagationPhase.TARGET)
         click.connect("released", self._on_tap_to_focus)
         self._picture.add_controller(click)
 
