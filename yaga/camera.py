@@ -2089,7 +2089,7 @@ class CameraWindow(Adw.Window):
             #     perpendicular to that, so it lands on the *other*
             #     widget axis.
             user_vertical = max(120, self.get_width() // 3)
-            inset = 40
+            inset = 90
             if right:
                 # User's bottom-right corner = widget top-right.
                 self._shutter.set_halign(end)
@@ -2100,7 +2100,7 @@ class CameraWindow(Adw.Window):
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
                 self._options_bar.set_valign(end)
-                self._options_bar.set_margin_bottom(bar_side)
+                self._options_bar.set_margin_bottom(30)
             else:
                 # User's bottom-left corner = widget bottom-right.
                 self._shutter.set_halign(end)
@@ -2111,13 +2111,13 @@ class CameraWindow(Adw.Window):
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
                 self._options_bar.set_valign(start)
-                self._options_bar.set_margin_top(bar_side)
+                self._options_bar.set_margin_top(30)
 
         elif orientation == ORIENT_RIGHT_UP:
             # Phone rotated CCW 90° (right side physically up). Mirror
             # of LEFT_UP about both axes.
             user_vertical = max(120, self.get_width() // 3)
-            inset = 40
+            inset = 90
             if right:
                 # User's bottom-right corner = widget bottom-left.
                 self._shutter.set_halign(start)
@@ -2128,7 +2128,7 @@ class CameraWindow(Adw.Window):
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
                 self._options_bar.set_valign(start)
-                self._options_bar.set_margin_top(bar_side)
+                self._options_bar.set_margin_top(30)
             else:
                 # User's bottom-left corner = widget top-left.
                 self._shutter.set_halign(start)
@@ -2139,7 +2139,7 @@ class CameraWindow(Adw.Window):
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
                 self._options_bar.set_valign(end)
-                self._options_bar.set_margin_bottom(bar_side)
+                self._options_bar.set_margin_bottom(30)
 
     def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
         # Fallback path when the accelerometer isn't available (desktop
@@ -2164,9 +2164,38 @@ class CameraWindow(Adw.Window):
     def _refresh_timer_button(self) -> None:
         value = self._timer_choices[self._timer_idx]
         if value == 0:
-            self._timer_button.set_icon_name("alarm-symbolic")
+            # Use a _RotatableIcon so the alarm glyph follows device
+            # orientation like the other icon buttons. Track it in
+            # _rotatable_icons (replacing any previous timer icon there)
+            # so the next _apply_layout_for picks it up.
+            icon = _RotatableIcon()
+            icon.set_from_icon_name("alarm-symbolic")
+            icon.set_pixel_size(24)
+            # Apply current rotation right away so the freshly created
+            # icon doesn't appear upright for a frame after the swap.
+            rot = {
+                ORIENT_NORMAL:    0,
+                ORIENT_BOTTOM_UP: 180,
+                ORIENT_LEFT_UP:   90,
+                ORIENT_RIGHT_UP:  270,
+            }.get(self._device_orientation, 0)
+            icon.set_rotation_deg(rot)
+            # Replace any stale timer-icon in the rotation list with
+            # this one. Identified by being a child of self._timer_button.
+            self._rotatable_icons = [
+                i for i in self._rotatable_icons
+                if i.get_parent() is not self._timer_button
+            ]
+            self._rotatable_icons.append(icon)
+            self._timer_button.set_child(icon)
             self._timer_button.set_tooltip_text(self._("Self-timer off"))
         else:
+            # Label mode — drop the icon from the rotation list (if any)
+            # so we don't try to rotate a widget that isn't on screen.
+            self._rotatable_icons = [
+                i for i in self._rotatable_icons
+                if i.get_parent() is not self._timer_button
+            ]
             self._timer_button.set_label(f"{value}s")
             self._timer_button.set_tooltip_text(
                 self._("Self-timer: %d seconds") % value
