@@ -1455,6 +1455,15 @@ class CameraWindow(Adw.Window):
                     img_sink.set_property("drop", True)
                     img_sink.set_property("sync", False)
                     img_sink.set_property("async", False)
+                    # Pin caps to image/jpeg so caps negotiation on the
+                    # imgsrc branch can complete without a downstream
+                    # buffer query. Without this, droidcamsrc tries to
+                    # flush a pool that was never allocated and asserts
+                    # `gst_buffer_pool_set_flushing: GST_IS_BUFFER_POOL
+                    # (pool) failed` when start-capture is emitted.
+                    img_sink.set_property(
+                        "caps", gst.Caps.from_string("image/jpeg"),
+                    )
                     pipeline.add(img_queue)
                     pipeline.add(img_sink)
                     link_ret = imgsrc_pad.link(img_queue.get_static_pad("sink"))
@@ -2771,20 +2780,28 @@ class CameraWindow(Adw.Window):
         self._capture_signal_sink = sink
 
         if sink is self._imgsink:
-            # Trigger the HAL still-capture. droidcamsrc emits a JPEG
-            # buffer on imgsrc once the HAL finishes encoding.
-            src = self._pipeline.get_by_name("src")
-            try:
-                src.emit("start-capture")
-                print(
-                    "[yaga.camera] capture: start-capture emitted",
-                    file=sys.stderr, flush=True,
-                )
-            except Exception as exc:
-                print(
-                    f"[yaga.camera] capture: start-capture failed: {exc}",
-                    file=sys.stderr, flush=True,
-                )
+            # Trigger the HAL still-capture, but on a short delay so the
+            # imgsrc branch's buffer pool finishes being allocated after
+            # the signal connection establishes negotiation. Without the
+            # delay we'd hit "gst_buffer_pool_set_flushing: pool is not
+            # a buffer pool" because start-capture races the negotiation.
+            def _emit_start_capture():
+                src = self._pipeline.get_by_name("src") if self._pipeline else None
+                if src is None:
+                    return False
+                try:
+                    src.emit("start-capture")
+                    print(
+                        "[yaga.camera] capture: start-capture emitted",
+                        file=sys.stderr, flush=True,
+                    )
+                except Exception as exc:
+                    print(
+                        f"[yaga.camera] capture: start-capture failed: {exc}",
+                        file=sys.stderr, flush=True,
+                    )
+                return False
+            GLib.timeout_add(150, _emit_start_capture)
         else:
             # vfsrc path: open the valve so jpegenc gets one frame.
             if self._valve is not None:
