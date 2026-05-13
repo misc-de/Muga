@@ -991,7 +991,10 @@ class CameraWindow(Adw.Window):
         def _icon(name: str) -> _RotatableIcon:
             img = _RotatableIcon()
             img.set_from_icon_name(name)
-            img.set_pixel_size(24)
+            # No explicit pixel_size — let the per-button CSS rules
+            # (`.camera-iconbtn > image { -gtk-icon-size: 24px }` etc.)
+            # govern, so icons match the visual treatment of the rest
+            # of the Adwaita widgets.
             self._rotatable_icons.append(img)
             return img
 
@@ -1084,28 +1087,38 @@ class CameraWindow(Adw.Window):
         primary_align = (
             Gtk.Align.START if self._handedness == "left" else Gtk.Align.END
         )
-        self._shutter = Gtk.Button()
+        # Box (not Button) so our own GestureClick has clean access to
+        # press/release without competing with Gtk.Button's internal
+        # click handling. The .shutter-button CSS class still gives it
+        # the white ring + icon styling.
+        self._shutter = Gtk.Box()
         self._shutter.add_css_class("shutter-button")
-        # Mode icon inside the shutter ring. Updated on every mode
-        # change so the user can tell at a glance whether the next
-        # press takes a photo or starts/stops a video recording.
+        self._shutter.set_halign(primary_align)
+        self._shutter.set_size_request(76, 76)
         self._shutter_icon = _RotatableIcon()
         self._shutter_icon.set_from_icon_name("camera-photo-symbolic")
-        self._shutter_icon.set_pixel_size(40)
-        self._shutter.set_child(self._shutter_icon)
+        self._shutter_icon.set_halign(Gtk.Align.CENTER)
+        self._shutter_icon.set_valign(Gtk.Align.CENTER)
+        self._shutter_icon.set_hexpand(True)
+        self._shutter_icon.set_vexpand(True)
+        self._shutter.append(self._shutter_icon)
         self._rotatable_icons.append(self._shutter_icon)
         self._recording: bool = False
-        self._shutter.set_halign(primary_align)
         if self._handedness == "left":
             self._shutter.set_margin_start(24)
         else:
             self._shutter.set_margin_end(24)
         self._shutter.set_tooltip_text(self._("Capture"))
-        self._shutter.connect("clicked", lambda _b: self._on_shutter())
-        # Horizontal swipe across the shutter toggles photo ↔ video.
-        swipe = Gtk.GestureSwipe()
-        swipe.connect("swipe", self._on_shutter_swipe)
-        self._shutter.add_controller(swipe)
+        # Click + horizontal-swipe via a single GestureClick that tracks
+        # press/release positions. A tap (small dx) fires the shutter
+        # action; a horizontal drag past the swipe threshold flips
+        # photo ↔ video mode.
+        self._shutter_press_x: float | None = None
+        click = Gtk.GestureClick()
+        click.set_button(1)
+        click.connect("pressed", self._on_shutter_pressed)
+        click.connect("released", self._on_shutter_released)
+        self._shutter.add_controller(click)
         overlay.add_overlay(self._shutter)
         # Initial valign — overwritten as soon as the sensor (or, on
         # desktops without an accelerometer, the tick fallback) reports a
@@ -2218,21 +2231,26 @@ class CameraWindow(Adw.Window):
         else:
             self._start_countdown(delay)
 
-    def _on_shutter_swipe(
-        self, _gesture: Gtk.GestureSwipe, vx: float, vy: float,
+    def _on_shutter_pressed(
+        self, _gesture: Gtk.GestureClick, _n: int, x: float, _y: float,
     ) -> None:
-        # GestureSwipe fires "swipe" on release with end-of-gesture
-        # velocity. Use a generous |vx|>50 px/s threshold so an
-        # accidental tap-with-slight-drift doesn't flip the mode.
-        if abs(vx) < 50 and abs(vy) < 50:
+        self._shutter_press_x = x
+
+    def _on_shutter_released(
+        self, _gesture: Gtk.GestureClick, _n: int, x: float, _y: float,
+    ) -> None:
+        if self._shutter_press_x is None:
             return
-        # If we're mid-recording, ignore the swipe — the user has to
-        # explicitly stop first (otherwise we'd swap to photo mode with
-        # an unfinalised .mp4 sitting in videos_dir).
-        if self._recording:
+        dx = x - self._shutter_press_x
+        self._shutter_press_x = None
+        # |dx| > 40 px treats the gesture as a horizontal swipe that
+        # toggles photo ↔ video mode. Anything smaller fires the
+        # normal shutter action.
+        if abs(dx) > 40 and not self._recording:
+            new_mode = "video" if self._capture_mode == "photo" else "photo"
+            self._set_capture_mode(new_mode)
             return
-        new_mode = "video" if self._capture_mode == "photo" else "photo"
-        self._set_capture_mode(new_mode)
+        self._on_shutter()
 
     def _update_shutter_icon(self) -> None:
         if self._recording:
