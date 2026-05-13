@@ -2036,11 +2036,17 @@ class CameraWindow(Adw.Window):
             flip_180 = (orientation == ORIENT_BOTTOM_UP)
             self._layout_portrait(flip_180=flip_180, **kw)
         elif right and is_landscape:
-            # Right-handed in landscape: shutter pinned at the widget
-            # RIGHT edge, vertically centred (per user spec — "shutter
-            # rechts und mittig"). Icons keep the portrait notch row at
-            # the top so they don't move when the phone tilts.
-            self._layout_landscape_right_center(**kw)
+            # Right-handed in landscape: shutter pinned at the USER'S
+            # right edge, vertically centred ("rechts mitte" — the
+            # natural reach position when holding the phone landscape
+            # with the right hand). Icons mirror to user's left side.
+            # The user's right edge maps to widget top in LEFT_UP and
+            # widget bottom in RIGHT_UP, so the helper takes
+            # is_right_up to flip both axes.
+            self._layout_landscape_right_center(
+                is_right_up=(orientation == ORIENT_RIGHT_UP),
+                **kw,
+            )
         elif orientation == ORIENT_NORMAL:
             self._layout_portrait(flip_180=False, **kw)
         elif orientation == ORIENT_BOTTOM_UP:
@@ -2147,28 +2153,41 @@ class CameraWindow(Adw.Window):
     def _layout_landscape_right_center(
         self,
         *,
+        is_right_up: bool,
         neutral: bool,
         right: bool,
         third: int,
         user_vertical: int,
     ) -> None:
-        # Right-handed landscape: shutter pinned at the WIDGET right
-        # edge, vertically centred. Icons stay in a horizontal row at
-        # the widget top with the portrait notch margin so the chrome
-        # placement is stable across orientation changes.
-        notch = _OPTIONS_NOTCH_MARGIN
-        side = _SHUTTER_SIDE_MARGIN
+        # Right-handed in landscape: shutter pinned at the USER'S right
+        # edge, vertically centred (in the user's view). Icons mirror
+        # to the user's left side so they don't collide with the
+        # shutter.
+        #
+        # The user's right edge maps to a different widget edge per
+        # device orientation:
+        #   - LEFT_UP  (phone CW 90°): user's right = widget TOP
+        #   - RIGHT_UP (phone CCW 90°): user's right = widget BOTTOM
+        # We define the canonical layout for LEFT_UP and flip both
+        # axes (top<->bottom, start<->end) for RIGHT_UP — same
+        # mechanical mirror as `_layout_landscape` proper.
+        inset = _SHUTTER_LANDSCAPE_INSET
+        bar_inset = _OPTIONS_BAR_SIDE
         end, start, center = Gtk.Align.END, Gtk.Align.START, Gtk.Align.CENTER
+        # Shutter at widget top-center (= user's right-center in
+        # LEFT_UP). Flips to widget bottom-center for RIGHT_UP.
         self._apply_placement(
             self._shutter,
-            halign=end, valign=center,
-            m_end=side,
+            halign=center, valign=start, m_top=inset,
+            flip=is_right_up,
         )
+        # Icons at widget bottom-center (= user's left-center in
+        # LEFT_UP). Flips to widget top-center for RIGHT_UP.
         self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
         self._apply_placement(
             self._options_bar,
-            halign=center, valign=start,
-            m_top=notch,
+            halign=center, valign=end, m_bottom=bar_inset,
+            flip=is_right_up,
         )
 
     def _layout_landscape(
