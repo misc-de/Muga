@@ -77,6 +77,13 @@ class Settings:
     # no-op (no error toast).
     camera_geo_enabled: bool = False
 
+    # Flash / torch toggle. Single boolean covers both:
+    #   - photo mode → flash-mode=ON (fires once at capture)
+    #   - video mode → flash-mode=TORCH (continuous light during recording)
+    # Only meaningful on Halium / gst-droid devices; v4l2 cameras
+    # silently ignore it.
+    camera_flash_enabled: bool = False
+
     # User-defined ordering of the four built-in media folders. Items not in
     # the list (e.g. legacy upgrades that didn't write the field) fall back to
     # the natural order.

@@ -97,6 +97,17 @@ _HALIUM_PREVIEW_CAP_H = 720
 _HALIUM_PREVIEW_FPS = 24
 _HALIUM_IMAGE_MAX_VIA_VFSRC = 2560
 
+# gst-droid `flash-mode` property values (matching the
+# GstDroidCamSrcFlashMode enum exposed by droidcamsrc). Used by the
+# flash / torch toggle:
+#   - Photo: FLASH_ON (2) → HAL fires the flash once at capture.
+#   - Video: FLASH_TORCH (3) → HAL keeps the LED on continuously.
+#   - Off: FLASH_OFF (0).
+_FLASH_MODE_OFF = 0
+_FLASH_MODE_AUTO = 1
+_FLASH_MODE_ON = 2
+_FLASH_MODE_TORCH = 3
+
 # Video-record JPEG quality mapped from the user's bitrate preset. We
 # can't pass bitrate to jpegenc directly (it's a quality element, not
 # a rate-controlled encoder), so we approximate the same perceptual
@@ -643,6 +654,20 @@ class CameraWindow(Adw.Window):
         self._timer_button.connect("clicked", lambda _b: self._cycle_timer())
         self._refresh_timer_button()
         top_right.append(self._timer_button)
+
+        # Flash (photo) / Torch (video). Single toggle button — semantics
+        # change with capture mode. Hardware is Halium-only; the button
+        # hides on non-droidcamsrc devices via _start_pipeline.
+        self._flash_enabled: bool = bool(
+            getattr(settings, "camera_flash_enabled", False)
+        ) if settings is not None else False
+        self._flash_button = Gtk.ToggleButton()
+        self._flash_button.set_child(_icon("weather-flash-symbolic"))
+        self._flash_button.add_css_class("camera-iconbtn")
+        self._flash_button.set_active(self._flash_enabled)
+        self._flash_button.connect("toggled", self._on_flash_toggled)
+        self._update_flash_tooltip()
+        top_right.append(self._flash_button)
 
         self._res_button = Gtk.MenuButton()
         self._res_button.add_css_class("camera-resbtn")
@@ -1270,6 +1295,12 @@ class CameraWindow(Adw.Window):
         if self._appsink is None:
             self._show_toast(self._("Capture unavailable"))
         self._populate_resolutions(device)
+        # Flash / torch button: only relevant on Halium / droidcamsrc.
+        # Hide on plain v4l2 devices so the user doesn't see a control
+        # that silently does nothing. Apply the current toggle to the
+        # new source so it's primed for the first capture.
+        self._flash_button.set_visible(_is_halium_device(device))
+        self._apply_flash_to_pipeline()
         return False
 
     def _stop_pipeline(self) -> None:
@@ -2613,6 +2644,7 @@ class CameraWindow(Adw.Window):
                 ]
             self._settings.handedness = self._handedness
             self._settings.camera_geo_enabled = bool(self._geo_enabled)
+            self._settings.camera_flash_enabled = bool(self._flash_enabled)
             self._settings.save()
         except Exception:
             LOGGER.debug("camera settings persist failed", exc_info=True)
@@ -2663,9 +2695,56 @@ class CameraWindow(Adw.Window):
         self._quality_button.set_popover(self._build_quality_popover())
         self._update_shutter_icon()
         self._apply_mode_visibility()
+        # Flash button's tooltip + behaviour depends on mode (flash vs
+        # torch). Re-apply both so the user sees the right label and
+        # the source's flash-mode reflects the new semantic.
+        self._update_flash_tooltip()
+        self._apply_flash_to_pipeline()
         self._show_toast(
             self._("Video mode") if mode == "video" else self._("Photo mode")
         )
+
+    def _on_flash_toggled(self, btn: Gtk.ToggleButton) -> None:
+        self._flash_enabled = bool(btn.get_active())
+        self._update_flash_tooltip()
+        self._persist_settings()
+        self._apply_flash_to_pipeline()
+
+    def _update_flash_tooltip(self) -> None:
+        # Photo mode = flash (Blitz). Video mode = continuous torch
+        # (Licht). Same button, different semantics per the user's
+        # spec — keep the icon (lightning bolt) constant; only the
+        # tooltip changes.
+        if self._capture_mode == "video":
+            on, off = self._("Light on"), self._("Light off")
+        else:
+            on, off = self._("Flash on"), self._("Flash off")
+        self._flash_button.set_tooltip_text(on if self._flash_enabled else off)
+
+    def _apply_flash_to_pipeline(self) -> None:
+        """Push the current flash setting onto the live droidcamsrc.
+        Selects:
+          - OFF when the toggle is off.
+          - TORCH when video recording is active (continuous light).
+          - ON for photos (flash fires when start-capture lands).
+        Silent on non-droidcamsrc devices."""
+        if self._pipeline is None:
+            return
+        src = self._pipeline.get_by_name("src")
+        if src is None:
+            return
+        if not self._flash_enabled:
+            mode = _FLASH_MODE_OFF
+        elif self._capture_mode == "video":
+            # Light on while recording; just-armed (not yet recording)
+            # gets OFF so a video preview doesn't blast the LED.
+            mode = _FLASH_MODE_TORCH if self._recording else _FLASH_MODE_OFF
+        else:
+            mode = _FLASH_MODE_ON
+        try:
+            src.set_property("flash-mode", mode)
+        except Exception:
+            LOGGER.debug("flash-mode set failed", exc_info=True)
 
     def _apply_mode_visibility(self) -> None:
         """Hide options-bar buttons that don't apply to the current
@@ -3751,6 +3830,9 @@ class CameraWindow(Adw.Window):
         self._shutter.set_sensitive(True)
         self._update_shutter_icon()
         self._start_record_blink()
+        # Now that we're recording, switch flash-mode to TORCH if the
+        # user has the light toggle on.
+        self._apply_flash_to_pipeline()
         self._show_toast(self._("Recording…"))
         return False
 
@@ -3806,6 +3888,10 @@ class CameraWindow(Adw.Window):
         path = self._video_path
         self._video_teardown()
         self._recording = False
+        # Drop torch — the pipeline is about to be torn down, but the
+        # preview rebuild that follows may not happen instantly and
+        # we don't want the LED to linger.
+        self._apply_flash_to_pipeline()
         self._stop_record_blink()
         self._show_capture_spinner(False)
         self._shutter.set_sensitive(True)
@@ -3826,6 +3912,7 @@ class CameraWindow(Adw.Window):
         _dlog(f"[yaga.camera] video-record: {reason}")
         self._video_teardown()
         self._recording = False
+        self._apply_flash_to_pipeline()  # drop torch if it was on
         self._stop_record_blink()
         self._show_capture_spinner(False)
         self._busy_capture = False
