@@ -97,9 +97,13 @@ def _classify_orientation(
     smoothed_x: float, smoothed_y: float, current: str
 ) -> str:
     """Map a smoothed (x, y) acceleration vector to a 4-state
-    orientation string with hysteresis. Sign conventions are Android-
-    standard: phone in NORMAL portrait => +Y points up in the body
-    frame, so accelerometer reads y ≈ +1g when at rest."""
+    orientation string with hysteresis. The Y mapping (normal /
+    bottom-up) follows the Android-standard convention. The X mapping
+    is inverted relative to that convention because the user's HAL
+    (verified empirically on a FuriOS / Halium device) reports +X
+    when the device is in right-up and -X in left-up — the opposite
+    sign of what Android specifies. Inverting here keeps the rest of
+    the pipeline (layout, EXIF orientation tag) consistent."""
     ax, ay = abs(smoothed_x), abs(smoothed_y)
     if ax + ay < _MIN_HORIZONTAL_G:
         return current
@@ -110,8 +114,9 @@ def _classify_orientation(
     else:
         becoming_landscape = ratio_x > _LANDSCAPE_ENTER
     if becoming_landscape:
-        # Sign of X picks which side of the device is up.
-        return ORIENT_LEFT_UP if smoothed_x > 0 else ORIENT_RIGHT_UP
+        # Sign of X picks which side of the device is up — inverted
+        # from the Android convention to match this HAL's mounting.
+        return ORIENT_RIGHT_UP if smoothed_x > 0 else ORIENT_LEFT_UP
     # Portrait: sign of Y picks normal vs upside-down.
     return ORIENT_NORMAL if smoothed_y > 0 else ORIENT_BOTTOM_UP
 
