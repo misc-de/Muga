@@ -24,6 +24,7 @@ where = ["."]
 yaga = [
     "data/icons/hicolor/128x128/apps/*.png",
     "data/icons/hicolor/scalable/apps/*.svg",
+    "data/icons/hicolor/symbolic/apps/*.svg",
     "data/icons/*.png",
     "data/*.css",
 ]

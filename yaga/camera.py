@@ -108,6 +108,43 @@ _FLASH_MODE_AUTO = 1
 _FLASH_MODE_ON = 2
 _FLASH_MODE_TORCH = 3
 
+# Kernel LED sysfs nodes that expose the rear-camera torch (continuous
+# light) on Halium / Hybris phones. Copied from FuriLabs' camera
+# flashlightcontroller.cpp — every node that actually exists on the
+# device is written to, so we don't have to detect the per-phone
+# convention (Pixel uses one path, Volla another, etc.). Writing "1"
+# turns the LED on, "0" turns it off; missing paths are skipped
+# silently.
+_TORCH_SYSFS_PATHS: tuple[str, ...] = (
+    "/sys/class/leds/torch-light/brightness",
+    "/sys/class/leds/led:flash_torch/brightness",
+    "/sys/class/leds/flashlight/brightness",
+    "/sys/class/leds/torch-light0/brightness",
+    "/sys/class/leds/torch-light1/brightness",
+    "/sys/class/leds/led:torch_0/brightness",
+    "/sys/class/leds/led:torch_1/brightness",
+    "/sys/devices/platform/soc/soc:i2c@1/i2c-23/23-0059/s2mpb02-led/leds/torch-sec1/brightness",
+    "/sys/class/leds/led:switch/brightness",
+    "/sys/class/leds/led:switch_0/brightness",
+    "/sys/devices/virtual/camera/flash/rear_flash",
+)
+
+
+def _set_torch_sysfs(on: bool) -> None:
+    """Toggle the rear-camera torch via every known kernel LED node.
+    No-op (silent) if none of the paths exist or all writes fail —
+    that's the desktop case + the "no torch hardware" case rolled
+    into one."""
+    value = "1" if on else "0"
+    for path in _TORCH_SYSFS_PATHS:
+        try:
+            with open(path, "w") as fh:
+                fh.write(value)
+        except (OSError, PermissionError):
+            # Path doesn't exist, or no write permission. Both are
+            # expected on devices without that specific LED node.
+            continue
+
 # Video-record JPEG quality mapped from the user's bitrate preset. We
 # can't pass bitrate to jpegenc directly (it's a quality element, not
 # a rate-controlled encoder), so we approximate the same perceptual
@@ -666,9 +703,17 @@ class CameraWindow(Adw.Window):
             getattr(settings, "camera_flash_enabled", False)
         ) if settings is not None else False
         self._flash_button = Gtk.ToggleButton()
-        self._flash_button.set_child(_icon("weather-flash-symbolic"))
+        # Icon swaps between flash-on and flash-off per toggle state via
+        # _update_flash_icon. The icons ship under
+        # data/icons/hicolor/symbolic/apps/ — added there at camera
+        # window load.
+        self._flash_icon = _RotatableIcon()
+        self._flash_icon.set_pixel_size(_ICON_PIXEL_SIZE)
+        self._register_rotatable(self._flash_icon)
+        self._flash_button.set_child(self._flash_icon)
         self._flash_button.add_css_class("camera-iconbtn")
         self._flash_button.set_active(self._flash_enabled)
+        self._update_flash_icon()
         self._flash_button.connect("toggled", self._on_flash_toggled)
         self._update_flash_tooltip()
         top_right.append(self._flash_button)
@@ -2709,15 +2754,28 @@ class CameraWindow(Adw.Window):
 
     def _on_flash_toggled(self, btn: Gtk.ToggleButton) -> None:
         self._flash_enabled = bool(btn.get_active())
+        self._update_flash_icon()
         self._update_flash_tooltip()
         self._persist_settings()
         self._apply_flash_to_pipeline()
 
+    def _update_flash_icon(self) -> None:
+        # Swap between the on/off flash glyphs (registered as symbolic
+        # icons under data/icons/hicolor/symbolic/apps/). They follow
+        # the .camera-iconbtn CSS color (white) and the rotation set
+        # by _ICON_ROTATION_DEG.
+        name = (
+            "flash-on-symbolic" if self._flash_enabled
+            else "flash-off-symbolic"
+        )
+        self._flash_icon.set_from_icon_name(name)
+        self._flash_icon.set_pixel_size(_ICON_PIXEL_SIZE)
+
     def _update_flash_tooltip(self) -> None:
         # Photo mode = flash (Blitz). Video mode = continuous torch
         # (Licht). Same button, different semantics per the user's
-        # spec — keep the icon (lightning bolt) constant; only the
-        # tooltip changes.
+        # spec — only the tooltip and the underlying activation method
+        # change.
         if self._capture_mode == "video":
             on, off = self._("Light on"), self._("Light off")
         else:
@@ -2725,29 +2783,43 @@ class CameraWindow(Adw.Window):
         self._flash_button.set_tooltip_text(on if self._flash_enabled else off)
 
     def _apply_flash_to_pipeline(self) -> None:
-        """Push the current flash setting onto the live droidcamsrc.
-        Selects:
-          - OFF when the toggle is off.
-          - TORCH when video recording is active (continuous light).
-          - ON for photos (flash fires when start-capture lands).
-        Silent on non-droidcamsrc devices."""
-        if self._pipeline is None:
-            return
-        src = self._pipeline.get_by_name("src")
-        if src is None:
-            return
-        if not self._flash_enabled:
-            mode = _FLASH_MODE_OFF
-        elif self._capture_mode == "video":
-            # Light on while recording; just-armed (not yet recording)
-            # gets OFF so a video preview doesn't blast the LED.
-            mode = _FLASH_MODE_TORCH if self._recording else _FLASH_MODE_OFF
+        """Apply the current flash/torch state.
+
+        Two different mechanisms per FuriLabs' pattern in
+        flashlightcontroller.cpp + Camera.qml:
+
+        * **Photo flash** (one-shot at capture) — set droidcamsrc's
+          ``flash-mode`` property to ON. The HAL fires the LED during
+          the capture.
+        * **Video torch** (continuous light during recording) — write
+          ``1`` to the kernel LED sysfs node (e.g.
+          ``/sys/class/leds/torch-light/brightness``). gst-droid's
+          ``flash-mode=TORCH`` proved unreliable across HALs; the
+          direct sysfs path is what FuriLabs' own camera uses and what
+          most Halium phones expose.
+
+        Silent on non-Halium devices (no droidcamsrc, no LED nodes)."""
+        # Photo path — droidcamsrc flash-mode property.
+        if self._pipeline is not None:
+            src = self._pipeline.get_by_name("src")
+            if src is not None:
+                if self._capture_mode == "photo":
+                    mode = _FLASH_MODE_ON if self._flash_enabled else _FLASH_MODE_OFF
+                else:
+                    # Don't poke flash-mode on the camera source in
+                    # video mode — the sysfs path below handles it.
+                    mode = _FLASH_MODE_OFF
+                try:
+                    src.set_property("flash-mode", mode)
+                except Exception:
+                    LOGGER.debug("flash-mode set failed", exc_info=True)
+        # Video torch — direct sysfs write to the kernel LED node.
+        if self._capture_mode == "video":
+            want_on = self._flash_enabled and self._recording
+            _set_torch_sysfs(want_on)
         else:
-            mode = _FLASH_MODE_ON
-        try:
-            src.set_property("flash-mode", mode)
-        except Exception:
-            LOGGER.debug("flash-mode set failed", exc_info=True)
+            # Ensure the torch is off when not in video mode.
+            _set_torch_sysfs(False)
 
     def _apply_mode_visibility(self) -> None:
         """Hide options-bar buttons that don't apply to the current
@@ -4278,6 +4350,10 @@ class CameraWindow(Adw.Window):
             self._try_start_geo_silent()
 
     def _on_close(self, _win: Any) -> bool:
+        # Force the torch off — if the user closed the window mid-
+        # recording with the light on, the kernel LED would keep
+        # burning until the next reboot.
+        _set_torch_sysfs(False)
         # Tear down ALL pipelines: the main preview AND any transient
         # capture/record pipeline that might still be running. Without
         # the latter, closing the window mid-recording leaves a stray

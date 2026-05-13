@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="4.2333331mm"
+   height="4.233521mm"
+   viewBox="0 0 4.2333331 4.2335209"
+   version="1.1"
+   id="svg8328"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs8325" />
+  <g
+     id="layer1"
+     transform="translate(-53.59205,-158.96277)">
+    <g
+       id="g313236"
+       transform="matrix(0.26458333,0,0,0.26458333,-156.91099,140.76505)"
+       style="fill:currentColor">
+      <title
+         id="title313228">padlock2-open</title>
+      <g
+         id="g2143"
+         transform="translate(735.60205,-251.22078)">
+        <title
+           id="title2145">camera-flash</title>
+        <rect
+           style="fill:none"
+           id="rect2029"
+           width="16"
+           height="16"
+           x="60"
+           y="320" />
+        <path
+           style="fill:currentColor"
+           d="m 68.970703,320 c -0.334337,0.0102 -0.641452,0.18682 -0.818359,0.4707 l -5,8 c -0.105796,0.16965 -0.150901,0.35159 -0.150391,0.5293 H 63 v 1 h 1 2 v 5 c 0.0016,1.00344 1.31499,1.37969 1.847656,0.5293 l 5,-8 c 0.105796,-0.16965 0.150901,-0.35159 0.150391,-0.5293 H 73 v -1 h -1 -2 v -5 c 1.84e-4,-0.56391 -0.465631,-1.01646 -1.029297,-1 z"
+           id="path2037"
+           mask="none" />
+      </g>
+    </g>
+  </g>
+</svg>
