@@ -48,15 +48,22 @@ _CSS = b"""
     text-shadow: 0 0 24px rgba(0,0,0,0.7);
 }
 .camera-iconbtn {
-    min-width: 44px;
-    min-height: 44px;
+    /* Touch target sized for phone thumbs (Material recommends >=48dp,
+     * Apple HIG >=44pt; 56 leaves enough margin that even imprecise
+     * presses register on the first try). */
+    min-width: 56px;
+    min-height: 56px;
     padding: 0;
     border-radius: 999px;
     background-color: rgba(0, 0, 0, 0.45);
     color: #fff;
     border: none;
     box-shadow: none;
+    /* No transitions on the colour states - touchscreen users perceive
+     * the default 200 ms ease as the button 'thinking' before it acts. */
+    transition: none;
 }
+.camera-iconbtn > image { -gtk-icon-size: 24px; }
 .camera-iconbtn:hover { background-color: rgba(0, 0, 0, 0.65); }
 .camera-iconbtn:active { background-color: rgba(255, 255, 255, 0.15); }
 .camera-iconbtn:checked {
@@ -64,15 +71,16 @@ _CSS = b"""
     color: #000;
 }
 .camera-resbtn {
-    min-height: 36px;
-    padding: 0 14px;
+    min-height: 44px;
+    padding: 0 16px;
     border-radius: 999px;
     background-color: rgba(0, 0, 0, 0.45);
     color: #fff;
     border: none;
     box-shadow: none;
-    font-size: 12px;
+    font-size: 13px;
     font-feature-settings: "tnum";
+    transition: none;
 }
 .camera-resbtn:hover { background-color: rgba(0, 0, 0, 0.65); }
 .shutter-button {
@@ -743,16 +751,19 @@ class CameraWindow(Adw.Window):
         self._countdown.set_can_target(False)
         overlay.add_overlay(self._countdown)
 
-        # Close button — needed because there's no titlebar.
-        self._close_button = Gtk.Button.new_from_icon_name("window-close-symbolic")
-        self._close_button.add_css_class("camera-iconbtn")
-        self._close_button.set_halign(Gtk.Align.START)
-        self._close_button.set_valign(Gtk.Align.START)
-        self._close_button.set_margin_top(16)
-        self._close_button.set_margin_start(16)
-        self._close_button.set_tooltip_text(self._("Close"))
-        self._close_button.connect("clicked", lambda _b: self.close())
-        overlay.add_overlay(self._close_button)
+        # Escape closes the window. There's no on-screen close button —
+        # on phones the system swipe-from-bottom is used; on desktops the
+        # Escape key. (window-close shortcut intentionally omitted from
+        # the overlay so it doesn't compete with viewfinder real estate.)
+        esc = Gtk.ShortcutController()
+        esc.set_scope(Gtk.ShortcutScope.LOCAL)
+        esc.add_shortcut(
+            Gtk.Shortcut.new(
+                Gtk.ShortcutTrigger.parse_string("Escape"),
+                Gtk.CallbackAction.new(lambda *_a: (self.close() or True)),
+            )
+        )
+        self.add_controller(esc)
 
         # Top-right cluster: grid toggle, self-timer, resolution picker.
         top_right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
