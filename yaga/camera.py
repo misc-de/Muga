@@ -113,6 +113,14 @@ _CSS = b"""
     font-size: 22px;
     font-feature-settings: "tnum";
 }
+.camera-capture-overlay {
+    /* Semi-transparent pill behind the spinner+label so it stays
+     * legible against any preview content. */
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border-radius: 16px;
+    padding: 28px 36px;
+}
 """
 
 
@@ -764,9 +772,22 @@ class CameraWindow(Adw.Window):
         # with the Halium 720p cap in place, we temporarily lift the
         # cap to force droidcamsrc to renegotiate to native resolution,
         # then restore. Low-res frames still in flight from before the
-        # renegotiation are filtered out via _capture_min_width.
+        # renegotiation are filtered out via _capture_min_width. (Used
+        # only when the image-mode pipeline path fails / is unavailable.)
         self._capture_saved_caps: Any = None
         self._capture_min_width: int = 0
+        # Transient image-mode pipeline state. On Halium, the vfsrc pad
+        # caps the resolution at ~2560 px even with the capsfilter
+        # lifted; full sensor res (e.g. 3864x5152) only comes through
+        # droidcamsrc's imgsrc pad in mode=1. We tear down the preview
+        # pipeline, build this image-mode pipeline transiently, emit
+        # start-capture, save the HAL JPEG, then restore preview. The
+        # ~2-3 s during HAL mode-switch is bridged by a spinner overlay.
+        self._image_pipeline: Any = None
+        self._image_src: Any = None
+        self._image_signal_id: int | None = None
+        self._image_bus: Any = None
+        self._image_timeout_id: int | None = None
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
         self._preview_frame_count = 0
@@ -860,6 +881,26 @@ class CameraWindow(Adw.Window):
         self._countdown.set_visible(False)
         self._countdown.set_can_target(False)
         overlay.add_overlay(self._countdown)
+
+        # Capturing spinner — shown over the (frozen) preview while the
+        # transient image-mode pipeline reconfigures the HAL to capture
+        # at native sensor resolution. Vertical stack: spinner + label.
+        self._capture_spinner_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=12,
+        )
+        self._capture_spinner_box.add_css_class("camera-capture-overlay")
+        self._capture_spinner_box.set_halign(Gtk.Align.CENTER)
+        self._capture_spinner_box.set_valign(Gtk.Align.CENTER)
+        self._capture_spinner_box.set_visible(False)
+        self._capture_spinner_box.set_can_target(False)
+        self._capture_spinner = Gtk.Spinner()
+        self._capture_spinner.set_size_request(72, 72)
+        self._capture_spinner.set_halign(Gtk.Align.CENTER)
+        self._capture_spinner_box.append(self._capture_spinner)
+        capture_label = Gtk.Label(label=self._("Capturing…"))
+        capture_label.add_css_class("title-3")
+        self._capture_spinner_box.append(capture_label)
+        overlay.add_overlay(self._capture_spinner_box)
 
         # Escape closes the window. There's no on-screen close button —
         # on phones the system swipe-from-bottom is used; on desktops the
@@ -2651,14 +2692,29 @@ class CameraWindow(Adw.Window):
 
     def _capture(self) -> None:
         import sys
-        # Prefer the Halium imgsrc path (full sensor resolution, HAL-
-        # encoded JPEG) when available; otherwise fall back to the
-        # vfsrc + jpegenc path (capped resolution).
+        if self._busy_capture:
+            return
+        # Routing:
+        #   1. In-pipeline imgsrc (Halium with cooperative gst-droid) —
+        #      best case, instant + full res. Currently unavailable on
+        #      this user's HAL but kept for other builds.
+        #   2. Halium with the 720p preview cap in place — tear down
+        #      preview, run a transient mode=1 image pipeline to get
+        #      full sensor res via imgsrc, restore preview.
+        #   3. Default vfsrc + jpegenc with the valve gating jpegenc.
+        is_halium_capped = (
+            self._capsfilter is not None
+            and self._capsfilter.get_name() == "halium_default_cap"
+            and self._imgsink is None
+        )
+        if is_halium_capped:
+            self._capture_via_image_pipeline()
+            return
+
         sink = self._imgsink if self._imgsink is not None else self._appsink
-        if self._busy_capture or sink is None:
+        if sink is None:
             print(
-                f"[yaga.camera] capture: ignored "
-                f"(busy={self._busy_capture}, imgsink={self._imgsink is not None}, "
+                f"[yaga.camera] capture: ignored (imgsink={self._imgsink is not None}, "
                 f"appsink={self._appsink is not None})",
                 file=sys.stderr, flush=True,
             )
@@ -2771,6 +2827,12 @@ class CameraWindow(Adw.Window):
     def _on_capture_sample(self, sink: Any) -> Any:
         gst = self._Gst
         import sys
+        # The signal can fire again between the moment we accept a
+        # sample and the moment idle_add runs _finish_capture, which
+        # would queue a second save. Bail out if we've already started
+        # handing off (signal id cleared below).
+        if self._capture_signal_id is None:
+            return gst.FlowReturn.OK
         try:
             sample = sink.emit("pull-sample")
         except Exception as exc:
@@ -2800,11 +2862,20 @@ class CameraWindow(Adw.Window):
                 f"[yaga.camera] capture: high-res frame received ({w}px)",
                 file=sys.stderr, flush=True,
             )
+        # One-shot: disconnect immediately so the next new-sample doesn't
+        # trigger a duplicate save while _finish_capture is still queued.
+        sig_id = self._capture_signal_id
+        self._capture_signal_id = None
+        sig_sink = self._capture_signal_sink
+        if sig_sink is not None and sig_id is not None:
+            try:
+                sig_sink.disconnect(sig_id)
+            except Exception:
+                pass
         print(
-            "[yaga.camera] capture: new-sample received (sample=True)",
+            "[yaga.camera] capture: new-sample accepted",
             file=sys.stderr, flush=True,
         )
-        # Disconnect + close valve from the main loop, then write the file.
         GLib.idle_add(self._finish_capture, sample)
         return gst.FlowReturn.OK
 
@@ -2841,6 +2912,262 @@ class CameraWindow(Adw.Window):
         self._busy_capture = False
         self._shutter.set_sensitive(True)
         return False
+
+    # ------------------------------------------------------------------
+    # Transient image-mode pipeline for full-resolution Halium captures
+    # ------------------------------------------------------------------
+
+    def _show_capture_spinner(self, visible: bool) -> None:
+        self._capture_spinner_box.set_visible(visible)
+        if visible:
+            self._capture_spinner.start()
+        else:
+            self._capture_spinner.stop()
+
+    def _capture_via_image_pipeline(self) -> None:
+        """Stop the preview pipeline, build a droidcamsrc mode=1 ->
+        imgsrc -> appsink pipeline, emit start-capture, save the HAL
+        JPEG, then restore the preview pipeline. The frozen-preview
+        window during HAL mode switch is bridged by a spinner."""
+        import sys
+        self._busy_capture = True
+        self._shutter.set_sensitive(False)
+        self._show_capture_spinner(True)
+
+        device = self._current_device() or {}
+        cam_id = device.get("droidcam_id", 0)
+        print(
+            f"[yaga.camera] image-capture: stopping preview for cam {cam_id}",
+            file=sys.stderr, flush=True,
+        )
+        self._stop_pipeline()
+        # Defer the build by one idle tick so the spinner actually
+        # renders before the synchronous parts of the build (state
+        # changes, get_state waits) block the main loop.
+        GLib.idle_add(self._image_pipeline_build, cam_id)
+
+    def _image_pipeline_build(self, cam_id: int) -> bool:
+        import sys
+        gst = self._Gst
+
+        pipeline = gst.Pipeline.new("yaga-image-capture")
+        src = gst.ElementFactory.make("droidcamsrc", "src")
+        if src is None:
+            return self._image_capture_failed("droidcamsrc element unavailable")
+        try:
+            src.set_property("camera-device", cam_id)
+        except Exception:
+            pass
+        try:
+            src.set_property("mode", 1)  # image-capture mode
+        except Exception:
+            pass
+        pipeline.add(src)
+
+        # vfsrc -> fakesink. droidcamsrc's HAL setup expects a live
+        # viewfinder pad even when we only care about imgsrc.
+        vf_fakesink = gst.ElementFactory.make("fakesink", "vf_fakesink")
+        if vf_fakesink is not None:
+            vf_fakesink.set_property("sync", False)
+            vf_fakesink.set_property("async", False)
+            pipeline.add(vf_fakesink)
+            try:
+                vf_pad = src.request_pad_simple("vfsrc")
+            except Exception:
+                vf_pad = None
+            if vf_pad is not None:
+                vf_pad.link(vf_fakesink.get_static_pad("sink"))
+
+        # imgsrc -> queue -> appsink: the actual capture chain.
+        queue = gst.ElementFactory.make("queue", "img_queue")
+        sink = gst.ElementFactory.make("appsink", "img_sink")
+        if queue is None or sink is None:
+            return self._image_capture_failed("queue/appsink unavailable")
+        queue.set_property("leaky", 2)
+        queue.set_property("max-size-buffers", 1)
+        sink.set_property("emit-signals", True)
+        sink.set_property("max-buffers", 1)
+        sink.set_property("drop", True)
+        sink.set_property("sync", False)
+        sink.set_property("async", False)
+        pipeline.add(queue)
+        pipeline.add(sink)
+        queue.link(sink)
+
+        try:
+            imgsrc_pad = src.request_pad_simple("imgsrc")
+        except Exception as exc:
+            imgsrc_pad = None
+            print(
+                f"[yaga.camera] image-capture: imgsrc request raised: {exc}",
+                file=sys.stderr, flush=True,
+            )
+        if imgsrc_pad is None:
+            pipeline.set_state(gst.State.NULL)
+            return self._image_capture_failed(
+                "imgsrc pad not available in mode=1"
+            )
+        if imgsrc_pad.link(queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
+            pipeline.set_state(gst.State.NULL)
+            return self._image_capture_failed("imgsrc -> queue link failed")
+
+        self._image_pipeline = pipeline
+        self._image_src = src
+        self._image_signal_id = sink.connect(
+            "new-sample", self._on_image_capture_sample
+        )
+
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_image_pipeline_error)
+        self._image_bus = bus
+
+        result = pipeline.set_state(gst.State.PLAYING)
+        print(
+            f"[yaga.camera] image-capture: pipeline PLAYING -> "
+            f"{result.value_nick if result else '?'}",
+            file=sys.stderr, flush=True,
+        )
+
+        # Give the HAL a moment to initialise (Photography reconfigure,
+        # AF, AE) before triggering the actual capture.
+        GLib.timeout_add(500, self._image_emit_start_capture)
+        self._image_timeout_id = GLib.timeout_add_seconds(
+            15, self._on_image_capture_timeout,
+        )
+        return False  # one-shot idle
+
+    def _image_emit_start_capture(self) -> bool:
+        import sys
+        if self._image_src is None:
+            return False
+        try:
+            self._image_src.emit("start-capture")
+            print(
+                "[yaga.camera] image-capture: start-capture emitted",
+                file=sys.stderr, flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"[yaga.camera] image-capture: start-capture failed: {exc}",
+                file=sys.stderr, flush=True,
+            )
+        return False  # one-shot
+
+    def _on_image_capture_sample(self, sink: Any) -> Any:
+        gst = self._Gst
+        import sys
+        if self._image_signal_id is None:
+            return gst.FlowReturn.OK
+        try:
+            sample = sink.emit("pull-sample")
+        except Exception as exc:
+            print(
+                f"[yaga.camera] image-capture: pull-sample failed: {exc}",
+                file=sys.stderr, flush=True,
+            )
+            sample = None
+        if sample is None:
+            return gst.FlowReturn.OK
+        # One-shot disconnect so we don't queue more saves.
+        sid = self._image_signal_id
+        self._image_signal_id = None
+        try:
+            sink.disconnect(sid)
+        except Exception:
+            pass
+
+        caps = sample.get_caps()
+        s = caps.get_structure(0) if caps is not None and caps.get_size() > 0 else None
+        if s is not None:
+            ok_w, w = s.get_int("width")
+            ok_h, h = s.get_int("height")
+            print(
+                f"[yaga.camera] image-capture: sample received {w}x{h}",
+                file=sys.stderr, flush=True,
+            )
+
+        GLib.idle_add(self._image_capture_finish, sample)
+        return gst.FlowReturn.OK
+
+    def _image_capture_finish(self, sample: Any) -> bool:
+        import sys
+        if self._image_timeout_id is not None:
+            GLib.source_remove(self._image_timeout_id)
+            self._image_timeout_id = None
+        self._image_teardown()
+        if sample is not None:
+            print(
+                "[yaga.camera] image-capture: writing sample",
+                file=sys.stderr, flush=True,
+            )
+            self._write_sample(sample)
+        else:
+            self._show_toast(self._("No frame available"))
+        self._show_capture_spinner(False)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        # Restart the preview pipeline.
+        GLib.idle_add(self._start_pipeline)
+        return False
+
+    def _on_image_capture_timeout(self) -> bool:
+        import sys
+        print(
+            "[yaga.camera] image-capture: TIMEOUT — no sample arrived in 15 s",
+            file=sys.stderr, flush=True,
+        )
+        self._image_timeout_id = None
+        self._image_teardown()
+        self._show_toast(self._("No frame available"))
+        self._show_capture_spinner(False)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        GLib.idle_add(self._start_pipeline)
+        return False
+
+    def _image_capture_failed(self, reason: str) -> bool:
+        import sys
+        print(
+            f"[yaga.camera] image-capture: {reason}",
+            file=sys.stderr, flush=True,
+        )
+        self._image_teardown()
+        self._show_toast(self._("Capture failed: %s") % reason)
+        self._show_capture_spinner(False)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        GLib.idle_add(self._start_pipeline)
+        return False
+
+    def _image_teardown(self) -> None:
+        if self._image_bus is not None:
+            try:
+                self._image_bus.remove_signal_watch()
+            except Exception:
+                pass
+            self._image_bus = None
+        if self._image_pipeline is not None:
+            try:
+                self._image_pipeline.set_state(self._Gst.State.NULL)
+                self._image_pipeline.get_state(2 * self._Gst.SECOND)
+            except Exception:
+                pass
+            self._image_pipeline = None
+        self._image_src = None
+        self._image_signal_id = None
+
+    def _on_image_pipeline_error(self, _bus: Any, msg: Any) -> None:
+        import sys
+        try:
+            err, dbg = msg.parse_error()
+            print(
+                f"[yaga.camera] image-capture bus error: "
+                f"{err.message if err else '?'} | {(dbg or '').strip()}",
+                file=sys.stderr, flush=True,
+            )
+        except Exception:
+            pass
 
     def _write_sample(self, sample: Any) -> None:
         import sys
