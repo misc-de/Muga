@@ -171,6 +171,20 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._date_last_key: tuple[int, int] | None = None  # (year, month) of last date header
         self._lazy_loading_attached: bool = False
         self._lazy_loading_in_flight: bool = False
+        # Sliding window: keep at most _MAX_LOADED_ITEMS items in memory
+        # at once. When forward-loading pushes the total over the cap,
+        # drop the oldest items from the front (aligned to a header
+        # boundary so the visible structure stays consistent). This
+        # bounds the performance cost of repeatedly jumping forward
+        # through months — previously the row_store and current_items
+        # grew without limit, and after a few thousand items the
+        # ListView's layout/binding loops became visibly slow.
+        self._MAX_LOADED_ITEMS: int = 1500
+        # _window_start_offset = database offset of the first item
+        # still loaded in current_items. Starts at 0 and only ever
+        # increases (forward eviction); reverse re-fetch is not yet
+        # implemented, so scrolling past the start gives no items.
+        self._window_start_offset: int = 0
 
         # Track last-rendered view so we can preserve scroll position on refresh
         self._last_render_key: tuple[str, str | None] | None = None
@@ -961,6 +975,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.gallery_grid.clear()
         self.current_items = []
         self._current_offset = 0
+        self._window_start_offset = 0
         self._has_more_items = False
         self._date_last_key = None
 
@@ -1285,9 +1300,15 @@ class GalleryWindow(Adw.ApplicationWindow):
 
             self._current_offset += len(next_items)
             self._has_more_items = self._current_offset < self._total_count
+            # Cap memory + ListView load. Without this, repeatedly
+            # jumping forward through months accumulates thousands of
+            # rows and the grid grinds to a halt.
+            self._evict_window_front_if_needed()
             LOGGER.debug(
-                "Lazy-loaded %d more items (total visible: %d / %d)",
-                len(next_items), len(self.current_items), self._total_count,
+                "Lazy-loaded %d more items (window: %d, db offset: %d..%d / %d)",
+                len(next_items), len(self.current_items),
+                self._window_start_offset, self._current_offset,
+                self._total_count,
             )
         finally:
             self._lazy_loading_in_flight = False
@@ -1295,6 +1316,66 @@ class GalleryWindow(Adw.ApplicationWindow):
         # tiny page size), keep going on the next idle.
         if self._has_more_items:
             GLib.idle_add(self._maybe_fill_viewport, priority=GLib.PRIORITY_LOW)
+
+    def _evict_window_front_if_needed(self) -> None:
+        """Drop the oldest loaded items when the window exceeds
+        _MAX_LOADED_ITEMS. Eviction is aligned to a header boundary
+        so the visible structure stays consistent: we trim whole
+        month groups from the front, never half a group.
+
+        The user complaint that triggered this: repeatedly jumping
+        from month to month via the header arrow loads pages
+        cumulatively (up to 32 pages of 200 items each per arrow tap),
+        so after several hops the row_store holds many thousands of
+        rows. ListView's allocation pass on that store starts to lag
+        visibly. Capping the window keeps perceived scroll/jump
+        latency flat regardless of how far the user has navigated.
+
+        Reverse-load on scroll-back is not yet implemented; once the
+        front is dropped, scrolling back above the new first row
+        shows nothing further. That's an accepted trade-off until the
+        symmetric path lands.
+        """
+        if len(self.current_items) <= self._MAX_LOADED_ITEMS:
+            return
+        target_remaining = max(self._page_size, self._MAX_LOADED_ITEMS // 2)
+        target_evict = len(self.current_items) - target_remaining
+        store = self.gallery_grid.row_store
+        n_rows = store.get_n_items()
+        items_dropped = 0
+        rows_to_drop = 0
+        # Walk forward in the row store, accumulating media items, until
+        # we have at least `target_evict` items lined up for removal.
+        while rows_to_drop < n_rows and items_dropped < target_evict:
+            row = store.get_item(rows_to_drop)
+            rows_to_drop += 1
+            if row is None or row.is_header:
+                continue
+            items_dropped += len(getattr(row, "tiles", []) or [])
+        # Align the cut to the next header so the new first row is
+        # always a header — otherwise the topmost tile row would be
+        # orphaned without its month context.
+        while rows_to_drop < n_rows:
+            row = store.get_item(rows_to_drop)
+            if row is None:
+                rows_to_drop += 1
+                continue
+            if row.is_header:
+                break
+            items_dropped += len(getattr(row, "tiles", []) or [])
+            rows_to_drop += 1
+        if rows_to_drop <= 0 or items_dropped <= 0:
+            return
+        # Splice is enough — Gtk.ListView's internal scroll anchor
+        # keeps the currently-visible row stable across model edits.
+        # We deliberately don't try to compute a vadj delta here: the
+        # upper bound only updates after the next allocation pass, so
+        # any synchronous adjustment would race with ListView's own
+        # repositioning and could compound into a worse jump than
+        # doing nothing.
+        store.splice(0, rows_to_drop, [])
+        self.current_items = self.current_items[items_dropped:]
+        self._window_start_offset += items_dropped
 
     # ------------------------------------------------------------------
     # Item actions
@@ -1829,16 +1910,20 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _on_sel_delete_done(self, total: int, errors: list[tuple[str, Exception]]) -> bool:
         self._set_sel_busy(False, "")
         self._exit_selection_mode()
-        succeeded = total - len(errors)
-        if not errors:
-            self._set_status(self._("Deleted %d items") % total)
-        elif len(errors) == total:
+        # Re-render so the deleted tiles disappear from the grid. No
+        # success toast — the visible absence of the items is the
+        # confirmation. Partial / total failures still surface a
+        # status or error dialog because the user needs to know what
+        # didn't get deleted.
+        self._render()
+        if errors and len(errors) == total:
             self._show_error_dialog(
                 self._("Delete failed"),
                 self._("Could not delete all files. Check file permissions or disk state."),
                 f"{len(errors)}/{total} items",
             )
-        else:
+        elif errors:
+            succeeded = total - len(errors)
             self._set_status(
                 self._("Deleted %d/%d items (%d failed)") % (
                     succeeded, total, len(errors),

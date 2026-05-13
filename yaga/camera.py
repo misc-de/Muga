@@ -712,6 +712,7 @@ class CameraWindow(Adw.Window):
         self._register_rotatable(self._flash_icon)
         self._flash_button.set_child(self._flash_icon)
         self._flash_button.add_css_class("camera-iconbtn")
+        self._flash_button.add_css_class("camera-flash-btn")
         self._flash_button.set_active(self._flash_enabled)
         self._update_flash_icon()
         self._flash_button.connect("toggled", self._on_flash_toggled)
@@ -2760,15 +2761,12 @@ class CameraWindow(Adw.Window):
         self._apply_flash_to_pipeline()
 
     def _update_flash_icon(self) -> None:
-        # Swap between the on/off flash glyphs (registered as symbolic
-        # icons under data/icons/hicolor/symbolic/apps/). They follow
-        # the .camera-iconbtn CSS color (white) and the rotation set
-        # by _ICON_ROTATION_DEG.
-        name = (
-            "flash-on-symbolic" if self._flash_enabled
-            else "flash-off-symbolic"
-        )
-        self._flash_icon.set_from_icon_name(name)
+        # Always the same lightning-bolt glyph; state is conveyed by
+        # color via the .camera-flash-btn CSS rules (grey when the
+        # toggle is off, yellow when it's on). The previous version
+        # swapped a flash-off variant with a slash through the bolt,
+        # which the user found visually noisy.
+        self._flash_icon.set_from_icon_name("flash-on-symbolic")
         self._flash_icon.set_pixel_size(_ICON_PIXEL_SIZE)
 
     def _update_flash_tooltip(self) -> None:

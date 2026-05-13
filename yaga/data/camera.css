@@ -71,6 +71,12 @@
 .camera-iconbtn:active   { opacity: 0.60; }
 .camera-iconbtn:checked  { color: #fbb03b; }
 .camera-iconbtn:disabled { opacity: 0.35; }
+/* Flash / torch toggle uses a single glyph (lightning bolt) and
+ * conveys on/off via colour: yellow when active, grey when not.
+ * Overrides the default white .camera-iconbtn colour for the
+ * unchecked state only. */
+.camera-flash-btn:not(:checked) { color: #888; }
+.camera-flash-btn:checked       { color: #fbb03b; }
 .camera-resbtn {
     min-height: 44px;
     padding: 0 16px;
