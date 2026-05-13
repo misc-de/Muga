@@ -754,6 +754,12 @@ class CameraWindow(Adw.Window):
         self._pipeline: Any = None
         self._bus: Any = None
         self._appsink: Any = None
+        # Halium-only: droidcamsrc's imgsrc pad. When present we route
+        # the shutter through this instead of the (capped-resolution)
+        # vfsrc+jpegenc path, so photos come out at the sensor's native
+        # resolution as a HAL-encoded JPEG.
+        self._imgsink: Any = None
+        self._capture_signal_sink: Any = None
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
         self._preview_frame_count = 0
@@ -1335,11 +1341,49 @@ class CameraWindow(Adw.Window):
         self._appsink = pipeline.get_by_name("snap")
         self._valve = pipeline.get_by_name("shutter")
         self._capsfilter = capsfilter
+        self._imgsink = None
         self._preview_frame_count = 0
         self._source_frame_count = 0
         self._sink_frame_count = 0
         self._zoom = 1.0
         self._picture.set_zoom(1.0)
+
+        # Halium high-res still capture: hook droidcamsrc's imgsrc pad
+        # to a dedicated appsink. The vfsrc upstream of the tee is
+        # 720p-capped (preview/perf reasons), but imgsrc bypasses that
+        # cap and provides full-sensor-resolution JPEGs straight from
+        # the HAL — same path stock Android Camera apps use. Triggered
+        # by emitting the `start-capture` action signal on the source
+        # in _capture().
+        if device.get("source_factory") == "droidcamsrc":
+            try:
+                imgsrc_pad = source.request_pad_simple("imgsrc")
+            except Exception:
+                imgsrc_pad = None
+                LOGGER.debug("imgsrc request_pad_simple failed", exc_info=True)
+            if imgsrc_pad is not None:
+                img_queue = gst.ElementFactory.make("queue", "img_queue")
+                img_sink = gst.ElementFactory.make("appsink", "imgsink")
+                if img_queue is not None and img_sink is not None:
+                    img_queue.set_property("leaky", 2)            # downstream
+                    img_queue.set_property("max-size-buffers", 1)
+                    img_sink.set_property("emit-signals", True)
+                    img_sink.set_property("max-buffers", 1)
+                    img_sink.set_property("drop", True)
+                    img_sink.set_property("sync", False)
+                    img_sink.set_property("async", False)
+                    pipeline.add(img_queue)
+                    pipeline.add(img_sink)
+                    if imgsrc_pad.link(img_queue.get_static_pad("sink")) \
+                            == gst.PadLinkReturn.OK and img_queue.link(img_sink):
+                        self._imgsink = img_sink
+                        import sys
+                        print(
+                            "[yaga.camera] imgsrc branch ready (HAL JPEG path)",
+                            file=sys.stderr, flush=True,
+                        )
+                    else:
+                        LOGGER.debug("imgsrc link failed")
 
         # Diagnostic buffer probes. Tells us — without enabling GST_DEBUG —
         # whether droidcamsrc is producing a continuous stream and whether
@@ -1471,6 +1515,8 @@ class CameraWindow(Adw.Window):
                 pass
             self._pipeline = None
         self._appsink = None
+        self._imgsink = None
+        self._capture_signal_sink = None
         self._capsfilter = None
 
     def _on_source_buffer(self, _pad: Any, _info: Any) -> Any:
@@ -2563,35 +2609,56 @@ class CameraWindow(Adw.Window):
 
     def _capture(self) -> None:
         import sys
-        if self._busy_capture or self._appsink is None:
+        # Prefer the Halium imgsrc path (full sensor resolution, HAL-
+        # encoded JPEG) when available; otherwise fall back to the
+        # vfsrc + jpegenc path (capped resolution).
+        sink = self._imgsink if self._imgsink is not None else self._appsink
+        if self._busy_capture or sink is None:
             print(
                 f"[yaga.camera] capture: ignored "
-                f"(busy={self._busy_capture}, appsink={self._appsink is not None})",
+                f"(busy={self._busy_capture}, imgsink={self._imgsink is not None}, "
+                f"appsink={self._appsink is not None})",
                 file=sys.stderr, flush=True,
             )
             return
+        path_name = "imgsrc" if sink is self._imgsink else "vfsrc+jpegenc"
         print(
-            f"[yaga.camera] capture: start (valve={self._valve is not None})",
+            f"[yaga.camera] capture: start path={path_name}",
             file=sys.stderr, flush=True,
         )
         self._busy_capture = True
         self._shutter.set_sensitive(False)
-        # Hook a one-shot new-sample listener, then open the valve so a
-        # single frame flows down to jpegenc + appsink. The valve gating
-        # means jpegenc isn't burning CPU on every preview frame, which is
-        # critical on Halium phones (otherwise the preview pipeline OOMs).
-        self._capture_signal_id = self._appsink.connect(
+        self._capture_signal_id = sink.connect(
             "new-sample", self._on_capture_sample
         )
-        if self._valve is not None:
-            self._valve.set_property("drop", False)
-            print(
-                "[yaga.camera] capture: valve opened",
-                file=sys.stderr, flush=True,
-            )
-        # Safety timeout — if no sample reaches us, give up cleanly.
-        # On Halium phones jpegenc has no hardware path and can take well
-        # over a second per frame at full resolution.
+        self._capture_signal_sink = sink
+
+        if sink is self._imgsink:
+            # Trigger the HAL still-capture. droidcamsrc emits a JPEG
+            # buffer on imgsrc once the HAL finishes encoding.
+            src = self._pipeline.get_by_name("src")
+            try:
+                src.emit("start-capture")
+                print(
+                    "[yaga.camera] capture: start-capture emitted",
+                    file=sys.stderr, flush=True,
+                )
+            except Exception as exc:
+                print(
+                    f"[yaga.camera] capture: start-capture failed: {exc}",
+                    file=sys.stderr, flush=True,
+                )
+        else:
+            # vfsrc path: open the valve so jpegenc gets one frame.
+            if self._valve is not None:
+                self._valve.set_property("drop", False)
+                print(
+                    "[yaga.camera] capture: valve opened",
+                    file=sys.stderr, flush=True,
+                )
+
+        # Safety timeout — generous because the HAL may take a moment
+        # to capture (AF, exposure, encode) at full resolution.
         self._capture_timeout_id = GLib.timeout_add_seconds(
             10, self._on_capture_timeout
         )
@@ -2602,12 +2669,13 @@ class CameraWindow(Adw.Window):
                 self._valve.set_property("drop", True)
             except Exception:
                 LOGGER.debug("valve close failed", exc_info=True)
-        if self._capture_signal_id is not None and self._appsink is not None:
+        if self._capture_signal_id is not None and self._capture_signal_sink is not None:
             try:
-                self._appsink.disconnect(self._capture_signal_id)
+                self._capture_signal_sink.disconnect(self._capture_signal_id)
             except Exception:
                 pass
         self._capture_signal_id = None
+        self._capture_signal_sink = None
         if self._capture_timeout_id is not None:
             GLib.source_remove(self._capture_timeout_id)
             self._capture_timeout_id = None
