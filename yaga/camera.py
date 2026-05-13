@@ -2329,15 +2329,18 @@ class CameraWindow(Adw.Window):
             user_vertical = max(120, self.get_width() // 3)
             inset = 70
             if neutral:
-                # User's bottom-centre = widget right-centre; user's
-                # top-centre = widget left-centre.
-                self._shutter.set_halign(end)
-                self._shutter.set_valign(center)
-                self._shutter.set_margin_end(inset)
+                # Landscape neutral mirrors portrait neutral rotated by
+                # 90°: shutter on the user's RIGHT (centred vertically),
+                # icons on the user's LEFT. For LEFT_UP (phone CW 90°)
+                # user's right = widget top edge, user's left = widget
+                # bottom edge.
+                self._shutter.set_halign(center)
+                self._shutter.set_valign(start)
+                self._shutter.set_margin_top(inset)
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
-                self._options_bar.set_halign(start)
-                self._options_bar.set_valign(center)
-                self._options_bar.set_margin_start(30)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(end)
+                self._options_bar.set_margin_bottom(30)
             elif right:
                 # User's bottom-right corner = widget top-right.
                 self._shutter.set_halign(end)
@@ -2367,15 +2370,16 @@ class CameraWindow(Adw.Window):
             user_vertical = max(120, self.get_width() // 3)
             inset = 70
             if neutral:
-                # User's bottom-centre = widget left-centre; user's
-                # top-centre = widget right-centre.
-                self._shutter.set_halign(start)
-                self._shutter.set_valign(center)
-                self._shutter.set_margin_start(inset)
+                # For RIGHT_UP (phone CCW 90°) user's right = widget
+                # BOTTOM edge, user's left = widget TOP edge — mirror
+                # of LEFT_UP-neutral.
+                self._shutter.set_halign(center)
+                self._shutter.set_valign(end)
+                self._shutter.set_margin_bottom(inset)
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
-                self._options_bar.set_halign(end)
-                self._options_bar.set_valign(center)
-                self._options_bar.set_margin_end(30)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(start)
+                self._options_bar.set_margin_top(30)
             elif right:
                 # User's bottom-right corner = widget bottom-left.
                 self._shutter.set_halign(start)
