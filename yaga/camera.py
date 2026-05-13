@@ -862,6 +862,11 @@ class CameraWindow(Adw.Window):
         # real orientation.
         self._shutter.set_valign(Gtk.Align.CENTER)
         self._device_orientation: str = ORIENT_NORMAL
+        # Most recent 4-state orientation the layout has been applied
+        # for. Distinct from _device_orientation: _device_orientation
+        # follows the sensor regardless of whether a relayout is
+        # pending; _applied_layout is what's actually on screen.
+        self._applied_layout: str | None = None
         self._layout_landscape: bool | None = None
         # Prefer the device accelerometer over window dimensions. On
         # phones with Phosh the surface size doesn't change on screen
@@ -1953,67 +1958,110 @@ class CameraWindow(Adw.Window):
     def _on_orientation_changed(self, orientation: str) -> None:
         # Sensor callback. Stores the full 4-state value (used by the
         # EXIF writer to tag captured photos with the right rotation)
-        # and reapplies the shutter / options-bar layout for the
-        # portrait-vs-landscape boolean derived from it.
+        # and reapplies the shutter / options-bar layout.
         self._device_orientation = orientation
-        self._apply_layout_for(orientation_is_landscape(orientation))
+        self._apply_layout_for(orientation)
 
-    def _apply_layout_for(self, landscape: bool) -> None:
-        # Position the shutter + options bar for the new orientation.
-        # The shutter always sits on the *user's* preferred side via
-        # halign — Phosh's compositor rotates the surface buffer so
-        # halign=END always lands at the user's right regardless of
-        # which physical phone edge is currently up. valign and the
-        # adjacent margin do the visible "wandering" between
-        # portrait (lower third) and landscape (vertical centre).
-        if landscape == self._layout_landscape:
+    def _apply_layout_for(self, orientation: str) -> None:
+        # Position the shutter + options bar per the user's spec.
+        # The two flipped lays (`bottom-up`, `right-up`) are the
+        # 180-deg-rotated mirrors of `normal` / `left-up` respectively,
+        # so when those fire the shutter "wanders" to the corner that
+        # ends up under the user's preferred-hand thumb after the flip.
+        if orientation == self._applied_layout:
             return
-        self._layout_landscape = landscape
-        if landscape:
-            # Shutter: vertical centre on the handedness side.
-            self._shutter.set_valign(Gtk.Align.CENTER)
-            self._shutter.set_margin_bottom(0)
-            # Options bar: vertical column on the side opposite the
-            # shutter so the user's thumb doesn't shadow it. Sits in the
-            # left/right letterbox area.
-            opposite = (
-                Gtk.Align.END if self._handedness == "left" else Gtk.Align.START
-            )
-            self._options_bar.set_orientation(Gtk.Orientation.VERTICAL)
-            self._options_bar.set_halign(opposite)
-            self._options_bar.set_valign(Gtk.Align.CENTER)
-            self._options_bar.set_margin_top(0)
-            if self._handedness == "left":
-                self._options_bar.set_margin_end(16)
-                self._options_bar.set_margin_start(0)
+        self._applied_layout = orientation
+        self._layout_landscape = orientation_is_landscape(orientation)
+
+        right = (self._handedness == "right")
+
+        # Always reset every margin first so we can express each case
+        # purely in terms of the margins it needs (avoids stale values
+        # from the previous orientation leaking through).
+        for w in (self._shutter, self._options_bar):
+            w.set_margin_top(0)
+            w.set_margin_bottom(0)
+            w.set_margin_start(0)
+            w.set_margin_end(0)
+
+        h = max(0, self.get_height())
+        third = max(48, h // 6)            # lower/upper third offset
+        notch = 40                         # gap for notch in portrait
+        side = 24                          # shutter side inset
+        bar_side = 16                      # options-bar side inset
+        end = Gtk.Align.END
+        start = Gtk.Align.START
+        center = Gtk.Align.CENTER
+
+        if orientation == ORIENT_NORMAL:
+            # Shutter: bottom on handedness side, lower third.
+            self._shutter.set_halign(end if right else start)
+            self._shutter.set_valign(end)
+            self._shutter.set_margin_bottom(third)
+            if right:
+                self._shutter.set_margin_end(side)
             else:
-                self._options_bar.set_margin_start(16)
-                self._options_bar.set_margin_end(0)
-        else:
-            # Lower third: button centre roughly at h * 5/6. Uses the
-            # current window height so the absolute pixel offset stays
-            # sensible across screen sizes.
-            h = max(0, self.get_height())
-            self._shutter.set_valign(Gtk.Align.END)
-            self._shutter.set_margin_bottom(max(48, h // 6))
-            # Options bar: horizontal row centred above the picture, in
-            # the top letterbox. Even when the letterbox is thin the row
-            # is ~56 px tall and fits.
+                self._shutter.set_margin_start(side)
+            # Options: top centre, 40 px gap from the notch.
             self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
-            self._options_bar.set_halign(Gtk.Align.CENTER)
-            self._options_bar.set_valign(Gtk.Align.START)
-            self._options_bar.set_margin_top(16)
-            self._options_bar.set_margin_start(0)
-            self._options_bar.set_margin_end(0)
+            self._options_bar.set_halign(center)
+            self._options_bar.set_valign(start)
+            self._options_bar.set_margin_top(notch)
+
+        elif orientation == ORIENT_BOTTOM_UP:
+            # 180-deg-rotated normal: shutter on the OPPOSITE side,
+            # upper third; settings at the bottom (now visually top).
+            self._shutter.set_halign(start if right else end)
+            self._shutter.set_valign(start)
+            self._shutter.set_margin_top(third)
+            if right:
+                self._shutter.set_margin_start(side)
+            else:
+                self._shutter.set_margin_end(side)
+            self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+            self._options_bar.set_halign(center)
+            self._options_bar.set_valign(end)
+            self._options_bar.set_margin_bottom(notch)
+
+        elif orientation == ORIENT_LEFT_UP:
+            # Querformat: shutter on handedness side, vertical centre.
+            self._shutter.set_halign(end if right else start)
+            self._shutter.set_valign(center)
+            if right:
+                self._shutter.set_margin_end(side)
+            else:
+                self._shutter.set_margin_start(side)
+            # Options bar on the opposite side (vertical column).
+            self._options_bar.set_orientation(Gtk.Orientation.VERTICAL)
+            self._options_bar.set_halign(start if right else end)
+            self._options_bar.set_valign(center)
+            if right:
+                self._options_bar.set_margin_start(bar_side)
+            else:
+                self._options_bar.set_margin_end(bar_side)
+
+        elif orientation == ORIENT_RIGHT_UP:
+            # 180-deg-rotated left-up: shutter on the OPPOSITE side.
+            self._shutter.set_halign(start if right else end)
+            self._shutter.set_valign(center)
+            if right:
+                self._shutter.set_margin_start(side)
+            else:
+                self._shutter.set_margin_end(side)
+            self._options_bar.set_orientation(Gtk.Orientation.VERTICAL)
+            self._options_bar.set_halign(end if right else start)
+            self._options_bar.set_valign(center)
+            if right:
+                self._options_bar.set_margin_end(bar_side)
+            else:
+                self._options_bar.set_margin_start(bar_side)
 
     def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
         # Fallback path when the accelerometer isn't available (desktop
-        # builds, kiosks, etc.). Hysteresis avoids flapping near 1:1.
-        # Only the portrait/landscape boolean is inferred here; the
-        # 180-degree distinction (normal vs bottom-up, left-up vs
-        # right-up) is unavailable without a real sensor, so the device
-        # orientation stays at "normal" / "left-up" as a reasonable
-        # default for EXIF purposes.
+        # builds, kiosks, etc.). Without a sensor we can only infer
+        # portrait/landscape from the window size, so we collapse the
+        # 4-state space to `normal` / `left-up`. Hysteresis avoids
+        # flapping near 1:1 aspect ratios.
         w = self.get_width()
         h = self.get_height()
         if w <= 0 or h <= 0:
@@ -2022,11 +2070,10 @@ class CameraWindow(Adw.Window):
             landscape = w > h * 1.05
         else:
             landscape = w > h * 1.25
-        if landscape != self._layout_landscape:
-            self._device_orientation = (
-                ORIENT_LEFT_UP if landscape else ORIENT_NORMAL
-            )
-            self._apply_layout_for(landscape)
+        new = ORIENT_LEFT_UP if landscape else ORIENT_NORMAL
+        if new != self._applied_layout:
+            self._device_orientation = new
+            self._apply_layout_for(new)
         return True
 
     def _refresh_timer_button(self) -> None:
