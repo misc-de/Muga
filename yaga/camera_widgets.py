@@ -182,7 +182,10 @@ class RotatableSwitch(Gtk.Switch):
     """Gtk.Switch that paints rotated around its centre, like the icons
     and labels. The switch's input still hits the original axis-aligned
     bounds, which is fine because a tap anywhere on the switch toggles
-    it — the rotation is purely visual."""
+    it — the rotation is purely visual.
+
+    Like RotatableLabel, the measure pass swaps width/height for
+    90°/270° so the parent box allocates the rotated-bounds space."""
 
     __gtype_name__ = "YagaRotatableSwitch"
 
@@ -193,8 +196,22 @@ class RotatableSwitch(Gtk.Switch):
     def set_rotation_deg(self, deg: float) -> None:
         if abs(deg - self._rotation_deg) < 0.5:
             return
+        old = self._rotation_deg
         self._rotation_deg = deg
-        self.queue_draw()
+        if (int(old) % 180 == 90) != (int(deg) % 180 == 90):
+            self.queue_resize()
+        else:
+            self.queue_draw()
+
+    def do_measure(self, orientation, for_size):  # type: ignore[override]
+        if int(self._rotation_deg) % 180 == 90:
+            opp = (
+                Gtk.Orientation.VERTICAL
+                if orientation == Gtk.Orientation.HORIZONTAL
+                else Gtk.Orientation.HORIZONTAL
+            )
+            return Gtk.Switch.do_measure(self, opp, for_size)
+        return Gtk.Switch.do_measure(self, orientation, for_size)
 
     def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
         if self._rotation_deg == 0:
@@ -213,10 +230,13 @@ class RotatableSwitch(Gtk.Switch):
 class RotatableLabel(Gtk.Label):
     """Same snapshot-rotation trick as RotatableIcon but for text, so
     the timer's "3s" / "10s" label can rotate with device orientation.
-    Bounding box stays axis-aligned, so the button's hit area is
-    unaffected and the rotated text remains inside the button as long
-    as it would have fit unrotated (true for the 1-3 char timer
-    strings)."""
+
+    For 90°/270° rotations we also swap the measured width/height —
+    the label paints rotated, so its parent box needs to allocate
+    rotated-bounds space, not the unrotated text extents. Without
+    that, a "Geotagging" label gets a wide-and-short slot and the
+    rotated text spills outside its widget bounds (clipping the
+    leading 'G' on the screen)."""
 
     __gtype_name__ = "YagaRotatableLabel"
 
@@ -227,8 +247,26 @@ class RotatableLabel(Gtk.Label):
     def set_rotation_deg(self, deg: float) -> None:
         if abs(deg - self._rotation_deg) < 0.5:
             return
+        old = self._rotation_deg
         self._rotation_deg = deg
-        self.queue_draw()
+        # If we just crossed a 90° boundary, the measured size has
+        # flipped — request a re-layout so the parent box reallocates.
+        if (int(old) % 180 == 90) != (int(deg) % 180 == 90):
+            self.queue_resize()
+        else:
+            self.queue_draw()
+
+    def do_measure(self, orientation, for_size):  # type: ignore[override]
+        if int(self._rotation_deg) % 180 == 90:
+            # Rotated 90°/270°: ask Gtk.Label for the perpendicular
+            # axis so the rotated text gets the slot it visually needs.
+            opp = (
+                Gtk.Orientation.VERTICAL
+                if orientation == Gtk.Orientation.HORIZONTAL
+                else Gtk.Orientation.HORIZONTAL
+            )
+            return Gtk.Label.do_measure(self, opp, for_size)
+        return Gtk.Label.do_measure(self, orientation, for_size)
 
     def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
         if self._rotation_deg == 0:
