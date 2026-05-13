@@ -27,6 +27,7 @@ except (ValueError, ImportError):
 from . import camera_controls
 from .camera_controls import V4l2Control
 from .camera_geo import GeoClient
+from .camera_orientation import OrientationClient
 
 LOGGER = logging.getLogger(__name__)
 
@@ -823,11 +824,21 @@ class CameraWindow(Adw.Window):
         self._shutter.set_tooltip_text(self._("Capture"))
         self._shutter.connect("clicked", lambda _b: self._on_shutter())
         overlay.add_overlay(self._shutter)
-        # Initial valign — overwritten as soon as the orientation tick
-        # fires with a real allocation.
+        # Initial valign — overwritten as soon as the sensor (or, on
+        # desktops without an accelerometer, the tick fallback) reports a
+        # real orientation.
         self._shutter.set_valign(Gtk.Align.CENTER)
         self._layout_landscape: bool | None = None
-        self.add_tick_callback(self._on_orientation_tick)
+        # Prefer the device accelerometer (iio-sensor-proxy) over window
+        # dimensions. On phones with Phosh the surface size doesn't
+        # change on screen rotation — the compositor rotates the buffer
+        # instead — so polling get_width/get_height never sees the
+        # transition. The sensor signals it cleanly. If the sensor isn't
+        # available the tick callback fills in.
+        self._orientation = OrientationClient()
+        if not self._orientation.start(self._apply_orientation_landscape):
+            self._orientation = None
+            self.add_tick_callback(self._on_orientation_tick)
 
         # Camera-switch — only added when more than one capture device exists.
         # Sits in the bottom corner on the *opposite* side of the shutter
@@ -1895,23 +1906,16 @@ class CameraWindow(Adw.Window):
         else:
             self._start_countdown(delay)
 
-    def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
-        # Polls the window dimensions and repositions the shutter button:
-        # vertically centred in landscape, in the lower third in portrait.
-        # Hysteresis prevents flapping near 1:1 aspect ratios.
-        w = self.get_width()
-        h = self.get_height()
-        if w <= 0 or h <= 0:
-            return True  # GLib.SOURCE_CONTINUE
-        if self._layout_landscape:
-            landscape = w > h * 1.05
-        else:
-            landscape = w > h * 1.25
+    def _apply_orientation_landscape(self, landscape: bool) -> None:
+        # Position the shutter for the new orientation. Called by either
+        # the accelerometer (OrientationClient.on_change) or the window-
+        # size tick fallback. Idempotent: a no-op if the orientation is
+        # already the one applied.
         if landscape == self._layout_landscape:
-            return True
+            return
         import sys
         print(
-            f"[yaga.camera] orientation {w}x{h} -> "
+            f"[yaga.camera] orientation -> "
             f"{'landscape' if landscape else 'portrait'}",
             file=sys.stderr, flush=True,
         )
@@ -1920,11 +1924,26 @@ class CameraWindow(Adw.Window):
             self._shutter.set_valign(Gtk.Align.CENTER)
             self._shutter.set_margin_bottom(0)
         else:
-            # Lower third: vertical centre of the bottom 1/3 of the
-            # window. Button height is ~76 px so we subtract that to
-            # land its centre roughly at h * 5/6.
+            # Lower third: button centre roughly at h * 5/6. Uses the
+            # current window height so the absolute pixel offset stays
+            # sensible across screen sizes.
+            h = max(0, self.get_height())
             self._shutter.set_valign(Gtk.Align.END)
             self._shutter.set_margin_bottom(max(48, h // 6))
+
+    def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
+        # Fallback path when the accelerometer isn't available (desktop
+        # builds, kiosks, etc.). Hysteresis avoids flapping near 1:1.
+        w = self.get_width()
+        h = self.get_height()
+        if w <= 0 or h <= 0:
+            return True  # GLib.SOURCE_CONTINUE
+        if self._layout_landscape:
+            landscape = w > h * 1.05
+        else:
+            landscape = w > h * 1.25
+        if landscape != self._layout_landscape:
+            self._apply_orientation_landscape(landscape)
         return True
 
     def _refresh_timer_button(self) -> None:
@@ -2406,4 +2425,7 @@ class CameraWindow(Adw.Window):
         if self._geo is not None:
             self._geo.stop()
             self._geo = None
+        if self._orientation is not None:
+            self._orientation.stop()
+            self._orientation = None
         return False
