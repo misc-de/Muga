@@ -457,55 +457,103 @@ def _device_kinds(caps: Any) -> set[str]:
 # ----------------------------------------------------------------------
 
 
-def _corner_bracket(corner: str) -> Gtk.DrawingArea:
-    """A single L-shaped viewfinder corner. corner ∈ {tl, tr, bl, br}."""
-    area = Gtk.DrawingArea()
-    area.set_content_width(28)
-    area.set_content_height(28)
+class _ImageChrome(Gtk.DrawingArea):
+    """Single overlay that draws the L-shaped viewfinder corner brackets
+    and (optionally) a rule-of-thirds grid, both positioned to the actual
+    letterboxed image area inside the Gtk.Picture — not the widget
+    allocation. Without this, on a tall phone window the brackets sit on
+    the black bars instead of on the visible image.
 
-    def draw(_da: Gtk.DrawingArea, cr: Any, w: int, h: int) -> None:
+    Mirrors Gtk.ContentFit.CONTAIN's centred-letterbox math plus
+    MirroredPicture.set_zoom()'s centred scale, so brackets track the
+    image through resolution changes and pinch-zoom."""
+
+    __gtype_name__ = "YagaImageChrome"
+
+    def __init__(self, picture: Gtk.Picture) -> None:
+        super().__init__()
+        self._picture = picture
+        self._grid_visible = False
+        self.set_hexpand(True)
+        self.set_vexpand(True)
+        self.set_can_target(False)
+        self.set_draw_func(self._on_draw)
+
+    def set_grid_visible(self, visible: bool) -> None:
+        if self._grid_visible == visible:
+            return
+        self._grid_visible = visible
+        self.queue_draw()
+
+    def get_grid_visible(self) -> bool:
+        return self._grid_visible
+
+    def _image_rect(self, w: int, h: int) -> tuple[float, float, float, float]:
+        paintable = self._picture.get_paintable()
+        intr_w = paintable.get_intrinsic_width() if paintable is not None else 0
+        intr_h = paintable.get_intrinsic_height() if paintable is not None else 0
+        if intr_w <= 0 or intr_h <= 0:
+            # No frame yet — fall back to widget bounds so the brackets
+            # at least show up while the pipeline is still negotiating.
+            return (0.0, 0.0, float(w), float(h))
+        scale = min(w / intr_w, h / intr_h)
+        img_w = intr_w * scale
+        img_h = intr_h * scale
+        off_x = (w - img_w) / 2
+        off_y = (h - img_h) / 2
+        zoom = getattr(self._picture, "get_zoom", lambda: 1.0)()
+        if zoom != 1.0:
+            cx, cy = w / 2, h / 2
+            off_x = cx - (cx - off_x) * zoom
+            off_y = cy - (cy - off_y) * zoom
+            img_w *= zoom
+            img_h *= zoom
+        left = max(0.0, off_x)
+        top = max(0.0, off_y)
+        right = min(float(w), off_x + img_w)
+        bottom = min(float(h), off_y + img_h)
+        return (left, top, max(0.0, right - left), max(0.0, bottom - top))
+
+    def _on_draw(
+        self, _da: Gtk.DrawingArea, cr: Any, w: int, h: int
+    ) -> None:
+        x, y, rw, rh = self._image_rect(w, h)
+        if rw <= 0 or rh <= 0:
+            return
+
+        # Rule-of-thirds grid, clipped to the image rect.
+        if self._grid_visible:
+            for offset, alpha, white in ((1.0, 0.35, False), (0.0, 0.75, True)):
+                if white:
+                    cr.set_source_rgba(1, 1, 1, alpha)
+                else:
+                    cr.set_source_rgba(0, 0, 0, alpha)
+                cr.set_line_width(1.0)
+                for i in (1, 2):
+                    gx = x + rw * i / 3 + offset
+                    cr.move_to(gx, y); cr.line_to(gx, y + rh)
+                    gy = y + rh * i / 3 + offset
+                    cr.move_to(x, gy); cr.line_to(x + rw, gy)
+                cr.stroke()
+
+        # Corner brackets, inset from the image corners. Length scales
+        # gently with the smaller image dimension so the brackets stay
+        # proportional across resolutions and zoom levels.
         cr.set_source_rgba(1, 1, 1, 0.85)
         cr.set_line_width(2.0)
         cr.set_line_cap(1)
-        pad = 3
-        length = min(w, h) - pad - 4
-        if corner == "tl":
-            cr.move_to(pad, pad + length); cr.line_to(pad, pad); cr.line_to(pad + length, pad)
-        elif corner == "tr":
-            cr.move_to(w - pad - length, pad); cr.line_to(w - pad, pad); cr.line_to(w - pad, pad + length)
-        elif corner == "bl":
-            cr.move_to(pad, h - pad - length); cr.line_to(pad, h - pad); cr.line_to(pad + length, h - pad)
-        else:
-            cr.move_to(w - pad - length, h - pad); cr.line_to(w - pad, h - pad); cr.line_to(w - pad, h - pad - length)
+        inset = 12.0
+        length = max(12.0, min(rw, rh) * 0.06)
+        for cx, cy, dx, dy in (
+            (x + inset,       y + inset,       +1, +1),
+            (x + rw - inset,  y + inset,       -1, +1),
+            (x + inset,       y + rh - inset,  +1, -1),
+            (x + rw - inset,  y + rh - inset,  -1, -1),
+        ):
+            cr.move_to(cx, cy + dy * length)
+            cr.line_to(cx, cy)
+            cr.line_to(cx + dx * length, cy)
         cr.stroke()
-
-    area.set_draw_func(draw)
-    area.set_can_target(False)
-    return area
-
-
-def _grid_overlay() -> Gtk.DrawingArea:
-    """Rule-of-thirds grid spanning the viewport."""
-    area = Gtk.DrawingArea()
-    area.set_hexpand(True)
-    area.set_vexpand(True)
-
-    def draw(_da: Gtk.DrawingArea, cr: Any, w: int, h: int) -> None:
-        # Faint dark shadow first, then white lines on top — gives the grid
-        # legibility on both bright and dark scenes.
-        for offset, alpha in ((1.0, 0.35), (0.0, 0.75)):
-            cr.set_source_rgba(0 if alpha < 0.5 else 1, 0 if alpha < 0.5 else 1, 0 if alpha < 0.5 else 1, alpha)
-            cr.set_line_width(1.0)
-            for i in (1, 2):
-                x = w * i / 3 + offset
-                cr.move_to(x, 0); cr.line_to(x, h)
-                y = h * i / 3 + offset
-                cr.move_to(0, y); cr.line_to(w, y)
-            cr.stroke()
-
-    area.set_draw_func(draw)
-    area.set_can_target(False)
-    return area
 
 
 class MirroredPicture(Gtk.Picture):
@@ -640,24 +688,13 @@ class CameraWindow(Adw.Window):
         self._picture.set_content_fit(Gtk.ContentFit.CONTAIN)
         overlay.set_child(self._picture)
 
-        # Grid overlay — toggleable, sits beneath every chrome element.
-        self._grid = _grid_overlay()
-        self._grid.set_visible(False)
-        overlay.add_overlay(self._grid)
-
-        # Corner brackets — pure decoration, always present.
-        for corner, halign, valign, mt, mb, ms, me in (
-            ("tl", Gtk.Align.START,  Gtk.Align.START, 12, 0, 12, 0),
-            ("tr", Gtk.Align.END,    Gtk.Align.START, 12, 0, 0, 12),
-            ("bl", Gtk.Align.START,  Gtk.Align.END,   0, 12, 12, 0),
-            ("br", Gtk.Align.END,    Gtk.Align.END,   0, 12, 0, 12),
-        ):
-            bracket = _corner_bracket(corner)
-            bracket.set_halign(halign)
-            bracket.set_valign(valign)
-            bracket.set_margin_top(mt); bracket.set_margin_bottom(mb)
-            bracket.set_margin_start(ms); bracket.set_margin_end(me)
-            overlay.add_overlay(bracket)
+        # Brackets + rule-of-thirds grid in a single overlay that tracks
+        # the actual letterboxed image rect (not the widget allocation).
+        # On a tall phone window the camera image is letterboxed inside
+        # the picture widget, so widget-anchored brackets land on the
+        # black bars; this places them on the image instead.
+        self._chrome = _ImageChrome(self._picture)
+        overlay.add_overlay(self._chrome)
 
         # Screen-flash overlay — white box that briefly fades over the preview
         # right after capture. No CSS needed; we toggle visibility + opacity.
@@ -1143,6 +1180,18 @@ class CameraWindow(Adw.Window):
                 paintable = sink.get_property("paintable")
                 if paintable is not None:
                     self._picture.set_paintable(paintable)
+                    # The paintable's intrinsic size becomes known when the
+                    # first frame arrives and changes when the source
+                    # renegotiates caps; the chrome needs to redraw at
+                    # those points so the brackets snap onto the new image
+                    # rect instead of staying around the previous one.
+                    try:
+                        paintable.connect(
+                            "invalidate-size",
+                            lambda _p: self._chrome.queue_draw(),
+                        )
+                    except Exception:
+                        LOGGER.debug("invalidate-size hookup failed", exc_info=True)
             except Exception:
                 LOGGER.debug("Could not bind preview paintable", exc_info=True)
         else:
@@ -1865,7 +1914,7 @@ class CameraWindow(Adw.Window):
 
     def _on_grid_toggled(self, btn: Gtk.ToggleButton) -> None:
         self._grid_on = btn.get_active()
-        self._grid.set_visible(self._grid_on)
+        self._chrome.set_grid_visible(self._grid_on)
 
     # ------------------------------------------------------------------
     # Zoom (digital, widget-snapshot only)
@@ -1875,6 +1924,8 @@ class CameraWindow(Adw.Window):
         zoom = max(1.0, min(self._zoom_max, zoom))
         self._zoom = zoom
         self._picture.set_zoom(zoom)
+        # Brackets/grid follow the zoomed image rect, so redraw them too.
+        self._chrome.queue_draw()
 
     def _on_zoom_begin(self, _gesture: Gtk.GestureZoom, _seq: Any) -> None:
         self._zoom_base = self._zoom
