@@ -760,6 +760,13 @@ class CameraWindow(Adw.Window):
         # resolution as a HAL-encoded JPEG.
         self._imgsink: Any = None
         self._capture_signal_sink: Any = None
+        # Caps-swap state: when we capture on the vfsrc+jpegenc fallback
+        # with the Halium 720p cap in place, we temporarily lift the
+        # cap to force droidcamsrc to renegotiate to native resolution,
+        # then restore. Low-res frames still in flight from before the
+        # renegotiation are filtered out via _capture_min_width.
+        self._capture_saved_caps: Any = None
+        self._capture_min_width: int = 0
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
         self._preview_frame_count = 0
@@ -2663,6 +2670,38 @@ class CameraWindow(Adw.Window):
         )
         self._busy_capture = True
         self._shutter.set_sensitive(False)
+
+        # If we're on the vfsrc+jpegenc fallback path and the source is
+        # currently 720p-capped (Halium default), temporarily change
+        # the capsfilter to forbid the 720p range. That triggers a
+        # caps renegotiation through to droidcamsrc, which then
+        # reconfigures its HAL session to the sensor-native resolution.
+        # The original cap is restored in _close_valve_and_disconnect.
+        self._capture_min_width = 0
+        self._capture_saved_caps = None
+        if (sink is self._appsink
+                and self._capsfilter is not None
+                and self._capsfilter.get_name() == "halium_default_cap"):
+            try:
+                self._capture_saved_caps = self._capsfilter.get_property("caps")
+                highres = self._Gst.Caps.from_string(
+                    "video/x-raw,width=(int)[1281,99999]"
+                )
+                self._capsfilter.set_property("caps", highres)
+                self._capture_min_width = 1281
+                print(
+                    "[yaga.camera] capture: caps swapped to high-res "
+                    "(waiting for renegotiated frame)",
+                    file=sys.stderr, flush=True,
+                )
+            except Exception as exc:
+                self._capture_saved_caps = None
+                self._capture_min_width = 0
+                print(
+                    f"[yaga.camera] capture: caps swap failed: {exc}",
+                    file=sys.stderr, flush=True,
+                )
+
         self._capture_signal_id = sink.connect(
             "new-sample", self._on_capture_sample
         )
@@ -2693,9 +2732,10 @@ class CameraWindow(Adw.Window):
                 )
 
         # Safety timeout — generous because the HAL may take a moment
-        # to capture (AF, exposure, encode) at full resolution.
+        # to capture (AF, exposure, encode) at full resolution, and the
+        # caps-swap path also has to wait for HAL reconfigure.
         self._capture_timeout_id = GLib.timeout_add_seconds(
-            10, self._on_capture_timeout
+            15, self._on_capture_timeout
         )
 
     def _close_valve_and_disconnect(self) -> None:
@@ -2714,6 +2754,19 @@ class CameraWindow(Adw.Window):
         if self._capture_timeout_id is not None:
             GLib.source_remove(self._capture_timeout_id)
             self._capture_timeout_id = None
+        # Put the Halium 720p cap back if we lifted it for this capture.
+        if self._capture_saved_caps is not None and self._capsfilter is not None:
+            try:
+                self._capsfilter.set_property("caps", self._capture_saved_caps)
+                import sys
+                print(
+                    "[yaga.camera] capture: restored 720p preview cap",
+                    file=sys.stderr, flush=True,
+                )
+            except Exception:
+                pass
+        self._capture_saved_caps = None
+        self._capture_min_width = 0
 
     def _on_capture_sample(self, sink: Any) -> Any:
         gst = self._Gst
@@ -2726,8 +2779,29 @@ class CameraWindow(Adw.Window):
                 f"[yaga.camera] capture: pull-sample failed: {exc}",
                 file=sys.stderr, flush=True,
             )
+        if sample is None:
+            return gst.FlowReturn.OK
+        # If a caps-swap is in progress, drop in-flight low-res frames
+        # so the saved photo is from after the HAL renegotiation.
+        if self._capture_min_width > 0:
+            caps = sample.get_caps()
+            s = caps.get_structure(0) if caps is not None and caps.get_size() > 0 else None
+            ok_w, w = (s.get_int("width") if s is not None else (False, 0))
+            if ok_w and w < self._capture_min_width:
+                print(
+                    f"[yaga.camera] capture: skipping low-res frame "
+                    f"({w}px, waiting for >={self._capture_min_width}px)",
+                    file=sys.stderr, flush=True,
+                )
+                return gst.FlowReturn.OK
+            # First matching frame — stop filtering.
+            self._capture_min_width = 0
+            print(
+                f"[yaga.camera] capture: high-res frame received ({w}px)",
+                file=sys.stderr, flush=True,
+            )
         print(
-            f"[yaga.camera] capture: new-sample received (sample={sample is not None})",
+            "[yaga.camera] capture: new-sample received (sample=True)",
             file=sys.stderr, flush=True,
         )
         # Disconnect + close valve from the main loop, then write the file.
