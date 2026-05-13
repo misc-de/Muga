@@ -2071,29 +2071,62 @@ class CameraWindow(Adw.Window):
             self._options_bar.set_valign(end)
             self._options_bar.set_margin_bottom(notch)
 
-        elif orientation in (ORIENT_LEFT_UP, ORIENT_RIGHT_UP):
-            # Querformat (both tilt directions): shutter sits in the
-            # bottom corner on the handedness side; settings line up as
-            # a vertical column on the opposite side. The 180-deg flip
-            # between left-up and right-up only matters for the EXIF
-            # tag — visually we treat them identically because the user
-            # holds the phone in landscape with their thumb at the
-            # bottom corner regardless of which way they rotated.
-            self._shutter.set_halign(end if right else start)
-            self._shutter.set_valign(end)
-            self._shutter.set_margin_bottom(side)
+        elif orientation == ORIENT_LEFT_UP:
+            # Phone rotated CW 90° (left side physically up). Compositor
+            # keeps the widget in portrait dims, so what the user sees
+            # as "right" is the widget's top edge, "left" is the widget
+            # bottom edge, "bottom" is the widget's right side, etc.
+            # The options bar stays HORIZONTAL (icons in widget-x) so
+            # that after the user's 90° view tilt it reads as a single
+            # vertical column on the user's left/right side.
             if right:
+                # User's bottom-right corner = widget top-right.
+                self._shutter.set_halign(end)
+                self._shutter.set_valign(start)
+                self._shutter.set_margin_top(side)
                 self._shutter.set_margin_end(side)
+                # User's left edge = widget bottom edge.
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(end)
+                self._options_bar.set_margin_bottom(bar_side)
             else:
-                self._shutter.set_margin_start(side)
-            # Options bar on the opposite side (vertical column).
-            self._options_bar.set_orientation(Gtk.Orientation.VERTICAL)
-            self._options_bar.set_halign(start if right else end)
-            self._options_bar.set_valign(center)
+                # User's bottom-left corner = widget bottom-right.
+                self._shutter.set_halign(end)
+                self._shutter.set_valign(end)
+                self._shutter.set_margin_bottom(side)
+                self._shutter.set_margin_end(side)
+                # User's right edge = widget top edge.
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(start)
+                self._options_bar.set_margin_top(bar_side)
+
+        elif orientation == ORIENT_RIGHT_UP:
+            # Phone rotated CCW 90° (right side physically up). Mirror
+            # of LEFT_UP about both axes.
             if right:
-                self._options_bar.set_margin_start(bar_side)
+                # User's bottom-right corner = widget bottom-left.
+                self._shutter.set_halign(start)
+                self._shutter.set_valign(end)
+                self._shutter.set_margin_bottom(side)
+                self._shutter.set_margin_start(side)
+                # User's left edge = widget top edge.
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(start)
+                self._options_bar.set_margin_top(bar_side)
             else:
-                self._options_bar.set_margin_end(bar_side)
+                # User's bottom-left corner = widget top-left.
+                self._shutter.set_halign(start)
+                self._shutter.set_valign(start)
+                self._shutter.set_margin_top(side)
+                self._shutter.set_margin_start(side)
+                # User's right edge = widget bottom edge.
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(end)
+                self._options_bar.set_margin_bottom(bar_side)
 
     def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
         # Fallback path when the accelerometer isn't available (desktop
