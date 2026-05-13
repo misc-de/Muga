@@ -27,7 +27,14 @@ except (ValueError, ImportError):
 from . import camera_controls
 from .camera_controls import V4l2Control
 from .camera_geo import GeoClient
-from .camera_orientation import OrientationClient
+from .camera_orientation import (
+    OrientationClient,
+    ORIENT_NORMAL,
+    ORIENT_BOTTOM_UP,
+    ORIENT_LEFT_UP,
+    ORIENT_RIGHT_UP,
+    is_landscape as orientation_is_landscape,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -773,7 +780,7 @@ class CameraWindow(Adw.Window):
 
         # Mode-options bar (grid toggle, self-timer, resolution picker,
         # camera gear, geotag). Orientation and anchoring are managed by
-        # _apply_orientation_landscape so the bar always sits outside the
+        # _apply_layout_for so the bar always sits outside the
         # camera image rect, never on top of it:
         #   portrait  -> horizontal row centred above the picture (fits
         #                in the top letterbox even when it's only ~80 px)
@@ -854,15 +861,16 @@ class CameraWindow(Adw.Window):
         # desktops without an accelerometer, the tick fallback) reports a
         # real orientation.
         self._shutter.set_valign(Gtk.Align.CENTER)
+        self._device_orientation: str = ORIENT_NORMAL
         self._layout_landscape: bool | None = None
-        # Prefer the device accelerometer (iio-sensor-proxy) over window
-        # dimensions. On phones with Phosh the surface size doesn't
-        # change on screen rotation — the compositor rotates the buffer
-        # instead — so polling get_width/get_height never sees the
-        # transition. The sensor signals it cleanly. If the sensor isn't
-        # available the tick callback fills in.
+        # Prefer the device accelerometer over window dimensions. On
+        # phones with Phosh the surface size doesn't change on screen
+        # rotation — the compositor rotates the buffer instead — so
+        # polling get_width/get_height never sees the transition. The
+        # sensor signals it cleanly. If the sensor isn't available the
+        # tick callback fills in.
         self._orientation = OrientationClient()
-        if not self._orientation.start(self._apply_orientation_landscape):
+        if not self._orientation.start(self._on_orientation_changed):
             self._orientation = None
             self.add_tick_callback(self._on_orientation_tick)
 
@@ -1942,19 +1950,24 @@ class CameraWindow(Adw.Window):
         else:
             self._start_countdown(delay)
 
-    def _apply_orientation_landscape(self, landscape: bool) -> None:
+    def _on_orientation_changed(self, orientation: str) -> None:
+        # Sensor callback. Stores the full 4-state value (used by the
+        # EXIF writer to tag captured photos with the right rotation)
+        # and reapplies the shutter / options-bar layout for the
+        # portrait-vs-landscape boolean derived from it.
+        self._device_orientation = orientation
+        self._apply_layout_for(orientation_is_landscape(orientation))
+
+    def _apply_layout_for(self, landscape: bool) -> None:
         # Position the shutter + options bar for the new orientation.
-        # Called by either the accelerometer (OrientationClient.on_change)
-        # or the window-size tick fallback. Idempotent: a no-op if the
-        # orientation is already the one applied.
+        # The shutter always sits on the *user's* preferred side via
+        # halign — Phosh's compositor rotates the surface buffer so
+        # halign=END always lands at the user's right regardless of
+        # which physical phone edge is currently up. valign and the
+        # adjacent margin do the visible "wandering" between
+        # portrait (lower third) and landscape (vertical centre).
         if landscape == self._layout_landscape:
             return
-        import sys
-        print(
-            f"[yaga.camera] orientation -> "
-            f"{'landscape' if landscape else 'portrait'}",
-            file=sys.stderr, flush=True,
-        )
         self._layout_landscape = landscape
         if landscape:
             # Shutter: vertical centre on the handedness side.
@@ -1996,6 +2009,11 @@ class CameraWindow(Adw.Window):
     def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
         # Fallback path when the accelerometer isn't available (desktop
         # builds, kiosks, etc.). Hysteresis avoids flapping near 1:1.
+        # Only the portrait/landscape boolean is inferred here; the
+        # 180-degree distinction (normal vs bottom-up, left-up vs
+        # right-up) is unavailable without a real sensor, so the device
+        # orientation stays at "normal" / "left-up" as a reasonable
+        # default for EXIF purposes.
         w = self.get_width()
         h = self.get_height()
         if w <= 0 or h <= 0:
@@ -2005,7 +2023,10 @@ class CameraWindow(Adw.Window):
         else:
             landscape = w > h * 1.25
         if landscape != self._layout_landscape:
-            self._apply_orientation_landscape(landscape)
+            self._device_orientation = (
+                ORIENT_LEFT_UP if landscape else ORIENT_NORMAL
+            )
+            self._apply_layout_for(landscape)
         return True
 
     def _refresh_timer_button(self) -> None:
@@ -2391,6 +2412,24 @@ class CameraWindow(Adw.Window):
             md.set_tag_string("Exif.Image.DateTime", now)
             md.set_tag_string("Exif.Photo.DateTimeOriginal", now)
             md.set_tag_string("Exif.Photo.DateTimeDigitized", now)
+
+            # EXIF orientation tag from the device's accelerometer-based
+            # 4-state lay at the moment of capture. Lets the gallery
+            # display upright regardless of how the phone was held:
+            #   1 = top-left   (no rotation needed)
+            #   3 = bottom-right (rotate 180 deg)
+            #   6 = right-top   (rotate 90 deg clockwise)
+            #   8 = left-bottom (rotate 90 deg counter-clockwise)
+            # Mapping assumes the sensor's top edge aligns with the
+            # device's top edge — true for most phone modules. If shots
+            # come out rotated, this is the table to revisit.
+            exif_orientation = {
+                ORIENT_NORMAL:    1,
+                ORIENT_BOTTOM_UP: 3,
+                ORIENT_LEFT_UP:   6,
+                ORIENT_RIGHT_UP:  8,
+            }.get(self._device_orientation, 1)
+            md.set_tag_string("Exif.Image.Orientation", str(exif_orientation))
 
             # Geotag if the user has opted in and we have a fresh fix.
             if self._geo is not None:

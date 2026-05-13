@@ -1,26 +1,29 @@
 """Device orientation backend for the camera viewfinder.
 
-Tries two transports, in order:
+Reports a 4-state device orientation matching iio-sensor-proxy's
+vocabulary:
 
-  1. **sensord (com.nokia.SensorService).** This is what the Halium /
-     gst-droid stack provides on FuriOS, Droidian, etc. — phones whose
-     accelerometer is exposed via the Nokia SensorService daemon (`sensord`).
-     We follow the same pattern Sensor-Suite uses
-     (https://github.com/misc-de/Sensor-Suite):
-       - load + request the accelerometer plugin over D-Bus on the
-         system bus,
-       - then read raw samples from /run/sensord.sock (binary protocol),
-       - and stop/release on close.
+  - "normal"     : portrait, top of device up (default "richtig herum")
+  - "bottom-up"  : portrait, top down (upside-down, "falsch herum")
+  - "left-up"    : landscape, left device edge up
+  - "right-up"   : landscape, right device edge up
 
-  2. **iio-sensor-proxy (net.hadess.SensorProxy).** Standard on most
-     desktop Linux distros. Reports an `AccelerometerOrientation` string
-     directly, so we don't have to interpret raw axes.
+Two transports, tried in order:
+
+  1. **sensord (com.nokia.SensorService)** — what the Halium / gst-droid
+     stack provides on FuriOS / Droidian. We follow the Sensor-Suite
+     pattern (https://github.com/misc-de/Sensor-Suite): load + request
+     the accelerometer plugin over D-Bus, then read raw samples from
+     /run/sensord.sock and classify the 4-state lay from the X/Y axes.
+  2. **iio-sensor-proxy (net.hadess.SensorProxy)** — standard on desktop
+     Linux distros. Already publishes the 4-state string directly.
 
 Whichever connects, the client exposes the same surface:
 
     client = OrientationClient()
-    if client.start(on_change=lambda landscape: ...):
-        # transitions fire on_change(True/False) after hysteresis
+    if client.start(on_change=lambda orientation: ...):
+        # on_change("normal" | "bottom-up" | "left-up" | "right-up")
+        # fires after hysteresis on every transition
     client.stop()
 
 If neither backend is available `start()` returns False and the caller
@@ -32,11 +35,24 @@ import logging
 import os
 import socket as _socket
 import struct
+import sys
 from typing import Any, Callable
 
 from gi.repository import Gio, GLib
 
 LOGGER = logging.getLogger(__name__)
+
+# Public orientation values — match iio-sensor-proxy's vocabulary.
+ORIENT_NORMAL = "normal"
+ORIENT_BOTTOM_UP = "bottom-up"
+ORIENT_LEFT_UP = "left-up"
+ORIENT_RIGHT_UP = "right-up"
+ALL_ORIENTATIONS = (ORIENT_NORMAL, ORIENT_BOTTOM_UP, ORIENT_LEFT_UP, ORIENT_RIGHT_UP)
+
+
+def is_landscape(orientation: str) -> bool:
+    return orientation in (ORIENT_LEFT_UP, ORIENT_RIGHT_UP)
+
 
 # --- sensord (Nokia SensorService) ----------------------------------
 
@@ -61,32 +77,43 @@ IIO_PATH = "/net/hadess/SensorProxy"
 IIO_IFACE = "net.hadess.SensorProxy"
 DBUS_PROPS_IFACE = "org.freedesktop.DBus.Properties"
 
-# --- orientation classification -------------------------------------
+# --- classification thresholds --------------------------------------
 
-# Hysteresis thresholds for |x|/(|x|+|y|). Enter landscape only when
-# x dominates clearly (>0.62), exit landscape only when y dominates
-# clearly (<0.38). Avoids flapping when the phone is held near 45 deg.
+# Enter landscape only when the X axis clearly dominates (>0.62 of the
+# combined horizontal magnitude); exit only when it clearly stops
+# dominating (<0.38). Avoids flapping when the phone is held near 45deg.
 _LANDSCAPE_ENTER = 0.62
 _LANDSCAPE_EXIT = 0.38
-# Minimum horizontal-axis magnitude to even classify. If the phone is
-# face-up or face-down, gravity is along z and x/y are both near zero;
-# keep whatever orientation was last in effect.
+# Minimum horizontal magnitude to even classify. If the phone is face-up
+# or face-down the gravity vector is along Z and X/Y are both near zero;
+# in that case we keep whatever orientation was last in effect.
 _MIN_HORIZONTAL_G = 0.30
-# Exponential smoothing factor on the (x, y) samples. Higher = snappier
-# but jitterier; 0.25 reaches ~63% of a step input in 4 samples.
+# Smoothing factor on the (x, y) samples. Higher = snappier but
+# jitterier; 0.25 reaches ~63% of a step input in 4 samples.
 _EWMA_ALPHA = 0.25
 
 
-def _classify_landscape(
-    smoothed_x: float, smoothed_y: float, current_landscape: bool
-) -> bool:
+def _classify_orientation(
+    smoothed_x: float, smoothed_y: float, current: str
+) -> str:
+    """Map a smoothed (x, y) acceleration vector to a 4-state
+    orientation string with hysteresis. Sign conventions are Android-
+    standard: phone in NORMAL portrait => +Y points up in the body
+    frame, so accelerometer reads y ≈ +1g when at rest."""
     ax, ay = abs(smoothed_x), abs(smoothed_y)
     if ax + ay < _MIN_HORIZONTAL_G:
-        return current_landscape
-    ratio = ax / (ax + ay + 1e-9)
-    if current_landscape:
-        return ratio > _LANDSCAPE_EXIT
-    return ratio > _LANDSCAPE_ENTER
+        return current
+    ratio_x = ax / (ax + ay + 1e-9)
+    is_currently_landscape = current in (ORIENT_LEFT_UP, ORIENT_RIGHT_UP)
+    if is_currently_landscape:
+        becoming_landscape = ratio_x > _LANDSCAPE_EXIT
+    else:
+        becoming_landscape = ratio_x > _LANDSCAPE_ENTER
+    if becoming_landscape:
+        # Sign of X picks which side of the device is up.
+        return ORIENT_LEFT_UP if smoothed_x > 0 else ORIENT_RIGHT_UP
+    # Portrait: sign of Y picks normal vs upside-down.
+    return ORIENT_NORMAL if smoothed_y > 0 else ORIENT_BOTTOM_UP
 
 
 # --------------------------------------------------------------------
@@ -96,9 +123,9 @@ def _classify_landscape(
 
 class _SensordBackend:
     """Talks to com.nokia.SensorService for accelerometer samples and
-    decides portrait/landscape from the X/Y axes."""
+    decides the 4-state orientation from the X/Y axes."""
 
-    INTERVAL_MS = 100  # 10 Hz is enough for an orientation flip.
+    INTERVAL_MS = 100  # 10 Hz is plenty for an orientation flip.
 
     def __init__(self) -> None:
         self._bus: Any = None
@@ -109,10 +136,10 @@ class _SensordBackend:
         self._smoothed_x = 0.0
         self._smoothed_y = 0.0
         self._smoothed_seeded = False
-        self._landscape: bool | None = None
-        self._on_change: Callable[[bool], None] | None = None
+        self._orientation: str | None = None
+        self._on_change: Callable[[str], None] | None = None
 
-    def start(self, on_change: Callable[[bool], None] | None) -> bool:
+    def start(self, on_change: Callable[[str], None] | None) -> bool:
         self._on_change = on_change
         try:
             self._bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
@@ -189,7 +216,7 @@ class _SensordBackend:
         self._bus = None
         self._session_id = None
         self._buf = b""
-        self._landscape = None
+        self._orientation = None
         self._smoothed_seeded = False
 
     # --- internals ----------------------------------------------------
@@ -243,27 +270,30 @@ class _SensordBackend:
         else:
             self._smoothed_x += _EWMA_ALPHA * (x - self._smoothed_x)
             self._smoothed_y += _EWMA_ALPHA * (y - self._smoothed_y)
-        current = self._landscape if self._landscape is not None else False
-        landscape = _classify_landscape(
-            self._smoothed_x, self._smoothed_y, current
-        )
-        if landscape != self._landscape:
-            self._landscape = landscape
+        current = self._orientation if self._orientation is not None else ORIENT_NORMAL
+        new = _classify_orientation(self._smoothed_x, self._smoothed_y, current)
+        if new != self._orientation:
+            print(
+                f"[yaga.camera] orientation sensord -> {new} "
+                f"(x={self._smoothed_x:+.2f}g y={self._smoothed_y:+.2f}g)",
+                file=sys.stderr, flush=True,
+            )
+            self._orientation = new
             if self._on_change is not None:
-                self._on_change(landscape)
+                self._on_change(new)
 
 
 class _IIOSensorProxyBackend:
-    """Fallback for desktop Linux — reads the high-level
-    AccelerometerOrientation string from iio-sensor-proxy."""
+    """Desktop fallback — reads the 4-state AccelerometerOrientation
+    string from iio-sensor-proxy directly."""
 
     def __init__(self) -> None:
         self._proxy: Any = None
         self._signal_id: int | None = None
-        self._on_change: Callable[[bool], None] | None = None
-        self._landscape: bool | None = None
+        self._on_change: Callable[[str], None] | None = None
+        self._orientation: str | None = None
 
-    def start(self, on_change: Callable[[bool], None] | None) -> bool:
+    def start(self, on_change: Callable[[str], None] | None) -> bool:
         self._on_change = on_change
         try:
             self._proxy = Gio.DBusProxy.new_for_bus_sync(
@@ -294,10 +324,14 @@ class _IIOSensorProxyBackend:
             "g-properties-changed", self._on_props_changed
         )
         initial = self._get_property("AccelerometerOrientation")
-        if isinstance(initial, str) and initial != "undefined":
-            self._landscape = initial in ("left-up", "right-up")
+        if isinstance(initial, str) and initial in ALL_ORIENTATIONS:
+            self._orientation = initial
+            print(
+                f"[yaga.camera] orientation iio-sensor-proxy -> {initial}",
+                file=sys.stderr, flush=True,
+            )
             if on_change is not None:
-                on_change(self._landscape)
+                on_change(initial)
         return True
 
     def stop(self) -> None:
@@ -317,7 +351,7 @@ class _IIOSensorProxyBackend:
         except GLib.Error as exc:
             LOGGER.debug("ReleaseAccelerometer failed: %s", exc.message)
         self._proxy = None
-        self._landscape = None
+        self._orientation = None
 
     def _get_property(self, name: str) -> Any:
         if self._proxy is None:
@@ -354,14 +388,17 @@ class _IIOSensorProxyBackend:
         if "AccelerometerOrientation" not in payload:
             return
         value = payload["AccelerometerOrientation"]
-        if not isinstance(value, str) or value == "undefined":
+        if not isinstance(value, str) or value not in ALL_ORIENTATIONS:
             return
-        landscape = value in ("left-up", "right-up")
-        if landscape == self._landscape:
+        if value == self._orientation:
             return
-        self._landscape = landscape
+        print(
+            f"[yaga.camera] orientation iio-sensor-proxy -> {value}",
+            file=sys.stderr, flush=True,
+        )
+        self._orientation = value
         if self._on_change is not None:
-            self._on_change(landscape)
+            self._on_change(value)
 
 
 # --------------------------------------------------------------------
@@ -370,9 +407,8 @@ class _IIOSensorProxyBackend:
 
 
 class OrientationClient:
-    """Picks the best available accelerometer source and surfaces
-    landscape/portrait transitions via an `on_change(landscape: bool)`
-    callback."""
+    """Picks the best available accelerometer source and surfaces the
+    4-state device orientation via `on_change(orientation: str)`."""
 
     def __init__(self) -> None:
         self._backend: Any = None
@@ -386,7 +422,9 @@ class OrientationClient:
     def backend_name(self) -> str:
         return self._backend_name
 
-    def start(self, on_change: Callable[[bool], None] | None = None) -> bool:
+    def start(
+        self, on_change: Callable[[str], None] | None = None
+    ) -> bool:
         # sensord first (Halium phones), then iio-sensor-proxy (desktop).
         for cls, name in (
             (_SensordBackend, "sensord"),
