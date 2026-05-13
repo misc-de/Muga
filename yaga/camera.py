@@ -896,16 +896,20 @@ class CameraWindow(Adw.Window):
         self._toast.set_visible(False)
         overlay.add_overlay(self._toast)
 
-        # Window-level drag (replacement for titlebar grab).
-        drag = Gtk.GestureDrag()
-        drag.connect("drag-begin", self._on_drag_begin)
-        self.add_controller(drag)
+        # Viewfinder gestures attach to the PICTURE (not the window).
+        # On Phosh, window-level gestures coordinate touch sequences
+        # before they reach overlay children, so a press on an icon
+        # button could get claimed by GestureZoom/GestureDrag and the
+        # button's "clicked" never fires. Attaching to the picture means
+        # these gestures only see events whose target is in the picture
+        # subtree — i.e. taps and pinches on the actual image, not the
+        # icons that sit above it.
 
         # Pinch-to-zoom on the preview.
         zoom_gesture = Gtk.GestureZoom()
         zoom_gesture.connect("begin", self._on_zoom_begin)
         zoom_gesture.connect("scale-changed", self._on_zoom_changed)
-        self.add_controller(zoom_gesture)
+        self._picture.add_controller(zoom_gesture)
 
         # Tap-to-focus — attached to the picture in TARGET phase so it
         # only fires when the picture itself is the actual click target.
@@ -920,15 +924,16 @@ class CameraWindow(Adw.Window):
         click.connect("released", self._on_tap_to_focus)
         self._picture.add_controller(click)
 
-        # ESC / Space / Return shortcuts.
+        # ESC / Space / Return shortcuts — keys are global; stays on window.
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
         self.add_controller(keys)
 
-        # Scroll-to-zoom for desktops without touch.
+        # Scroll-to-zoom for desktops without touch — only meaningful
+        # when the pointer is over the picture, so it also moves there.
         scroll = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.VERTICAL)
         scroll.connect("scroll", self._on_scroll)
-        self.add_controller(scroll)
+        self._picture.add_controller(scroll)
 
         self.connect("close-request", self._on_close)
 
@@ -2433,19 +2438,6 @@ class CameraWindow(Adw.Window):
     # ------------------------------------------------------------------
     # Window chrome substitutes
     # ------------------------------------------------------------------
-
-    def _on_drag_begin(self, gesture: Gtk.GestureDrag, _x: float, _y: float) -> None:
-        event = gesture.get_current_event()
-        if event is None:
-            return
-        surface = self.get_surface()
-        device = event.get_device()
-        if surface is None or device is None:
-            return
-        try:
-            surface.begin_move(device, 1, _x, _y, event.get_time())
-        except Exception:
-            LOGGER.debug("begin_move not supported", exc_info=True)
 
     def _on_key(self, _ctl: Gtk.EventControllerKey, keyval: int, _kc: int, _mods: Any) -> bool:
         if keyval == Gdk.KEY_Escape:
