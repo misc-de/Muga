@@ -1418,14 +1418,21 @@ class CameraWindow(Adw.Window):
                 f"[yaga.camera] droidcamsrc pad templates: {templates}",
                 file=sys.stderr, flush=True,
             )
-            try:
-                imgsrc_pad = source.request_pad_simple("imgsrc")
-            except Exception as exc:
-                imgsrc_pad = None
-                print(
-                    f"[yaga.camera] imgsrc request_pad_simple raised: {exc}",
-                    file=sys.stderr, flush=True,
-                )
+            # imgsrc is an ALWAYS pad in gst-droid's droidcamsrc (per
+            # gst_droidcamsrc_init), not a request pad — so
+            # get_static_pad is the right call. request_pad_simple
+            # silently returns None for static pads, which is why our
+            # earlier attempts looked like the pad wasn't available.
+            imgsrc_pad = source.get_static_pad("imgsrc")
+            if imgsrc_pad is None:
+                try:
+                    imgsrc_pad = source.request_pad_simple("imgsrc")
+                except Exception as exc:
+                    imgsrc_pad = None
+                    print(
+                        f"[yaga.camera] imgsrc fallback request raised: {exc}",
+                        file=sys.stderr, flush=True,
+                    )
             if imgsrc_pad is None:
                 print(
                     "[yaga.camera] imgsrc pad NOT available — capture will "
