@@ -1356,15 +1356,43 @@ class CameraWindow(Adw.Window):
         # by emitting the `start-capture` action signal on the source
         # in _capture().
         if device.get("source_factory") == "droidcamsrc":
+            import sys
+            # List the pad templates droidcamsrc advertises so we can
+            # see whether 'imgsrc' is even on the menu for this build.
+            try:
+                templates = [
+                    t.name_template
+                    for t in (source.get_pad_template_list() or [])
+                ]
+            except Exception:
+                templates = []
+            print(
+                f"[yaga.camera] droidcamsrc pad templates: {templates}",
+                file=sys.stderr, flush=True,
+            )
             try:
                 imgsrc_pad = source.request_pad_simple("imgsrc")
-            except Exception:
+            except Exception as exc:
                 imgsrc_pad = None
-                LOGGER.debug("imgsrc request_pad_simple failed", exc_info=True)
-            if imgsrc_pad is not None:
+                print(
+                    f"[yaga.camera] imgsrc request_pad_simple raised: {exc}",
+                    file=sys.stderr, flush=True,
+                )
+            if imgsrc_pad is None:
+                print(
+                    "[yaga.camera] imgsrc pad NOT available — capture will "
+                    "fall back to vfsrc+jpegenc (capped resolution)",
+                    file=sys.stderr, flush=True,
+                )
+            else:
                 img_queue = gst.ElementFactory.make("queue", "img_queue")
                 img_sink = gst.ElementFactory.make("appsink", "imgsink")
-                if img_queue is not None and img_sink is not None:
+                if img_queue is None or img_sink is None:
+                    print(
+                        "[yaga.camera] could not create queue/appsink for imgsrc",
+                        file=sys.stderr, flush=True,
+                    )
+                else:
                     img_queue.set_property("leaky", 2)            # downstream
                     img_queue.set_property("max-size-buffers", 1)
                     img_sink.set_property("emit-signals", True)
@@ -1374,16 +1402,23 @@ class CameraWindow(Adw.Window):
                     img_sink.set_property("async", False)
                     pipeline.add(img_queue)
                     pipeline.add(img_sink)
-                    if imgsrc_pad.link(img_queue.get_static_pad("sink")) \
-                            == gst.PadLinkReturn.OK and img_queue.link(img_sink):
+                    link_ret = imgsrc_pad.link(img_queue.get_static_pad("sink"))
+                    if link_ret != gst.PadLinkReturn.OK:
+                        print(
+                            f"[yaga.camera] imgsrc -> queue link failed: {link_ret}",
+                            file=sys.stderr, flush=True,
+                        )
+                    elif not img_queue.link(img_sink):
+                        print(
+                            "[yaga.camera] queue -> imgsink link failed",
+                            file=sys.stderr, flush=True,
+                        )
+                    else:
                         self._imgsink = img_sink
-                        import sys
                         print(
                             "[yaga.camera] imgsrc branch ready (HAL JPEG path)",
                             file=sys.stderr, flush=True,
                         )
-                    else:
-                        LOGGER.debug("imgsrc link failed")
 
         # Diagnostic buffer probes. Tells us — without enabling GST_DEBUG —
         # whether droidcamsrc is producing a continuous stream and whether
@@ -2770,10 +2805,10 @@ class CameraWindow(Adw.Window):
             self._show_toast(self._("Failed to save: %s") % exc)
             return
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        path = self._save_dir / f"yaga_{stamp}.jpg"
+        path = self._save_dir / f"{stamp}.jpg"
         i = 1
         while path.exists():
-            path = self._save_dir / f"yaga_{stamp}_{i}.jpg"
+            path = self._save_dir / f"{stamp}_{i}.jpg"
             i += 1
         try:
             path.write_bytes(data)
