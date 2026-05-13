@@ -2079,12 +2079,23 @@ class CameraWindow(Adw.Window):
             # The options bar stays HORIZONTAL (icons in widget-x) so
             # that after the user's 90° view tilt it reads as a single
             # vertical column on the user's left/right side.
+            #
+            # Shutter offsets, per user spec:
+            #   - "1/3 up" from the user's bottom edge in the rotated
+            #     view = 1/3 of the user's vertical span, which is the
+            #     widget's *width* (the short side, since the widget is
+            #     still portrait-shaped).
+            #   - "40 px inward" from the user's right/left edge =
+            #     perpendicular to that, so it lands on the *other*
+            #     widget axis.
+            user_vertical = max(120, self.get_width() // 3)
+            inset = 40
             if right:
                 # User's bottom-right corner = widget top-right.
                 self._shutter.set_halign(end)
                 self._shutter.set_valign(start)
-                self._shutter.set_margin_top(side)
-                self._shutter.set_margin_end(side)
+                self._shutter.set_margin_top(inset)
+                self._shutter.set_margin_end(user_vertical)
                 # User's left edge = widget bottom edge.
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
@@ -2094,8 +2105,8 @@ class CameraWindow(Adw.Window):
                 # User's bottom-left corner = widget bottom-right.
                 self._shutter.set_halign(end)
                 self._shutter.set_valign(end)
-                self._shutter.set_margin_bottom(side)
-                self._shutter.set_margin_end(side)
+                self._shutter.set_margin_bottom(inset)
+                self._shutter.set_margin_end(user_vertical)
                 # User's right edge = widget top edge.
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
@@ -2105,12 +2116,14 @@ class CameraWindow(Adw.Window):
         elif orientation == ORIENT_RIGHT_UP:
             # Phone rotated CCW 90° (right side physically up). Mirror
             # of LEFT_UP about both axes.
+            user_vertical = max(120, self.get_width() // 3)
+            inset = 40
             if right:
                 # User's bottom-right corner = widget bottom-left.
                 self._shutter.set_halign(start)
                 self._shutter.set_valign(end)
-                self._shutter.set_margin_bottom(side)
-                self._shutter.set_margin_start(side)
+                self._shutter.set_margin_bottom(inset)
+                self._shutter.set_margin_start(user_vertical)
                 # User's left edge = widget top edge.
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
@@ -2120,8 +2133,8 @@ class CameraWindow(Adw.Window):
                 # User's bottom-left corner = widget top-left.
                 self._shutter.set_halign(start)
                 self._shutter.set_valign(start)
-                self._shutter.set_margin_top(side)
-                self._shutter.set_margin_start(side)
+                self._shutter.set_margin_top(inset)
+                self._shutter.set_margin_start(user_vertical)
                 # User's right edge = widget bottom edge.
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
