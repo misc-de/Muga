@@ -59,6 +59,9 @@ class Settings:
     # Where to place the category nav bar relative to the gallery content.
     # Valid values: "top" (default, preserves legacy layout), "bottom", "left", "right".
     nav_position: str = "top"
+    # Which side the camera record button (and any other thumb-reachable
+    # camera controls) should sit on. "right" or "left".
+    handedness: str = "right"
 
     # User-defined ordering of the four built-in media folders. Items not in
     # the list (e.g. legacy upgrades that didn't write the field) fall back to
@@ -110,6 +113,8 @@ class Settings:
         # typo in settings.json doesn't crash the layout logic in _build_ui.
         if settings.nav_position not in ("top", "bottom", "left", "right"):
             settings.nav_position = "top"
+        if settings.handedness not in ("left", "right"):
+            settings.handedness = "right"
         return settings
 
     def save(self) -> None:

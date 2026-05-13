@@ -2222,11 +2222,14 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def _open_camera(self, _button: Gtk.Button) -> None:
         save_dir = Path(self.settings.photos_dir)
+        video_dir = Path(self.settings.videos_dir) if self.settings.videos_dir else save_dir
         win = CameraWindow(
             self,
             save_dir=save_dir,
+            video_dir=video_dir,
             translator=self._,
             on_captured=lambda _p: self.refresh(scan=True, scope="current"),
+            handedness=self.settings.handedness,
         )
         win.present()
 
