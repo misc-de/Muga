@@ -62,6 +62,16 @@ class Settings:
     # Which side the camera record button (and any other thumb-reachable
     # camera controls) should sit on. "right" or "left".
     handedness: str = "right"
+    # Camera capture settings — persisted across sessions.
+    # jpeg quality (0-100) used by the gst-jpegenc element when we
+    # encode in-pipeline, and by Pillow when we re-encode after a
+    # post-capture downscale.
+    camera_jpeg_quality: int = 92
+    # Photo target size (w, h). null/None = save at HAL-native resolution.
+    # Stored as a list because tuples don't survive JSON round-trips.
+    camera_image_resolution: list | None = None
+    # Video record bitrate (kbps) — applied when the record path lands.
+    camera_video_bitrate_kbps: int = 4000
 
     # User-defined ordering of the four built-in media folders. Items not in
     # the list (e.g. legacy upgrades that didn't write the field) fall back to
@@ -115,6 +125,24 @@ class Settings:
             settings.nav_position = "top"
         if settings.handedness not in ("left", "right"):
             settings.handedness = "right"
+        # Clamp / sanitise camera fields against hand-edited values.
+        settings.camera_jpeg_quality = min(
+            max(int(settings.camera_jpeg_quality), 1), 100
+        )
+        settings.camera_video_bitrate_kbps = max(
+            int(settings.camera_video_bitrate_kbps), 200
+        )
+        if settings.camera_image_resolution is not None:
+            try:
+                w, h = (
+                    int(settings.camera_image_resolution[0]),
+                    int(settings.camera_image_resolution[1]),
+                )
+                if w <= 0 or h <= 0:
+                    raise ValueError
+                settings.camera_image_resolution = [w, h]
+            except Exception:
+                settings.camera_image_resolution = None
         return settings
 
     def save(self) -> None:

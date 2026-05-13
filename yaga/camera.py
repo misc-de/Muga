@@ -724,6 +724,7 @@ class CameraWindow(Adw.Window):
         on_captured: Callable[[Path], None] | None = None,
         handedness: str = "right",
         video_dir: Path | None = None,
+        settings: Any = None,
     ) -> None:
         super().__init__()
         _ensure_css()
@@ -751,13 +752,22 @@ class CameraWindow(Adw.Window):
         self._device_orientation: str = ORIENT_NORMAL
         self._applied_layout: str | None = None
         self._layout_landscape: bool | None = None
+        # Settings object (yaga.config.Settings) for persisting camera
+        # picks (quality, image size, bitrate) across sessions. None
+        # means transient — settings won't be saved but defaults apply.
+        self._settings = settings
         # Photo quality (jpegenc quality, 0-100) and video bitrate (kbps).
-        # Live-updateable on the running jpegenc element so changing the
-        # preset doesn't have to restart the camera pipeline. The video
-        # bitrate is stored for the recording branch we'll wire up
-        # alongside the actual record encoder.
-        self._jpeg_quality: int = 92
-        self._video_bitrate_kbps: int = 4000
+        # Initial values come from persisted settings when available.
+        if settings is not None:
+            self._jpeg_quality: int = int(
+                getattr(settings, "camera_jpeg_quality", 92)
+            )
+            self._video_bitrate_kbps: int = int(
+                getattr(settings, "camera_video_bitrate_kbps", 4000)
+            )
+        else:
+            self._jpeg_quality = 92
+            self._video_bitrate_kbps = 4000
         self._Gst = _gst()
         self._pipeline: Any = None
         self._bus: Any = None
@@ -820,6 +830,13 @@ class CameraWindow(Adw.Window):
         # gst-droid). If this is non-None, we Pillow-downscale the JPEG
         # to fit inside (w, h) before saving — keeps aspect ratio.
         self._image_resolution: tuple[int, int] | None = None
+        if settings is not None:
+            stored = getattr(settings, "camera_image_resolution", None)
+            if stored and len(stored) == 2:
+                try:
+                    self._image_resolution = (int(stored[0]), int(stored[1]))
+                except Exception:
+                    self._image_resolution = None
         self._flash_source: int | None = None
         self._controls: dict[str, V4l2Control] = {}
         self._controls_built: bool = False
@@ -2181,6 +2198,15 @@ class CameraWindow(Adw.Window):
         }.get(orientation, 0)
         for img in self._rotatable_icons:
             img.set_rotation_deg(icon_rotation)
+        # The Quality popover lays out its sections + button rows
+        # differently in portrait vs. landscape (transposed orientation
+        # + rotated text labels), so rebuild it whenever orientation
+        # flips. _build_quality_popover reads self._layout_landscape /
+        # self._device_orientation directly.
+        try:
+            self._quality_button.set_popover(self._build_quality_popover())
+        except Exception:
+            LOGGER.debug("quality popover rebuild failed", exc_info=True)
 
         right = (self._handedness == "right")
 
@@ -2415,12 +2441,50 @@ class CameraWindow(Adw.Window):
     # ------------------------------------------------------------------
 
     def _build_quality_popover(self) -> Gtk.Popover:
+        # Orientation-aware layout: in landscape, the whole popover
+        # content is transposed so it reads right in the user's view.
+        # Outer box stacks the sections HORIZONTALLY in widget space
+        # (which is vertical in the user's view); each inner row stacks
+        # the buttons VERTICALLY in widget space (horizontal for user).
+        # Button labels use _RotatableLabel so they're upright.
+        landscape = bool(self._layout_landscape)
+        outer_orient = (
+            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
+        )
+        inner_orient = (
+            Gtk.Orientation.VERTICAL if landscape else Gtk.Orientation.HORIZONTAL
+        )
+        # Same rotation map the icons use.
+        label_rot = {
+            ORIENT_NORMAL:    0,
+            ORIENT_BOTTOM_UP: 180,
+            ORIENT_LEFT_UP:   270,
+            ORIENT_RIGHT_UP:  90,
+        }.get(self._device_orientation, 0)
+
+        # Reset per-popover state — we rebuild this whole subtree on
+        # every orientation change, so the old entries point at widgets
+        # that are about to be unparented.
+        self._photo_quality_buttons = []
+        self._video_quality_buttons = []
+        self._image_size_buttons = []
+
         popover = Gtk.Popover()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        box.set_margin_top(12)
-        box.set_margin_bottom(12)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
+        box = Gtk.Box(orientation=outer_orient, spacing=10)
+        box.set_margin_top(12); box.set_margin_bottom(12)
+        box.set_margin_start(12); box.set_margin_end(12)
+
+        def _rotated_text(text: str) -> _RotatableLabel:
+            lab = _RotatableLabel()
+            lab.set_label(text)
+            lab.set_rotation_deg(label_rot)
+            return lab
+
+        def _rotated_button(text: str, on_click: Callable) -> Gtk.Button:
+            btn = Gtk.Button()
+            btn.set_child(_rotated_text(text))
+            btn.connect("clicked", on_click)
+            return btn
 
         def _section(
             title: str,
@@ -2429,22 +2493,27 @@ class CameraWindow(Adw.Window):
             on_pick: Callable[[int], None],
             store: list[tuple[Gtk.Button, int]],
         ) -> None:
-            header = Gtk.Label(label=title, xalign=0)
+            # Each section is its own sub-box so the header sits next to
+            # its row of buttons in both layouts.
+            section_orient = (
+                Gtk.Orientation.HORIZONTAL if landscape
+                else Gtk.Orientation.VERTICAL
+            )
+            sec = Gtk.Box(orientation=section_orient, spacing=6)
+            header = _rotated_text(title)
+            header.set_xalign(0)
             header.add_css_class("heading")
-            box.append(header)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            sec.append(header)
+            row = Gtk.Box(orientation=inner_orient, spacing=6)
             for label, value in presets:
-                btn = Gtk.Button(label=label)
+                btn = _rotated_button(label, lambda _b, v=value: on_pick(v))
                 if value == current:
                     btn.add_css_class("suggested-action")
-                btn.connect("clicked", lambda _b, v=value: on_pick(v))
                 store.append((btn, value))
                 row.append(btn)
-            box.append(row)
+            sec.append(row)
+            box.append(sec)
 
-        # Sections are filtered by the current capture mode so the user
-        # only sees options relevant to what they're about to do. Photo
-        # mode: quality + size. Video mode: bitrate only.
         if self._capture_mode == "photo":
             _section(
                 self._("Photo quality"),
@@ -2458,29 +2527,35 @@ class CameraWindow(Adw.Window):
                 self._set_jpeg_quality,
                 self._photo_quality_buttons,
             )
+            box.append(Gtk.Separator(orientation=inner_orient))
 
-            box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
-
-            # Photo size — string-keyed presets, built manually because
-            # the _section helper assumes ints.
-            size_header = Gtk.Label(label=self._("Photo size"), xalign=0)
+            # Photo size: string-keyed presets, built manually.
+            section_orient = (
+                Gtk.Orientation.HORIZONTAL if landscape
+                else Gtk.Orientation.VERTICAL
+            )
+            size_sec = Gtk.Box(orientation=section_orient, spacing=6)
+            size_header = _rotated_text(self._("Photo size"))
+            size_header.set_xalign(0)
             size_header.add_css_class("heading")
-            box.append(size_header)
-            size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            size_sec.append(size_header)
+            size_row = Gtk.Box(orientation=inner_orient, spacing=6)
             size_presets: list[tuple[str, tuple[int, int] | None]] = [
-                (self._("Native"), None),
-                (self._("2K"),    (2560, 1920)),
-                (self._("FHD"),   (1920, 1440)),
-                (self._("HD"),    (1280, 960)),
+                (self._("Max"),  None),
+                (self._("2K"),   (2560, 1920)),
+                (self._("FHD"),  (1920, 1440)),
+                (self._("HD"),   (1280, 960)),
             ]
             for label, wh in size_presets:
-                btn = Gtk.Button(label=label)
+                btn = _rotated_button(
+                    label, lambda _b, v=wh: self._set_image_resolution(v),
+                )
                 if wh == self._image_resolution:
                     btn.add_css_class("suggested-action")
-                btn.connect("clicked", lambda _b, v=wh: self._set_image_resolution(v))
                 self._image_size_buttons.append((btn, wh))
                 size_row.append(btn)
-            box.append(size_row)
+            size_sec.append(size_row)
+            box.append(size_sec)
 
         elif self._capture_mode == "video":
             _section(
@@ -2495,15 +2570,11 @@ class CameraWindow(Adw.Window):
                 self._set_video_bitrate,
                 self._video_quality_buttons,
             )
-            # Reminder: video recording itself is not yet wired up, so
-            # the bitrate stored here doesn't take effect until that
-            # lands.
-            hint = Gtk.Label(
-                label=self._(
+            hint = _rotated_text(
+                self._(
                     "Video recording: encoder still to be wired up — "
                     "this bitrate is remembered for when it is."
-                ),
-                xalign=0,
+                )
             )
             hint.add_css_class("dim-label")
             hint.set_wrap(True)
@@ -2512,6 +2583,23 @@ class CameraWindow(Adw.Window):
 
         popover.set_child(box)
         return popover
+
+    def _persist_settings(self) -> None:
+        if self._settings is None:
+            return
+        try:
+            self._settings.camera_jpeg_quality = int(self._jpeg_quality)
+            self._settings.camera_video_bitrate_kbps = int(self._video_bitrate_kbps)
+            if self._image_resolution is None:
+                self._settings.camera_image_resolution = None
+            else:
+                self._settings.camera_image_resolution = [
+                    int(self._image_resolution[0]),
+                    int(self._image_resolution[1]),
+                ]
+            self._settings.save()
+        except Exception:
+            LOGGER.debug("camera settings persist failed", exc_info=True)
 
     def _set_jpeg_quality(self, value: int) -> None:
         self._jpeg_quality = value
@@ -2528,6 +2616,7 @@ class CameraWindow(Adw.Window):
                 btn.add_css_class("suggested-action")
             else:
                 btn.remove_css_class("suggested-action")
+        self._persist_settings()
 
     def _set_video_bitrate(self, value: int) -> None:
         self._video_bitrate_kbps = value
@@ -2536,6 +2625,7 @@ class CameraWindow(Adw.Window):
                 btn.add_css_class("suggested-action")
             else:
                 btn.remove_css_class("suggested-action")
+        self._persist_settings()
 
     def _set_image_resolution(
         self, wh: tuple[int, int] | None,
@@ -2546,6 +2636,7 @@ class CameraWindow(Adw.Window):
                 btn.add_css_class("suggested-action")
             else:
                 btn.remove_css_class("suggested-action")
+        self._persist_settings()
 
     def _set_capture_mode(self, mode: str) -> None:
         if mode == self._capture_mode or mode not in ("photo", "video"):

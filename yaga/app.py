@@ -2230,6 +2230,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             translator=self._,
             on_captured=lambda _p: self.refresh(scan=True, scope="current"),
             handedness=self.settings.handedness,
+            settings=self.settings,
         )
         win.present()
 
