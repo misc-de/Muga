@@ -1909,6 +1909,12 @@ class CameraWindow(Adw.Window):
             landscape = w > h * 1.25
         if landscape == self._layout_landscape:
             return True
+        import sys
+        print(
+            f"[yaga.camera] orientation {w}x{h} -> "
+            f"{'landscape' if landscape else 'portrait'}",
+            file=sys.stderr, flush=True,
+        )
         self._layout_landscape = landscape
         if landscape:
             self._shutter.set_valign(Gtk.Align.CENTER)
@@ -2106,8 +2112,18 @@ class CameraWindow(Adw.Window):
         GLib.idle_add(self._start_pipeline)
 
     def _capture(self) -> None:
+        import sys
         if self._busy_capture or self._appsink is None:
+            print(
+                f"[yaga.camera] capture: ignored "
+                f"(busy={self._busy_capture}, appsink={self._appsink is not None})",
+                file=sys.stderr, flush=True,
+            )
             return
+        print(
+            f"[yaga.camera] capture: start (valve={self._valve is not None})",
+            file=sys.stderr, flush=True,
+        )
         self._busy_capture = True
         self._shutter.set_sensitive(False)
         # Hook a one-shot new-sample listener, then open the valve so a
@@ -2119,11 +2135,15 @@ class CameraWindow(Adw.Window):
         )
         if self._valve is not None:
             self._valve.set_property("drop", False)
+            print(
+                "[yaga.camera] capture: valve opened",
+                file=sys.stderr, flush=True,
+            )
         # Safety timeout — if no sample reaches us, give up cleanly.
         # On Halium phones jpegenc has no hardware path and can take well
-        # over a second per frame at full resolution, so 2 s was too tight.
+        # over a second per frame at full resolution.
         self._capture_timeout_id = GLib.timeout_add_seconds(
-            5, self._on_capture_timeout
+            10, self._on_capture_timeout
         )
 
     def _close_valve_and_disconnect(self) -> None:
@@ -2144,19 +2164,37 @@ class CameraWindow(Adw.Window):
 
     def _on_capture_sample(self, sink: Any) -> Any:
         gst = self._Gst
+        import sys
         try:
             sample = sink.emit("pull-sample")
-        except Exception:
+        except Exception as exc:
             sample = None
+            print(
+                f"[yaga.camera] capture: pull-sample failed: {exc}",
+                file=sys.stderr, flush=True,
+            )
+        print(
+            f"[yaga.camera] capture: new-sample received (sample={sample is not None})",
+            file=sys.stderr, flush=True,
+        )
         # Disconnect + close valve from the main loop, then write the file.
         GLib.idle_add(self._finish_capture, sample)
         return gst.FlowReturn.OK
 
     def _finish_capture(self, sample: Any) -> bool:
+        import sys
         self._close_valve_and_disconnect()
         if sample is None:
+            print(
+                "[yaga.camera] capture: finish with no sample",
+                file=sys.stderr, flush=True,
+            )
             self._show_toast(self._("No frame available"))
         else:
+            print(
+                "[yaga.camera] capture: writing sample",
+                file=sys.stderr, flush=True,
+            )
             self._write_sample(sample)
         self._busy_capture = False
         self._shutter.set_sensitive(True)
@@ -2165,6 +2203,11 @@ class CameraWindow(Adw.Window):
     def _on_capture_timeout(self) -> bool:
         # Reached only when no sample showed up — pipeline stalled or the
         # camera produces no frames. Reset state and tell the user.
+        import sys
+        print(
+            "[yaga.camera] capture: TIMEOUT — no sample arrived in 10 s",
+            file=sys.stderr, flush=True,
+        )
         self._capture_timeout_id = None
         self._close_valve_and_disconnect()
         self._show_toast(self._("No frame available"))
@@ -2173,20 +2216,41 @@ class CameraWindow(Adw.Window):
         return False
 
     def _write_sample(self, sample: Any) -> None:
+        import sys
         buf = sample.get_buffer() if sample is not None else None
         if buf is None:
+            print(
+                "[yaga.camera] capture: sample has no buffer",
+                file=sys.stderr, flush=True,
+            )
             self._show_toast(self._("No frame available"))
             return
         success, mapinfo = buf.map(self._Gst.MapFlags.READ)
         if not success:
+            print(
+                "[yaga.camera] capture: buffer.map failed",
+                file=sys.stderr, flush=True,
+            )
             self._show_toast(self._("Could not read frame"))
             return
         try:
             data = bytes(mapinfo.data)
         finally:
             buf.unmap(mapinfo)
+        print(
+            f"[yaga.camera] capture: jpeg bytes={len(data)} save_dir={self._save_dir}",
+            file=sys.stderr, flush=True,
+        )
 
-        self._save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._save_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            print(
+                f"[yaga.camera] capture: mkdir {self._save_dir} failed: {exc}",
+                file=sys.stderr, flush=True,
+            )
+            self._show_toast(self._("Failed to save: %s") % exc)
+            return
         stamp = time.strftime("%Y%m%d_%H%M%S")
         path = self._save_dir / f"yaga_{stamp}.jpg"
         i = 1
@@ -2196,8 +2260,16 @@ class CameraWindow(Adw.Window):
         try:
             path.write_bytes(data)
         except OSError as exc:
+            print(
+                f"[yaga.camera] capture: write {path} failed: {exc}",
+                file=sys.stderr, flush=True,
+            )
             self._show_toast(self._("Failed to save: %s") % exc)
             return
+        print(
+            f"[yaga.camera] capture: SAVED {path}",
+            file=sys.stderr, flush=True,
+        )
 
         self._write_exif(path)
         self._flash_screen()
