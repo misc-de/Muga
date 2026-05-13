@@ -2950,6 +2950,14 @@ class CameraWindow(Adw.Window):
         import sys
         gst = self._Gst
 
+        # imgsrc is templated but not requestable on this HAL build, so
+        # we go the other route: a transient pipeline that uses vfsrc
+        # WITH NO RESOLUTION CAP. Without a downstream capsfilter to
+        # constrain it, droidcamsrc negotiates its preferred (native
+        # sensor) resolution — same path that produced the original
+        # 3864x5152 photos before the 720p preview cap was added. Brief
+        # full-res run doesn't crush phosh the way sustained full-res
+        # preview does, because it's only on for ~2 s.
         pipeline = gst.Pipeline.new("yaga-image-capture")
         src = gst.ElementFactory.make("droidcamsrc", "src")
         if src is None:
@@ -2959,57 +2967,52 @@ class CameraWindow(Adw.Window):
         except Exception:
             pass
         try:
-            src.set_property("mode", 1)  # image-capture mode
+            src.set_property("mode", 2)
         except Exception:
             pass
         pipeline.add(src)
 
-        # vfsrc -> fakesink. droidcamsrc's HAL setup expects a live
-        # viewfinder pad even when we only care about imgsrc.
-        vf_fakesink = gst.ElementFactory.make("fakesink", "vf_fakesink")
-        if vf_fakesink is not None:
-            vf_fakesink.set_property("sync", False)
-            vf_fakesink.set_property("async", False)
-            pipeline.add(vf_fakesink)
-            try:
-                vf_pad = src.request_pad_simple("vfsrc")
-            except Exception:
-                vf_pad = None
-            if vf_pad is not None:
-                vf_pad.link(vf_fakesink.get_static_pad("sink"))
-
-        # imgsrc -> queue -> appsink: the actual capture chain.
-        queue = gst.ElementFactory.make("queue", "img_queue")
-        sink = gst.ElementFactory.make("appsink", "img_sink")
-        if queue is None or sink is None:
-            return self._image_capture_failed("queue/appsink unavailable")
+        # vfsrc -> queue -> videoconvert -> jpegenc -> appsink. No caps
+        # filter anywhere in this chain so the HAL is free to pick its
+        # native resolution.
+        queue = gst.ElementFactory.make("queue", "cap_queue")
+        convert = gst.ElementFactory.make("videoconvert", "cap_convert")
+        jpegenc = gst.ElementFactory.make("jpegenc", "cap_jpeg")
+        sink = gst.ElementFactory.make("appsink", "cap_sink")
+        if None in (queue, convert, jpegenc, sink):
+            return self._image_capture_failed("capture-chain elements unavailable")
         queue.set_property("leaky", 2)
         queue.set_property("max-size-buffers", 1)
+        jpegenc.set_property(
+            "quality", max(0, min(100, self._jpeg_quality)),
+        )
         sink.set_property("emit-signals", True)
         sink.set_property("max-buffers", 1)
         sink.set_property("drop", True)
         sink.set_property("sync", False)
         sink.set_property("async", False)
         pipeline.add(queue)
+        pipeline.add(convert)
+        pipeline.add(jpegenc)
         pipeline.add(sink)
-        queue.link(sink)
+        queue.link(convert)
+        convert.link(jpegenc)
+        jpegenc.link(sink)
 
-        try:
-            imgsrc_pad = src.request_pad_simple("imgsrc")
-        except Exception as exc:
-            imgsrc_pad = None
-            print(
-                f"[yaga.camera] image-capture: imgsrc request raised: {exc}",
-                file=sys.stderr, flush=True,
-            )
-        if imgsrc_pad is None:
+        # Link vfsrc out. Static pad on some droidcamsrc builds, request
+        # pad on others — handle both.
+        vf_pad = src.get_static_pad("vfsrc")
+        if vf_pad is None:
+            try:
+                vf_pad = src.request_pad_simple("vfsrc")
+            except Exception:
+                vf_pad = None
+        if vf_pad is None:
             pipeline.set_state(gst.State.NULL)
-            return self._image_capture_failed(
-                "imgsrc pad not available in mode=1"
-            )
-        if imgsrc_pad.link(queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
+            return self._image_capture_failed("vfsrc pad unavailable")
+        if vf_pad.link(queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
             pipeline.set_state(gst.State.NULL)
-            return self._image_capture_failed("imgsrc -> queue link failed")
+            return self._image_capture_failed("vfsrc -> queue link failed")
 
         self._image_pipeline = pipeline
         self._image_src = src
@@ -3029,30 +3032,13 @@ class CameraWindow(Adw.Window):
             file=sys.stderr, flush=True,
         )
 
-        # Give the HAL a moment to initialise (Photography reconfigure,
-        # AF, AE) before triggering the actual capture.
-        GLib.timeout_add(500, self._image_emit_start_capture)
+        # No start-capture needed for this path — jpegenc encodes the
+        # first frame vfsrc delivers, which lands at the appsink as a
+        # high-res JPEG. Just arm the safety timeout.
         self._image_timeout_id = GLib.timeout_add_seconds(
             15, self._on_image_capture_timeout,
         )
         return False  # one-shot idle
-
-    def _image_emit_start_capture(self) -> bool:
-        import sys
-        if self._image_src is None:
-            return False
-        try:
-            self._image_src.emit("start-capture")
-            print(
-                "[yaga.camera] image-capture: start-capture emitted",
-                file=sys.stderr, flush=True,
-            )
-        except Exception as exc:
-            print(
-                f"[yaga.camera] image-capture: start-capture failed: {exc}",
-                file=sys.stderr, flush=True,
-            )
-        return False  # one-shot
 
     def _on_image_capture_sample(self, sink: Any) -> Any:
         gst = self._Gst
