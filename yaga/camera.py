@@ -2899,10 +2899,17 @@ class CameraWindow(Adw.Window):
         """Stop the preview pipeline, build a droidcamsrc mode=1 ->
         imgsrc -> appsink pipeline, emit start-capture, save the HAL
         JPEG, then restore the preview pipeline. The frozen-preview
-        window during HAL mode switch is bridged by a spinner."""
+        window during HAL mode switch is bridged by a spinner sitting
+        on top of the last live frame (instead of a black background)."""
         import sys
         self._busy_capture = True
         self._shutter.set_sensitive(False)
+        # Snapshot the current preview paintable to a static one so the
+        # picture keeps showing the last live frame while the preview
+        # pipeline is torn down for the capture. When _start_pipeline
+        # runs again afterwards it sets the new live paintable from
+        # gtk4paintablesink, replacing this frozen still.
+        self._freeze_preview_frame()
         self._show_capture_spinner(True)
 
         device = self._current_device() or {}
@@ -2916,6 +2923,24 @@ class CameraWindow(Adw.Window):
         # renders before the synchronous parts of the build (state
         # changes, get_state waits) block the main loop.
         GLib.idle_add(self._image_pipeline_build, cam_id)
+
+    def _freeze_preview_frame(self) -> None:
+        paintable = self._picture.get_paintable()
+        if paintable is None:
+            return
+        intr_w = paintable.get_intrinsic_width()
+        intr_h = paintable.get_intrinsic_height()
+        if intr_w <= 0 or intr_h <= 0:
+            return
+        try:
+            snap = Gtk.Snapshot()
+            paintable.snapshot(snap, intr_w, intr_h)
+            size = Graphene.Size().init(intr_w, intr_h)
+            still = snap.to_paintable(size)
+            if still is not None:
+                self._picture.set_paintable(still)
+        except Exception:
+            LOGGER.debug("freeze_preview_frame failed", exc_info=True)
 
     def _image_pipeline_build(self, cam_id: int) -> bool:
         import sys
@@ -3221,7 +3246,6 @@ class CameraWindow(Adw.Window):
         )
 
         self._write_exif(path)
-        self._flash_screen()
         self._show_toast(self._("Saved %s") % path.name)
         if self._on_captured is not None:
             try:
