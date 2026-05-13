@@ -765,13 +765,22 @@ class CameraWindow(Adw.Window):
         )
         self.add_controller(esc)
 
-        # Top-right cluster: grid toggle, self-timer, resolution picker.
-        top_right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        top_right.set_halign(Gtk.Align.END)
-        top_right.set_valign(Gtk.Align.START)
-        top_right.set_margin_top(16)
-        top_right.set_margin_end(16)
-        overlay.add_overlay(top_right)
+        # Mode-options bar (grid toggle, self-timer, resolution picker,
+        # camera gear, geotag). Orientation and anchoring are managed by
+        # _apply_orientation_landscape so the bar always sits outside the
+        # camera image rect, never on top of it:
+        #   portrait  -> horizontal row centred above the picture (fits
+        #                in the top letterbox even when it's only ~80 px)
+        #   landscape -> vertical column on the side opposite the
+        #                shutter (so the user's thumb doesn't shadow it).
+        self._options_bar = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=10,
+        )
+        self._options_bar.set_halign(Gtk.Align.CENTER)
+        self._options_bar.set_valign(Gtk.Align.START)
+        self._options_bar.set_margin_top(16)
+        overlay.add_overlay(self._options_bar)
+        top_right = self._options_bar  # alias for the appends below
 
         self._grid_button = Gtk.ToggleButton()
         self._grid_button.set_icon_name("view-grid-symbolic")
@@ -1918,10 +1927,10 @@ class CameraWindow(Adw.Window):
             self._start_countdown(delay)
 
     def _apply_orientation_landscape(self, landscape: bool) -> None:
-        # Position the shutter for the new orientation. Called by either
-        # the accelerometer (OrientationClient.on_change) or the window-
-        # size tick fallback. Idempotent: a no-op if the orientation is
-        # already the one applied.
+        # Position the shutter + options bar for the new orientation.
+        # Called by either the accelerometer (OrientationClient.on_change)
+        # or the window-size tick fallback. Idempotent: a no-op if the
+        # orientation is already the one applied.
         if landscape == self._layout_landscape:
             return
         import sys
@@ -1932,8 +1941,25 @@ class CameraWindow(Adw.Window):
         )
         self._layout_landscape = landscape
         if landscape:
+            # Shutter: vertical centre on the handedness side.
             self._shutter.set_valign(Gtk.Align.CENTER)
             self._shutter.set_margin_bottom(0)
+            # Options bar: vertical column on the side opposite the
+            # shutter so the user's thumb doesn't shadow it. Sits in the
+            # left/right letterbox area.
+            opposite = (
+                Gtk.Align.END if self._handedness == "left" else Gtk.Align.START
+            )
+            self._options_bar.set_orientation(Gtk.Orientation.VERTICAL)
+            self._options_bar.set_halign(opposite)
+            self._options_bar.set_valign(Gtk.Align.CENTER)
+            self._options_bar.set_margin_top(0)
+            if self._handedness == "left":
+                self._options_bar.set_margin_end(16)
+                self._options_bar.set_margin_start(0)
+            else:
+                self._options_bar.set_margin_start(16)
+                self._options_bar.set_margin_end(0)
         else:
             # Lower third: button centre roughly at h * 5/6. Uses the
             # current window height so the absolute pixel offset stays
@@ -1941,6 +1967,15 @@ class CameraWindow(Adw.Window):
             h = max(0, self.get_height())
             self._shutter.set_valign(Gtk.Align.END)
             self._shutter.set_margin_bottom(max(48, h // 6))
+            # Options bar: horizontal row centred above the picture, in
+            # the top letterbox. Even when the letterbox is thin the row
+            # is ~56 px tall and fits.
+            self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+            self._options_bar.set_halign(Gtk.Align.CENTER)
+            self._options_bar.set_valign(Gtk.Align.START)
+            self._options_bar.set_margin_top(16)
+            self._options_bar.set_margin_start(0)
+            self._options_bar.set_margin_end(0)
 
     def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
         # Fallback path when the accelerometer isn't available (desktop
@@ -2083,6 +2118,17 @@ class CameraWindow(Adw.Window):
         y: float,
     ) -> None:
         if n_press != 1:
+            return
+        # The GestureClick on the picture is in BUBBLE phase, so it
+        # still fires for clicks that the overlay icons consumed first.
+        # Drop any click that didn't actually land inside the visible
+        # image rect (i.e. clicks on letterbox / icon bar): no focus
+        # pulse, no AF call, no flicker over the icon the user pressed.
+        rect = self._chrome._image_rect(
+            self._picture.get_width(), self._picture.get_height()
+        )
+        rx, ry, rw, rh = rect
+        if rw <= 0 or rh <= 0 or not (rx <= x <= rx + rw and ry <= y <= ry + rh):
             return
         # Picture coords -> overlay coords. Since the focus_rect drawing
         # area shares the overlay allocation with the picture, no
