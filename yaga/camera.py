@@ -2533,6 +2533,11 @@ class CameraWindow(Adw.Window):
         header = _rotated_text(self._("Handedness"))
         header.set_xalign(0)
         header.add_css_class("heading")
+        # valign=CENTER so the rotated label takes its natural size
+        # instead of stretching to fill the section height; otherwise
+        # the rotated text appears floating in the middle of a tall
+        # column with excessive top/bottom padding in the user's view.
+        header.set_valign(Gtk.Align.CENTER)
         row = Gtk.Box(orientation=inner_orient, spacing=6)
         presets: list[tuple[str, str]] = [
             (self._("Right"),   "right"),
@@ -2565,6 +2570,7 @@ class CameraWindow(Adw.Window):
         gps_header.set_xalign(0)
         gps_header.add_css_class("heading")
         gps_header.set_hexpand(True)
+        gps_header.set_valign(Gtk.Align.CENTER)
         self._geo_switch = _RotatableSwitch()
         self._geo_switch.set_active(self._geo_enabled)
         self._geo_switch.set_halign(Gtk.Align.END)
@@ -2572,7 +2578,22 @@ class CameraWindow(Adw.Window):
         self._geo_switch.set_rotation_deg(label_rot)
         self._register_rotatable(self._geo_switch)
         self._geo_switch.connect("state-set", self._on_geo_switch_state_set)
-        for w in self._orient_seq([gps_header, self._geo_switch]):
+        # Place the switch at the user's RIGHT edge regardless of
+        # orientation. The widget edge that maps to "user's right"
+        # differs per device orientation, and the reversal logic in
+        # _orient_seq is designed for horizontal boxes only — it gets
+        # the answer backwards for the vertical landscape box. Hand-
+        # roll the per-orientation order:
+        #
+        #   NORMAL    (HORIZONTAL box): user's right = widget right  → [header, switch]
+        #   BOTTOM_UP (HORIZONTAL box): user's right = widget left   → [switch, header]
+        #   LEFT_UP   (VERTICAL   box): user's right = widget top    → [switch, header]
+        #   RIGHT_UP  (VERTICAL   box): user's right = widget bottom → [header, switch]
+        if self._device_orientation in (ORIENT_BOTTOM_UP, ORIENT_LEFT_UP):
+            gps_items = [self._geo_switch, gps_header]
+        else:
+            gps_items = [gps_header, self._geo_switch]
+        for w in gps_items:
             gps_sec.append(w)
         box.append(gps_sec)
 
