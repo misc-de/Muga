@@ -2023,10 +2023,17 @@ class CameraWindow(Adw.Window):
             self._options_bar.set_valign(end)
             self._options_bar.set_margin_bottom(notch)
 
-        elif orientation == ORIENT_LEFT_UP:
-            # Querformat: shutter on handedness side, vertical centre.
+        elif orientation in (ORIENT_LEFT_UP, ORIENT_RIGHT_UP):
+            # Querformat (both tilt directions): shutter sits in the
+            # bottom corner on the handedness side; settings line up as
+            # a vertical column on the opposite side. The 180-deg flip
+            # between left-up and right-up only matters for the EXIF
+            # tag — visually we treat them identically because the user
+            # holds the phone in landscape with their thumb at the
+            # bottom corner regardless of which way they rotated.
             self._shutter.set_halign(end if right else start)
-            self._shutter.set_valign(center)
+            self._shutter.set_valign(end)
+            self._shutter.set_margin_bottom(side)
             if right:
                 self._shutter.set_margin_end(side)
             else:
@@ -2039,22 +2046,6 @@ class CameraWindow(Adw.Window):
                 self._options_bar.set_margin_start(bar_side)
             else:
                 self._options_bar.set_margin_end(bar_side)
-
-        elif orientation == ORIENT_RIGHT_UP:
-            # 180-deg-rotated left-up: shutter on the OPPOSITE side.
-            self._shutter.set_halign(start if right else end)
-            self._shutter.set_valign(center)
-            if right:
-                self._shutter.set_margin_start(side)
-            else:
-                self._shutter.set_margin_end(side)
-            self._options_bar.set_orientation(Gtk.Orientation.VERTICAL)
-            self._options_bar.set_halign(end if right else start)
-            self._options_bar.set_valign(center)
-            if right:
-                self._options_bar.set_margin_end(bar_side)
-            else:
-                self._options_bar.set_margin_start(bar_side)
 
     def _on_orientation_tick(self, _widget: Any, _clock: Any) -> bool:
         # Fallback path when the accelerometer isn't available (desktop
