@@ -96,21 +96,23 @@ _CSS = b"""
 .shutter-button {
     min-width: 76px;
     min-height: 76px;
-    padding: 6px;
+    padding: 12px;
     border-radius: 999px;
     background-color: transparent;
     border: 4px solid #fff;
     box-shadow: none;
 }
-.shutter-button > .shutter-core {
-    background-color: #e8443b;
-    border-radius: 999px;
-    min-width: 56px;
-    min-height: 56px;
+.shutter-button > image {
+    /* The mode icon inside the ring - red so it reads as the active
+     * capture affordance regardless of background. Swapped to a square
+     * stop-glyph while video recording is in progress. */
+    color: #e8443b;
+    -gtk-icon-size: 40px;
 }
-.shutter-button:hover > .shutter-core { background-color: #ff5247; }
-.shutter-button:active > .shutter-core { background-color: #c0322a; }
-.shutter-button:disabled > .shutter-core { background-color: #6a6a6a; }
+.shutter-button:hover > image { color: #ff5247; }
+.shutter-button:active > image { color: #c0322a; }
+.shutter-button:disabled > image { color: #6a6a6a; }
+.shutter-button.recording > image { color: #c0322a; }
 .camera-timer-text {
     font-weight: 800;
     font-size: 22px;
@@ -808,6 +810,11 @@ class CameraWindow(Adw.Window):
         self._image_signal_id: int | None = None
         self._image_bus: Any = None
         self._image_timeout_id: int | None = None
+        # Video-record transient pipeline state.
+        self._video_pipeline: Any = None
+        self._video_src: Any = None
+        self._video_bus: Any = None
+        self._video_path: Path | None = None
         self._preview_appsink: Any = None
         self._preview_signal_id: int | None = None
         self._preview_frame_count = 0
@@ -934,9 +941,12 @@ class CameraWindow(Adw.Window):
         self._capture_spinner.set_size_request(72, 72)
         self._capture_spinner.set_halign(Gtk.Align.CENTER)
         self._capture_spinner_box.append(self._capture_spinner)
-        capture_label = Gtk.Label(label=self._("Capturing…"))
+        capture_label = _RotatableLabel()
+        capture_label.set_label(self._("Capturing…"))
         capture_label.add_css_class("title-3")
         self._capture_spinner_box.append(capture_label)
+        # Register the label so the orientation tick rotates it upright.
+        self._rotatable_icons.append(capture_label)
         overlay.add_overlay(self._capture_spinner_box)
 
         # Escape closes the window. There's no on-screen close button —
@@ -1021,12 +1031,9 @@ class CameraWindow(Adw.Window):
         # and embeds GPS into EXIF on subsequent captures. We don't persist
         # this across sessions on purpose; geotagging is intentional state
         # the user re-confirms each time they open the camera.
-        self._geo_button = Gtk.ToggleButton()
-        self._geo_button.set_child(_icon("mark-location-symbolic"))
-        self._geo_button.add_css_class("camera-iconbtn")
-        self._geo_button.set_tooltip_text(self._("Geotag photos"))
-        self._geo_button.connect("toggled", self._on_geo_toggled)
-        top_right.append(self._geo_button)
+        # Geotag toggle is no longer a top-level icon — it lives inside
+        # the Camera Settings popover as a second-level option.
+        self._geo_button: Gtk.ToggleButton | None = None
 
         # Quality picker — popover with photo (jpeg quality) and video
         # (bitrate) presets. Photo quality updates live on the running
@@ -1079,9 +1086,15 @@ class CameraWindow(Adw.Window):
         )
         self._shutter = Gtk.Button()
         self._shutter.add_css_class("shutter-button")
-        core = Gtk.Box()
-        core.add_css_class("shutter-core")
-        self._shutter.set_child(core)
+        # Mode icon inside the shutter ring. Updated on every mode
+        # change so the user can tell at a glance whether the next
+        # press takes a photo or starts/stops a video recording.
+        self._shutter_icon = _RotatableIcon()
+        self._shutter_icon.set_from_icon_name("camera-photo-symbolic")
+        self._shutter_icon.set_pixel_size(40)
+        self._shutter.set_child(self._shutter_icon)
+        self._rotatable_icons.append(self._shutter_icon)
+        self._recording: bool = False
         self._shutter.set_halign(primary_align)
         if self._handedness == "left":
             self._shutter.set_margin_start(24)
@@ -1089,6 +1102,10 @@ class CameraWindow(Adw.Window):
             self._shutter.set_margin_end(24)
         self._shutter.set_tooltip_text(self._("Capture"))
         self._shutter.connect("clicked", lambda _b: self._on_shutter())
+        # Horizontal swipe across the shutter toggles photo ↔ video.
+        swipe = Gtk.GestureSwipe()
+        swipe.connect("swipe", self._on_shutter_swipe)
+        self._shutter.add_controller(swipe)
         overlay.add_overlay(self._shutter)
         # Initial valign — overwritten as soon as the sensor (or, on
         # desktops without an accelerometer, the tick fallback) reports a
@@ -2188,11 +2205,46 @@ class CameraWindow(Adw.Window):
         if self._countdown_source is not None:
             self._cancel_countdown()
             return
+        # Video mode: shutter toggles recording. Self-timer doesn't apply.
+        if self._capture_mode == "video":
+            if self._recording:
+                self._stop_video_recording()
+            else:
+                self._start_video_recording()
+            return
         delay = self._timer_choices[self._timer_idx]
         if delay <= 0:
             self._capture()
         else:
             self._start_countdown(delay)
+
+    def _on_shutter_swipe(
+        self, _gesture: Gtk.GestureSwipe, vx: float, vy: float,
+    ) -> None:
+        # GestureSwipe fires "swipe" on release with end-of-gesture
+        # velocity. Use a generous |vx|>50 px/s threshold so an
+        # accidental tap-with-slight-drift doesn't flip the mode.
+        if abs(vx) < 50 and abs(vy) < 50:
+            return
+        # If we're mid-recording, ignore the swipe — the user has to
+        # explicitly stop first (otherwise we'd swap to photo mode with
+        # an unfinalised .mp4 sitting in videos_dir).
+        if self._recording:
+            return
+        new_mode = "video" if self._capture_mode == "photo" else "photo"
+        self._set_capture_mode(new_mode)
+
+    def _update_shutter_icon(self) -> None:
+        if self._recording:
+            # Stop-glyph indicator while a recording is in progress.
+            self._shutter_icon.set_from_icon_name("media-playback-stop-symbolic")
+            self._shutter.add_css_class("recording")
+        elif self._capture_mode == "video":
+            self._shutter_icon.set_from_icon_name("camera-video-symbolic")
+            self._shutter.remove_css_class("recording")
+        else:
+            self._shutter_icon.set_from_icon_name("camera-photo-symbolic")
+            self._shutter.remove_css_class("recording")
 
     def _on_orientation_changed(self, orientation: str) -> None:
         # Sensor callback. Stores the full 4-state value (used by the
@@ -2262,10 +2314,12 @@ class CameraWindow(Adw.Window):
 
         if orientation == ORIENT_NORMAL:
             if neutral:
-                # Shutter: bottom centre. Options: top centre.
+                # Shutter: bottom centre, same distance from the edge
+                # (70 px) as the neutral landscape layout — keeps the
+                # button at a consistent reach across orientations.
                 self._shutter.set_halign(center)
                 self._shutter.set_valign(end)
-                self._shutter.set_margin_bottom(third)
+                self._shutter.set_margin_bottom(70)
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
                 self._options_bar.set_valign(start)
@@ -2289,7 +2343,7 @@ class CameraWindow(Adw.Window):
             if neutral:
                 self._shutter.set_halign(center)
                 self._shutter.set_valign(start)
-                self._shutter.set_margin_top(third)
+                self._shutter.set_margin_top(70)
                 self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
                 self._options_bar.set_halign(center)
                 self._options_bar.set_valign(end)
@@ -2715,6 +2769,26 @@ class CameraWindow(Adw.Window):
         sec.append(row)
         box.append(sec)
 
+        box.append(Gtk.Separator(orientation=inner_orient))
+
+        # Geotagging toggle. Lives in the settings popover instead of
+        # the top-level icon row so the bar isn't cluttered with rarely-
+        # used controls. The toggle reflects whether a GeoClient is
+        # active right now (self._geo is not None).
+        gps_sec = Gtk.Box(orientation=section_orient, spacing=6)
+        gps_header = _rotated_text(self._("Geotagging"))
+        gps_header.set_xalign(0)
+        gps_header.add_css_class("heading")
+        gps_sec.append(gps_header)
+        self._geo_button = Gtk.ToggleButton()
+        self._geo_button.set_child(_rotated_text(
+            self._("On") if self._geo is not None else self._("Off")
+        ))
+        self._geo_button.set_active(self._geo is not None)
+        self._geo_button.connect("toggled", self._on_geo_toggled)
+        gps_sec.append(self._geo_button)
+        box.append(gps_sec)
+
         popover.set_child(box)
         return popover
 
@@ -2805,6 +2879,10 @@ class CameraWindow(Adw.Window):
         self._capture_mode = mode
         # Rebuild the popover so it shows mode-relevant sections.
         self._quality_button.set_popover(self._build_quality_popover())
+        self._update_shutter_icon()
+        self._show_toast(
+            self._("Video mode") if mode == "video" else self._("Photo mode")
+        )
 
     # ------------------------------------------------------------------
     # Zoom (digital, widget-snapshot only)
@@ -2870,7 +2948,20 @@ class CameraWindow(Adw.Window):
 
     def _on_geo_error(self, message: str) -> bool:
         self._show_toast(message)
-        self._geo_button.set_active(False)
+        # Clear our state; the popover toggle reflects self._geo on
+        # next rebuild. Direct set_active is best-effort because the
+        # toggle widget might have been destroyed with the popover.
+        if self._geo is not None:
+            try:
+                self._geo.stop()
+            except Exception:
+                pass
+            self._geo = None
+        if self._geo_button is not None:
+            try:
+                self._geo_button.set_active(False)
+            except Exception:
+                pass
         return False
 
     # ------------------------------------------------------------------
@@ -3497,6 +3588,291 @@ class CameraWindow(Adw.Window):
             err, dbg = msg.parse_error()
             print(
                 f"[yaga.camera] image-capture bus error: "
+                f"{err.message if err else '?'} | {(dbg or '').strip()}",
+                file=sys.stderr, flush=True,
+            )
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Video recording (Halium)
+    # ------------------------------------------------------------------
+
+    def _build_video_path(self) -> Path:
+        self._video_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        path = self._video_dir / f"{stamp}.mp4"
+        i = 1
+        while path.exists():
+            path = self._video_dir / f"{stamp}_{i}.mp4"
+            i += 1
+        return path
+
+    def _start_video_recording(self) -> None:
+        import sys
+        device = self._current_device() or {}
+        if device.get("source_factory") != "droidcamsrc":
+            self._show_toast(self._(
+                "Video recording: only supported on Halium devices for now"
+            ))
+            return
+        if self._recording:
+            return
+        self._busy_capture = True
+        self._shutter.set_sensitive(False)
+        # Switch to a transient pipeline:
+        #   droidcamsrc(mode=2) → vfsrc → gtk4paintablesink   (live preview)
+        #                       → vidsrc → queue → h264parse → mp4mux
+        #                                          → filesink
+        # Same swap-trick as image capture, but here the pipeline keeps
+        # running for the duration of the recording.
+        cam_id = device.get("droidcam_id", 0)
+        self._freeze_preview_frame()
+        self._show_capture_spinner(True)
+        print(
+            f"[yaga.camera] video-record: stopping preview for cam {cam_id}",
+            file=sys.stderr, flush=True,
+        )
+        self._stop_pipeline()
+        GLib.idle_add(self._video_pipeline_build, cam_id)
+
+    def _video_pipeline_build(self, cam_id: int) -> bool:
+        import sys
+        gst = self._Gst
+
+        pipeline = gst.Pipeline.new("yaga-video-record")
+        src = gst.ElementFactory.make("droidcamsrc", "src")
+        if src is None:
+            return self._video_recording_failed("droidcamsrc unavailable")
+        try:
+            src.set_property("camera-device", cam_id)
+            src.set_property("mode", 2)
+        except Exception:
+            pass
+        pipeline.add(src)
+
+        # vfsrc → queue → videoconvert → gtk4paintablesink: keep the
+        # user's preview live while recording so they can frame.
+        vf_queue = gst.ElementFactory.make("queue", "vf_queue")
+        vf_convert = gst.ElementFactory.make("videoconvert", "vf_convert")
+        vf_sink = gst.ElementFactory.make("gtk4paintablesink", "preview")
+        if None in (vf_queue, vf_convert, vf_sink):
+            return self._video_recording_failed("preview elements unavailable")
+        try:
+            vf_sink.set_property("sync", False)
+        except Exception:
+            pass
+        vf_queue.set_property("leaky", 2)
+        vf_queue.set_property("max-size-buffers", 2)
+        pipeline.add(vf_queue); pipeline.add(vf_convert); pipeline.add(vf_sink)
+        vf_pad = src.get_static_pad("vfsrc")
+        if vf_pad is None:
+            try:
+                vf_pad = src.request_pad_simple("vfsrc")
+            except Exception:
+                vf_pad = None
+        if vf_pad is None:
+            return self._video_recording_failed("vfsrc pad unavailable")
+        if vf_pad.link(vf_queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
+            return self._video_recording_failed("vfsrc -> queue link failed")
+        vf_queue.link(vf_convert)
+        vf_convert.link(vf_sink)
+
+        # vidsrc → queue → h264parse → mp4mux → filesink.
+        # gst-droid's vidsrc emits HAL-encoded H264 buffers when mode=2
+        # and start-capture is in flight — so we don't need a software
+        # encoder. h264parse hands the stream to mp4mux which finalises
+        # on EOS.
+        path = self._build_video_path()
+        self._video_path = path
+        vid_queue = gst.ElementFactory.make("queue", "vid_queue")
+        h264parse = gst.ElementFactory.make("h264parse", "h264")
+        mp4mux = gst.ElementFactory.make("mp4mux", "mux")
+        filesink = gst.ElementFactory.make("filesink", "filesink")
+        if None in (vid_queue, h264parse, mp4mux, filesink):
+            return self._video_recording_failed(
+                "video-record elements unavailable (need h264parse + mp4mux)"
+            )
+        vid_queue.set_property("max-size-buffers", 0)
+        vid_queue.set_property("max-size-time", 0)
+        vid_queue.set_property("max-size-bytes", 0)
+        filesink.set_property("location", str(path))
+        filesink.set_property("sync", False)
+        pipeline.add(vid_queue); pipeline.add(h264parse)
+        pipeline.add(mp4mux); pipeline.add(filesink)
+        vid_pad = src.get_static_pad("vidsrc")
+        if vid_pad is None:
+            try:
+                vid_pad = src.request_pad_simple("vidsrc")
+            except Exception:
+                vid_pad = None
+        if vid_pad is None:
+            pipeline.set_state(gst.State.NULL)
+            return self._video_recording_failed("vidsrc pad unavailable")
+        if vid_pad.link(vid_queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
+            pipeline.set_state(gst.State.NULL)
+            return self._video_recording_failed("vidsrc -> queue link failed")
+        vid_queue.link(h264parse)
+        h264parse.link(mp4mux)
+        mp4mux.link(filesink)
+
+        self._video_pipeline = pipeline
+        self._video_src = src
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_video_pipeline_error)
+        bus.connect("message::eos", self._on_video_pipeline_eos)
+        self._video_bus = bus
+
+        # Hook the new gtk4paintablesink into the picture widget.
+        try:
+            paintable = vf_sink.get_property("paintable")
+            if paintable is not None:
+                self._picture.set_paintable(paintable)
+        except Exception:
+            pass
+
+        result = pipeline.set_state(gst.State.PLAYING)
+        print(
+            f"[yaga.camera] video-record: pipeline PLAYING -> "
+            f"{result.value_nick if result else '?'} (file={path})",
+            file=sys.stderr, flush=True,
+        )
+
+        # Emit start-capture on a worker thread (same gst-droid PR#39
+        # deadlock dance as image capture).
+        def _emit_start():
+            try:
+                self._video_src.emit("start-capture")
+                print(
+                    "[yaga.camera] video-record: start-capture emitted",
+                    file=sys.stderr, flush=True,
+                )
+            except Exception as exc:
+                print(
+                    f"[yaga.camera] video-record: start-capture failed: {exc}",
+                    file=sys.stderr, flush=True,
+                )
+        def _schedule_start() -> bool:
+            import threading
+            threading.Thread(
+                target=_emit_start, name="yaga-vid-start", daemon=True,
+            ).start()
+            return False
+        GLib.timeout_add(500, _schedule_start)
+
+        # Mark recording state + UI feedback.
+        self._recording = True
+        self._show_capture_spinner(False)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        self._update_shutter_icon()
+        self._show_toast(self._("Recording…"))
+        return False
+
+    def _stop_video_recording(self) -> None:
+        import sys
+        if not self._recording or self._video_pipeline is None:
+            return
+        print(
+            "[yaga.camera] video-record: stop requested",
+            file=sys.stderr, flush=True,
+        )
+        self._shutter.set_sensitive(False)
+        self._show_capture_spinner(True)
+        # 1. Tell the HAL we're done recording.
+        try:
+            self._video_src.emit("stop-capture")
+        except Exception as exc:
+            print(
+                f"[yaga.camera] video-record: stop-capture failed: {exc}",
+                file=sys.stderr, flush=True,
+            )
+        # 2. Send EOS so mp4mux finalises the file (writes the moov atom).
+        try:
+            self._video_pipeline.send_event(self._Gst.Event.new_eos())
+        except Exception:
+            pass
+        # 3. Bus EOS handler will tear down + restart preview.
+        # Belt-and-braces timeout in case EOS never lands.
+        GLib.timeout_add_seconds(5, self._video_finalize_timeout)
+
+    def _on_video_pipeline_eos(self, _bus: Any, _msg: Any) -> None:
+        import sys
+        print(
+            "[yaga.camera] video-record: EOS received, finalising file",
+            file=sys.stderr, flush=True,
+        )
+        self._video_finalize()
+
+    def _video_finalize_timeout(self) -> bool:
+        if self._video_pipeline is not None:
+            import sys
+            print(
+                "[yaga.camera] video-record: EOS timeout, finalising anyway",
+                file=sys.stderr, flush=True,
+            )
+            self._video_finalize()
+        return False
+
+    def _video_finalize(self) -> None:
+        path = self._video_path
+        self._video_teardown()
+        self._recording = False
+        self._show_capture_spinner(False)
+        self._shutter.set_sensitive(True)
+        self._update_shutter_icon()
+        if path is not None and path.exists():
+            self._show_toast(self._("Saved %s") % path.name)
+            if self._on_captured is not None:
+                try:
+                    self._on_captured(path)
+                except Exception:
+                    LOGGER.debug("on_captured callback failed", exc_info=True)
+        else:
+            self._show_toast(self._("Recording failed"))
+        # Bring the preview pipeline back.
+        GLib.idle_add(self._start_pipeline)
+
+    def _video_recording_failed(self, reason: str) -> bool:
+        import sys
+        print(
+            f"[yaga.camera] video-record: {reason}",
+            file=sys.stderr, flush=True,
+        )
+        self._video_teardown()
+        self._recording = False
+        self._show_capture_spinner(False)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        self._update_shutter_icon()
+        self._show_toast(self._("Recording failed: %s") % reason)
+        GLib.idle_add(self._start_pipeline)
+        return False
+
+    def _video_teardown(self) -> None:
+        if self._video_bus is not None:
+            try:
+                self._video_bus.remove_signal_watch()
+            except Exception:
+                pass
+            self._video_bus = None
+        if self._video_pipeline is not None:
+            try:
+                self._video_pipeline.set_state(self._Gst.State.NULL)
+                self._video_pipeline.get_state(2 * self._Gst.SECOND)
+            except Exception:
+                pass
+            self._video_pipeline = None
+        self._video_src = None
+        self._video_path = None
+
+    def _on_video_pipeline_error(self, _bus: Any, msg: Any) -> None:
+        import sys
+        try:
+            err, dbg = msg.parse_error()
+            print(
+                f"[yaga.camera] video-record bus error: "
                 f"{err.message if err else '?'} | {(dbg or '').strip()}",
                 file=sys.stderr, flush=True,
             )
