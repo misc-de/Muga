@@ -1724,6 +1724,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.refresh_button.set_visible(False)
         self.settings_button.set_visible(False)
         self.sort_button.set_visible(False)
+        self.camera_button.set_visible(False)
         self._sel_cancel_btn.set_visible(True)
         self._sel_delete_btn.set_visible(True)
         self._sel_move_btn.set_visible(True)
@@ -1753,6 +1754,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.refresh_button.set_visible(True)
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)
+        self.camera_button.set_visible(True)
         # Splice every visible row back so check-mark overlays disappear,
         # without re-querying the database or losing the scroll position.
         self.gallery_grid.refresh_selection_state()
