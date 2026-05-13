@@ -61,9 +61,17 @@ def _dlog(message: str) -> None:
 # helper functions.
 _BRACKET_INSET = 50          # corner-bracket inset from image edge
 _OPTIONS_NOTCH_MARGIN = 40   # gap above the options bar (clear of notch)
-_OPTIONS_BAR_SIDE = 30       # options-bar side margin in landscape
+_OPTIONS_BAR_SIDE = 40       # options-bar edge inset in landscape — matches
+                             # the portrait notch margin so the icon row sits
+                             # the same distance from the visible frame in
+                             # both orientations.
 _SHUTTER_SIDE_MARGIN = 24    # shutter inset from screen edge in portrait
-_SHUTTER_LANDSCAPE_INSET = 70  # shutter "into-the-image" inset in landscape
+                             # handed mode (corner placement).
+_SHUTTER_LANDSCAPE_INSET = 90  # shutter "into-the-image" edge inset in
+                               # landscape and in portrait NEUTRAL. 70 felt
+                               # tight in landscape — only 20 px past the
+                               # 50-px bracket inset — so this is bumped to
+                               # match portrait's perceived breathing room.
 _RECORD_DOT_INSET = 16       # record-dot inset from image rect
 _SWIPE_HINT_INSET = 20       # swipe-hint inset from edge
 _ICON_PIXEL_SIZE = 26
