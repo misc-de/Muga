@@ -2090,7 +2090,7 @@ class CameraWindow(Adw.Window):
             #     perpendicular to that, so it lands on the *other*
             #     widget axis.
             user_vertical = max(120, self.get_width() // 3)
-            inset = 90
+            inset = 70
             if right:
                 # User's bottom-right corner = widget top-right.
                 self._shutter.set_halign(end)
@@ -2118,7 +2118,7 @@ class CameraWindow(Adw.Window):
             # Phone rotated CCW 90° (right side physically up). Mirror
             # of LEFT_UP about both axes.
             user_vertical = max(120, self.get_width() // 3)
-            inset = 90
+            inset = 70
             if right:
                 # User's bottom-right corner = widget bottom-left.
                 self._shutter.set_halign(start)
