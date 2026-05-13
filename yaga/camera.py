@@ -2022,18 +2022,25 @@ class CameraWindow(Adw.Window):
 
         kw = dict(neutral=neutral, right=right, third=third,
                   user_vertical=user_vertical)
+        is_landscape = orientation_is_landscape(orientation)
         if neutral:
             # Neutral handedness: keep the portrait layout (icons row
             # across the top, shutter centred at the bottom) regardless
-            # of device orientation. The landscape-specific corner
-            # placements only apply to handed (right/left) mode where
-            # they reach naturally under the user's thumb. Glyphs still
-            # rotate via _ICON_ROTATION_DEG so they remain upright in
-            # the user's view; only the on-screen positioning is held
-            # constant. flip_180 still applies for BOTTOM_UP so an
-            # upside-down portrait swaps icons and shutter.
+            # of device orientation. flip_180 still applies for
+            # BOTTOM_UP so an upside-down portrait swaps icons and
+            # shutter.
             flip_180 = (orientation == ORIENT_BOTTOM_UP)
             self._layout_portrait(flip_180=flip_180, **kw)
+        elif right and is_landscape:
+            # Right-handed in landscape: keep the shutter at the
+            # widget's bottom-right corner — same place it sits in
+            # portrait right-handed. The user wants a stable "shutter
+            # under the right thumb in the screen's bottom-right
+            # corner" regardless of how the phone is tilted; the
+            # earlier landscape-specific corner placement (which moved
+            # the shutter to the user's bottom-right in widget coords)
+            # felt off.
+            self._layout_portrait(flip_180=False, **kw)
         elif orientation == ORIENT_NORMAL:
             self._layout_portrait(flip_180=False, **kw)
         elif orientation == ORIENT_BOTTOM_UP:
