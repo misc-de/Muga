@@ -39,6 +39,38 @@ from gi.repository import GLib  # noqa: F401  — ensures the binding is up
 # 1.  Stat-cache for thumbnail existence checks
 # ---------------------------------------------------------------------------
 
+def test_video_light_toggle_turns_torch_on_before_recording() -> None:
+    from yaga.camera import CameraWindow
+
+    fake = SimpleNamespace(
+        _capture_mode="video",
+        _flash_enabled=True,
+        _recording=False,
+        _pipeline=None,
+    )
+
+    with patch("yaga.camera._set_torch_sysfs") as set_torch:
+        CameraWindow._apply_flash_to_pipeline(fake)
+
+    set_torch.assert_called_once_with(True)
+
+
+def test_photo_mode_keeps_sysfs_torch_off() -> None:
+    from yaga.camera import CameraWindow
+
+    fake = SimpleNamespace(
+        _capture_mode="photo",
+        _flash_enabled=True,
+        _recording=False,
+        _pipeline=None,
+    )
+
+    with patch("yaga.camera._set_torch_sysfs") as set_torch:
+        CameraWindow._apply_flash_to_pipeline(fake)
+
+    set_torch.assert_called_once_with(False)
+
+
 def _thumb_cache_self():
     return SimpleNamespace(
         _exists_cache={},

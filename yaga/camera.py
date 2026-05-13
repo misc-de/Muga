@@ -101,7 +101,8 @@ _HALIUM_IMAGE_MAX_VIA_VFSRC = 2560
 # GstDroidCamSrcFlashMode enum exposed by droidcamsrc). Used by the
 # flash / torch toggle:
 #   - Photo: FLASH_ON (2) → HAL fires the flash once at capture.
-#   - Video: FLASH_TORCH (3) → HAL keeps the LED on continuously.
+#   - Video: direct sysfs torch → LED stays on while the video light
+#     toggle is active.
 #   - Off: FLASH_OFF (0).
 _FLASH_MODE_OFF = 0
 _FLASH_MODE_AUTO = 1
@@ -2768,12 +2769,14 @@ class CameraWindow(Adw.Window):
         * **Photo flash** (one-shot at capture) — set droidcamsrc's
           ``flash-mode`` property to ON. The HAL fires the LED during
           the capture.
-        * **Video torch** (continuous light during recording) — write
+        * **Video torch** (continuous light) — write
           ``1`` to the kernel LED sysfs node (e.g.
           ``/sys/class/leds/torch-light/brightness``). gst-droid's
           ``flash-mode=TORCH`` proved unreliable across HALs; the
           direct sysfs path is what FuriLabs' own camera uses and what
-          most Halium phones expose.
+          most Halium phones expose. The light follows the video-mode
+          toggle immediately, so it is already on in preview before the
+          recording starts.
 
         Silent on non-Halium devices (no droidcamsrc, no LED nodes)."""
         # Photo path — droidcamsrc flash-mode property.
@@ -2792,7 +2795,7 @@ class CameraWindow(Adw.Window):
                     LOGGER.debug("flash-mode set failed", exc_info=True)
         # Video torch — direct sysfs write to the kernel LED node.
         if self._capture_mode == "video":
-            want_on = self._flash_enabled and self._recording
+            want_on = self._flash_enabled
             _set_torch_sysfs(want_on)
         else:
             # Ensure the torch is off when not in video mode.
@@ -3880,8 +3883,8 @@ class CameraWindow(Adw.Window):
         self._shutter.set_sensitive(True)
         self._update_shutter_icon()
         self._start_record_blink()
-        # Now that we're recording, switch flash-mode to TORCH if the
-        # user has the light toggle on.
+        # Re-apply the video light toggle after swapping pipelines so
+        # the sysfs torch remains in the requested state.
         self._apply_flash_to_pipeline()
         self._show_toast(self._("Recording…"))
         return False
@@ -3938,9 +3941,9 @@ class CameraWindow(Adw.Window):
         path = self._video_path
         self._video_teardown()
         self._recording = False
-        # Drop torch — the pipeline is about to be torn down, but the
-        # preview rebuild that follows may not happen instantly and
-        # we don't want the LED to linger.
+        # Re-apply the user's video-light setting after the transient
+        # recording pipeline is torn down; the preview rebuild that
+        # follows may not happen instantly.
         self._apply_flash_to_pipeline()
         self._stop_record_blink()
         self._show_capture_spinner(False)
@@ -3962,7 +3965,7 @@ class CameraWindow(Adw.Window):
         _dlog(f"[yaga.camera] video-record: {reason}")
         self._video_teardown()
         self._recording = False
-        self._apply_flash_to_pipeline()  # drop torch if it was on
+        self._apply_flash_to_pipeline()
         self._stop_record_blink()
         self._show_capture_spinner(False)
         self._busy_capture = False

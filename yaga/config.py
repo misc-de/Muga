@@ -79,7 +79,7 @@ class Settings:
 
     # Flash / torch toggle. Single boolean covers both:
     #   - photo mode → flash-mode=ON (fires once at capture)
-    #   - video mode → flash-mode=TORCH (continuous light during recording)
+    #   - video mode → direct sysfs torch (continuous light while active)
     # Only meaningful on Halium / gst-droid devices; v4l2 cameras
     # silently ignore it.
     camera_flash_enabled: bool = False
