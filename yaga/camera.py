@@ -814,6 +814,12 @@ class CameraWindow(Adw.Window):
         self._zoom_base = 1.0
         self._zoom_max = 4.0
         self._selected_resolution: tuple[int, int] | None = None
+        # Halium image-capture target. The transient capture pipeline
+        # always asks the HAL for native resolution (HAL's preferred
+        # image-resolution is the only one we can reliably get out of
+        # gst-droid). If this is non-None, we Pillow-downscale the JPEG
+        # to fit inside (w, h) before saving — keeps aspect ratio.
+        self._image_resolution: tuple[int, int] | None = None
         self._flash_source: int | None = None
         self._controls: dict[str, V4l2Control] = {}
         self._controls_built: bool = False
@@ -1711,6 +1717,13 @@ class CameraWindow(Adw.Window):
     # ------------------------------------------------------------------
 
     def _populate_resolutions(self, device: dict[str, Any]) -> None:
+        # Halium / droidcamsrc devices don't advertise their HAL-side
+        # image resolutions through GstCaps, so we offer synthetic
+        # presets that downscale via Pillow after the HAL JPEG arrives.
+        # The "Native" entry keeps the HAL's preferred resolution.
+        if device.get("source_factory") == "droidcamsrc":
+            self._populate_image_resolutions_halium()
+            return
         # Uses raw-or-jpeg union so devices that only expose MJPG (most
         # UVC cams at high resolutions) still get a working picker.
         resolutions = _resolutions_from_caps(device.get("caps"))
@@ -1763,6 +1776,89 @@ class CameraWindow(Adw.Window):
         self._res_button.set_popover(popover)
         self._res_button.set_label(f"{current[0]}×{current[1]}")
         self._res_button.set_visible(True)
+
+    def _populate_image_resolutions_halium(self) -> None:
+        """Synthetic image-resolution picker for droidcamsrc devices.
+        Picks set _image_resolution; the transient capture pipeline
+        always uses HAL-native resolution, then Pillow downscales the
+        result to fit inside the chosen target before saving."""
+        # 4:3 presets matching the typical phone sensor aspect ratio
+        # (the user's HAL produces 3864x5152 ≈ 4:3 portrait). None means
+        # "Native" — no post-capture downscale.
+        presets: list[tuple[str, tuple[int, int] | None]] = [
+            (self._("Native (max)"),         None),
+            (self._("2K"),       (2560, 1920)),
+            (self._("FHD"),      (1920, 1440)),
+            (self._("HD"),       (1280, 960)),
+        ]
+
+        popover = Gtk.Popover()
+        popover.set_autohide(True)
+        list_box = Gtk.ListBox()
+        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
+        list_box.add_css_class("boxed-list")
+        popover.set_child(list_box)
+
+        # Each row label is a _RotatableLabel registered in
+        # _rotatable_icons so the orientation tick rotates them in sync
+        # with the rest of the chrome — keeps the popover legible in
+        # landscape too.
+        rot = {
+            ORIENT_NORMAL:    0,
+            ORIENT_BOTTOM_UP: 180,
+            ORIENT_LEFT_UP:   270,
+            ORIENT_RIGHT_UP:  90,
+        }.get(self._device_orientation, 0)
+        # Drop any old popover labels from the rotation list so they
+        # don't accumulate when the popover is rebuilt.
+        self._rotatable_icons = [
+            i for i in self._rotatable_icons
+            if not getattr(i, "_yaga_res_popover_label", False)
+        ]
+        for label, wh in presets:
+            if wh is None:
+                text = label
+            else:
+                text = f"{label}  ({wh[0]}×{wh[1]})"
+            row_label = _RotatableLabel()
+            row_label.set_label(text)
+            row_label.set_xalign(0.0)
+            row_label.set_margin_top(8); row_label.set_margin_bottom(8)
+            row_label.set_margin_start(12); row_label.set_margin_end(12)
+            row_label.set_rotation_deg(rot)
+            row_label._yaga_res_popover_label = True  # type: ignore[attr-defined]
+            self._rotatable_icons.append(row_label)
+            row = Gtk.ListBoxRow()
+            row.set_child(row_label)
+            row.set_activatable(True)
+            row._yaga_image_res = wh  # type: ignore[attr-defined]
+            list_box.append(row)
+
+        def on_activated(_lb: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
+            wh = getattr(row, "_yaga_image_res", "__missing__")
+            popover.popdown()
+            if wh == "__missing__":
+                return
+            if wh == self._image_resolution:
+                return
+            self._image_resolution = wh
+            self._res_button.set_label(self._res_button_label_for(wh))
+
+        list_box.connect("row-activated", on_activated)
+
+        self._res_popover = popover
+        self._res_button.set_popover(popover)
+        self._res_button.set_label(
+            self._res_button_label_for(self._image_resolution)
+        )
+        self._res_button.set_visible(True)
+
+    def _res_button_label_for(
+        self, wh: tuple[int, int] | None,
+    ) -> str:
+        if wh is None:
+            return self._("Native")
+        return f"{wh[0]}×{wh[1]}"
 
     # ------------------------------------------------------------------
     # V4L2 controls panel
@@ -3215,6 +3311,37 @@ class CameraWindow(Adw.Window):
             f"[yaga.camera] capture: jpeg bytes={len(data)} save_dir={self._save_dir}",
             file=sys.stderr, flush=True,
         )
+
+        # Optional Pillow downscale to the user-picked target. Image
+        # resolution picker on Halium sets _image_resolution; we keep
+        # aspect ratio by fitting inside the target box (thumbnail()),
+        # only downscaling (never upscaling).
+        target = self._image_resolution
+        if target is not None:
+            try:
+                from PIL import Image as PILImage
+                import io
+                src = PILImage.open(io.BytesIO(data))
+                tw, th = target
+                if src.width > tw or src.height > th:
+                    src.thumbnail((tw, th), PILImage.LANCZOS)
+                    buf_out = io.BytesIO()
+                    src.save(
+                        buf_out, format="JPEG",
+                        quality=max(0, min(100, self._jpeg_quality)),
+                    )
+                    data = buf_out.getvalue()
+                    print(
+                        f"[yaga.camera] capture: downscaled to "
+                        f"{src.width}x{src.height} ({len(data)} bytes)",
+                        file=sys.stderr, flush=True,
+                    )
+            except Exception as exc:
+                print(
+                    f"[yaga.camera] capture: downscale failed, keeping "
+                    f"native ({exc})",
+                    file=sys.stderr, flush=True,
+                )
 
         try:
             self._save_dir.mkdir(parents=True, exist_ok=True)
