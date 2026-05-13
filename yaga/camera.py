@@ -2966,8 +2966,14 @@ class CameraWindow(Adw.Window):
             src.set_property("camera-device", cam_id)
         except Exception:
             pass
+        # mode=1 (image). In the main preview we use mode=2 because
+        # mode=1's per-frame Photography reconfigures stall the live
+        # viewfinder — but here we only need a SINGLE frame, so the
+        # freeze-after-first-frame symptom is actually what we want.
+        # Crucially, mode=1 lets vfsrc negotiate the full sensor-native
+        # resolution (mode=2 caps it around 2560 px on this HAL).
         try:
-            src.set_property("mode", 2)
+            src.set_property("mode", 1)
         except Exception:
             pass
         pipeline.add(src)
