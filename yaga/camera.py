@@ -698,6 +698,12 @@ class CameraWindow(Adw.Window):
         self._video_dir = Path(video_dir) if video_dir is not None else self._save_dir
         self._on_captured = on_captured
         self._handedness = handedness if handedness in ("left", "right") else "right"
+        # Seed orientation state up front: the timer button is created
+        # in the options bar before the orientation backend starts, and
+        # its _RotatableIcon needs to know the current rotation.
+        self._device_orientation: str = ORIENT_NORMAL
+        self._applied_layout: str | None = None
+        self._layout_landscape: bool | None = None
         self._Gst = _gst()
         self._pipeline: Any = None
         self._bus: Any = None
@@ -918,13 +924,6 @@ class CameraWindow(Adw.Window):
         # desktops without an accelerometer, the tick fallback) reports a
         # real orientation.
         self._shutter.set_valign(Gtk.Align.CENTER)
-        self._device_orientation: str = ORIENT_NORMAL
-        # Most recent 4-state orientation the layout has been applied
-        # for. Distinct from _device_orientation: _device_orientation
-        # follows the sensor regardless of whether a relayout is
-        # pending; _applied_layout is what's actually on screen.
-        self._applied_layout: str | None = None
-        self._layout_landscape: bool | None = None
         # Prefer the device accelerometer over window dimensions. On
         # phones with Phosh the surface size doesn't change on screen
         # rotation — the compositor rotates the buffer instead — so
