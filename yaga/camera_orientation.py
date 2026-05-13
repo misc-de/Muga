@@ -35,7 +35,6 @@ import logging
 import os
 import socket as _socket
 import struct
-import sys
 from typing import Any, Callable
 
 from gi.repository import Gio, GLib
@@ -69,6 +68,17 @@ SENSORD_SOCKET = "/run/sensord.sock"
 # Axis values are in mG (divide by 1000 for G).
 _SENSORD_HDR = struct.Struct("<I")
 _SENSORD_ACCEL = struct.Struct("<Qfffi")
+# Sanity caps for the binary protocol on /run/sensord.sock. At 10 Hz a
+# packet carries 1–2 records — 1024 is wildly generous. Without these,
+# a corrupt `count` field would make the receive buffer grow forever
+# (the read loop only consumes bytes once a full record arrives, so
+# count=0xFFFFFFFF blocks consumption indefinitely).
+_SENSORD_MAX_RECORDS = 1024
+_SENSORD_MAX_BUF = 1 << 20  # 1 MiB ceiling on accumulated bytes
+# Backoff for sensord-socket reconnect after IO_HUP. Sensord can
+# restart (rare, but happens on system updates); we don't want
+# orientation to silently die until the user restarts the app.
+_SENSORD_RECONNECT_DELAY_MS = 2000
 
 # --- iio-sensor-proxy -----------------------------------------------
 
@@ -143,9 +153,12 @@ class _SensordBackend:
         self._smoothed_seeded = False
         self._orientation: str | None = None
         self._on_change: Callable[[str], None] | None = None
+        self._reconnect_source: int | None = None
+        self._stopped = False
 
     def start(self, on_change: Callable[[str], None] | None) -> bool:
         self._on_change = on_change
+        self._stopped = False
         try:
             self._bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
             pid = os.getpid()
@@ -188,6 +201,13 @@ class _SensordBackend:
             return False
 
     def stop(self) -> None:
+        self._stopped = True
+        if self._reconnect_source is not None:
+            try:
+                GLib.source_remove(self._reconnect_source)
+            except Exception:
+                pass
+            self._reconnect_source = None
         if self._watch_id is not None:
             try:
                 GLib.source_remove(self._watch_id)
@@ -241,16 +261,42 @@ class _SensordBackend:
 
     def _on_socket(self, _fd: int, condition: int) -> bool:
         if condition & (GLib.IO_ERR | GLib.IO_HUP):
+            LOGGER.debug("sensord socket HUP/ERR; scheduling reconnect")
             self._watch_id = None
+            self._teardown_socket()
+            self._schedule_reconnect()
             return False
         assert self._sock is not None
         try:
             chunk = self._sock.recv(4096)
             if not chunk:
-                return True
+                # Peer closed the stream cleanly — treat as HUP.
+                self._watch_id = None
+                self._teardown_socket()
+                self._schedule_reconnect()
+                return False
             self._buf += chunk
+            if len(self._buf) > _SENSORD_MAX_BUF:
+                # A corrupt header would otherwise grow the buffer
+                # unboundedly. Drop everything and resync on the next
+                # header that fits — losing one packet costs at most
+                # 100 ms of orientation samples.
+                LOGGER.debug(
+                    "sensord buffer ceiling hit (%d bytes); dropping", len(self._buf)
+                )
+                self._buf = b""
+                return True
             while len(self._buf) >= _SENSORD_HDR.size:
                 (count,) = _SENSORD_HDR.unpack_from(self._buf)
+                if count > _SENSORD_MAX_RECORDS:
+                    # Implausible record count — protocol desync.
+                    # Drop the buffer and let the next chunk
+                    # re-establish framing.
+                    LOGGER.debug(
+                        "sensord protocol desync (count=%d); dropping buffer", count
+                    )
+                    self._buf = b""
+                    break
                 need = _SENSORD_HDR.size + count * _SENSORD_ACCEL.size
                 if len(self._buf) < need:
                     break
@@ -264,8 +310,57 @@ class _SensordBackend:
             pass
         except Exception as exc:
             LOGGER.debug("sensord socket error: %s", exc)
+            self._watch_id = None
+            self._teardown_socket()
+            self._schedule_reconnect()
             return False
         return True
+
+    def _teardown_socket(self) -> None:
+        """Drop the socket + buffer without touching the D-Bus session
+        — used when reconnect logic wants to redo just the stream side."""
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+        self._buf = b""
+
+    def _schedule_reconnect(self) -> None:
+        if self._stopped:
+            return
+        if self._reconnect_source is not None:
+            return
+        self._reconnect_source = GLib.timeout_add(
+            _SENSORD_RECONNECT_DELAY_MS, self._reconnect
+        )
+
+    def _reconnect(self) -> bool:
+        self._reconnect_source = None
+        if self._stopped:
+            return False
+        # Re-run the full handshake. Cheapest path is to call start()
+        # again, which already handles the bus / sensor request and
+        # the socket connect. The previous D-Bus session id will be
+        # stale; releasing it might fail silently — that's fine.
+        cb = self._on_change
+        try:
+            self.stop_for_reconnect()
+        except Exception:
+            pass
+        ok = self.start(cb)
+        if not ok:
+            LOGGER.debug("sensord reconnect failed; retrying")
+            self._schedule_reconnect()
+        return False
+
+    def stop_for_reconnect(self) -> None:
+        """Like stop() but doesn't set the stopped flag — used by the
+        reconnect path which is about to call start() again."""
+        was_stopped = self._stopped
+        self.stop()
+        self._stopped = was_stopped
 
     def _process_sample(self, x: float, y: float, _z: float) -> None:
         if not self._smoothed_seeded:
@@ -278,10 +373,9 @@ class _SensordBackend:
         current = self._orientation if self._orientation is not None else ORIENT_NORMAL
         new = _classify_orientation(self._smoothed_x, self._smoothed_y, current)
         if new != self._orientation:
-            print(
-                f"[yaga.camera] orientation sensord -> {new} "
-                f"(x={self._smoothed_x:+.2f}g y={self._smoothed_y:+.2f}g)",
-                file=sys.stderr, flush=True,
+            LOGGER.debug(
+                "orientation sensord -> %s (x=%+.2fg y=%+.2fg)",
+                new, self._smoothed_x, self._smoothed_y,
             )
             self._orientation = new
             if self._on_change is not None:
@@ -331,10 +425,7 @@ class _IIOSensorProxyBackend:
         initial = self._get_property("AccelerometerOrientation")
         if isinstance(initial, str) and initial in ALL_ORIENTATIONS:
             self._orientation = initial
-            print(
-                f"[yaga.camera] orientation iio-sensor-proxy -> {initial}",
-                file=sys.stderr, flush=True,
-            )
+            LOGGER.debug("orientation iio-sensor-proxy -> %s", initial)
             if on_change is not None:
                 on_change(initial)
         return True
@@ -397,10 +488,7 @@ class _IIOSensorProxyBackend:
             return
         if value == self._orientation:
             return
-        print(
-            f"[yaga.camera] orientation iio-sensor-proxy -> {value}",
-            file=sys.stderr, flush=True,
-        )
+        LOGGER.debug("orientation iio-sensor-proxy -> %s", value)
         self._orientation = value
         if self._on_change is not None:
             self._on_change(value)

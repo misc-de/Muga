@@ -1,0 +1,135 @@
+.camera-root { background-color: #000; }
+.camera-toast {
+    background-color: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+.camera-countdown {
+    color: #fff;
+    /* Doubled (was 96 px) and bold so the self-timer count reads from
+     * arm's length. */
+    font-size: 192px;
+    font-weight: 800;
+    text-shadow: 0 0 24px rgba(0,0,0,0.7);
+    font-feature-settings: "tnum";
+}
+/* Icon-bar buttons. Adwaita gives each widget class (Button vs
+ * ToggleButton vs MenuButton) its own default pill/background, so we
+ * have to zero those out explicitly, including the inner-button child
+ * MenuButton wraps around its content. */
+.camera-iconbtn,
+.camera-iconbtn:hover,
+.camera-iconbtn:active,
+.camera-iconbtn:checked,
+.camera-iconbtn:focus,
+.camera-iconbtn:focus-visible,
+.camera-iconbtn:disabled,
+.camera-iconbtn > button,
+.camera-iconbtn > button:hover,
+.camera-iconbtn > button:active,
+.camera-iconbtn > button:checked,
+.camera-iconbtn > button:focus,
+.camera-iconbtn > button:focus-visible,
+.camera-iconbtn > button:disabled {
+    background: none;
+    background-image: none;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+}
+.camera-iconbtn {
+    min-width: 56px;
+    min-height: 56px;
+    color: #fff;
+    transition: none;
+}
+/* MenuButton wraps its content in an internal <button> child (and
+ * possibly more boxes), so the icon needs reaching via descendant
+ * selectors, not just direct-child. We also bump the icon's own
+ * pixel_size in Python (set_pixel_size(26)) so even themes that
+ * ignore -gtk-icon-size still render at the correct size. */
+.camera-iconbtn button,
+.camera-iconbtn box {
+    min-width: 56px;
+    min-height: 56px;
+    padding: 0;
+    margin: 0;
+}
+.camera-iconbtn image {
+    -gtk-icon-size: 26px;
+    min-width: 26px;
+    min-height: 26px;
+}
+/* Feedback via opacity / icon-color only so the row stays uniform. */
+.camera-iconbtn:hover    { opacity: 0.85; }
+.camera-iconbtn:active   { opacity: 0.60; }
+.camera-iconbtn:checked  { color: #fbb03b; }
+.camera-iconbtn:disabled { opacity: 0.35; }
+.camera-resbtn {
+    min-height: 44px;
+    padding: 0 16px;
+    border-radius: 999px;
+    background-color: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    border: none;
+    box-shadow: none;
+    font-size: 13px;
+    font-feature-settings: "tnum";
+    transition: none;
+}
+.camera-resbtn:hover { background-color: rgba(0, 0, 0, 0.65); }
+.shutter-button {
+    min-width: 76px;
+    min-height: 76px;
+    padding: 12px;
+    border-radius: 999px;
+    background-color: transparent;
+    border: 4px solid #fff;
+    box-shadow: none;
+}
+.shutter-button > image {
+    /* The mode icon inside the ring - red so it reads as the active
+     * capture affordance regardless of background. Swapped to a square
+     * stop-glyph while video recording is in progress. */
+    color: #e8443b;
+    -gtk-icon-size: 40px;
+}
+.shutter-button:hover > image { color: #ff5247; }
+.shutter-button:active > image { color: #c0322a; }
+.shutter-button:disabled > image { color: #6a6a6a; }
+.shutter-button.recording > image { color: #c0322a; }
+.camera-record-dot {
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 999px;
+    background-color: #e8443b;
+    box-shadow: 0 0 12px rgba(232, 68, 59, 0.7);
+}
+.camera-swipe-hint {
+    color: rgba(255, 255, 255, 0.95);
+    background-color: rgba(0, 0, 0, 0.55);
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 600;
+    text-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+}
+.camera-timer-text {
+    font-weight: 800;
+    font-size: 22px;
+    font-feature-settings: "tnum";
+}
+.camera-capture-overlay {
+    /* Semi-transparent pill behind the spinner+label so it stays
+     * legible against any preview content. */
+    background-color: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border-radius: 16px;
+    padding: 28px 36px;
+}

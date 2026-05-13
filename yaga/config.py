@@ -150,9 +150,22 @@ class Settings:
         return settings
 
     def save(self) -> None:
+        # Atomic write: serialise to a sibling tmp file, fsync, rename
+        # into place. Without this, a crash mid-write produces a
+        # truncated JSON file that load() can't parse — and load()
+        # silently falls back to defaults, losing every user setting.
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         path = CONFIG_DIR / "settings.json"
-        path.write_text(json.dumps(self.__dict__, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp = path.with_suffix(".json.tmp")
+        data = json.dumps(self.__dict__, indent=2, ensure_ascii=False)
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            try:
+                os.fsync(fh.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
 
     def get_sort_mode(self, category: str, folder: str | None = None) -> str:
         default = "folder" if category == "nextcloud" else self.sort_mode
