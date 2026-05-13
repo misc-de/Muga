@@ -1006,6 +1006,13 @@ class CameraWindow(Adw.Window):
         self._quality_button.set_tooltip_text(self._("Quality"))
         self._photo_quality_buttons: list[tuple[Gtk.Button, int]] = []
         self._video_quality_buttons: list[tuple[Gtk.Button, int]] = []
+        self._image_size_buttons: list[
+            tuple[Gtk.Button, tuple[int, int] | None]
+        ] = []
+        # Capture mode: "photo" or "video". Drives which sections the
+        # Quality popover shows. Until a mode-toggle UI lands (when
+        # video recording is wired up), this stays at "photo".
+        self._capture_mode: str = "photo"
         self._quality_button.set_popover(self._build_quality_popover())
         top_right.append(self._quality_button)
 
@@ -1717,12 +1724,11 @@ class CameraWindow(Adw.Window):
     # ------------------------------------------------------------------
 
     def _populate_resolutions(self, device: dict[str, Any]) -> None:
-        # Halium / droidcamsrc devices don't advertise their HAL-side
-        # image resolutions through GstCaps, so we offer synthetic
-        # presets that downscale via Pillow after the HAL JPEG arrives.
-        # The "Native" entry keeps the HAL's preferred resolution.
+        # On Halium / droidcamsrc, the image-size presets live inside
+        # the Quality popover ("Photo size" section), so we hide the
+        # standalone resolution chip here.
         if device.get("source_factory") == "droidcamsrc":
-            self._populate_image_resolutions_halium()
+            self._res_button.set_visible(False)
             return
         # Uses raw-or-jpeg union so devices that only expose MJPG (most
         # UVC cams at high resolutions) still get a working picker.
@@ -1776,89 +1782,6 @@ class CameraWindow(Adw.Window):
         self._res_button.set_popover(popover)
         self._res_button.set_label(f"{current[0]}×{current[1]}")
         self._res_button.set_visible(True)
-
-    def _populate_image_resolutions_halium(self) -> None:
-        """Synthetic image-resolution picker for droidcamsrc devices.
-        Picks set _image_resolution; the transient capture pipeline
-        always uses HAL-native resolution, then Pillow downscales the
-        result to fit inside the chosen target before saving."""
-        # 4:3 presets matching the typical phone sensor aspect ratio
-        # (the user's HAL produces 3864x5152 ≈ 4:3 portrait). None means
-        # "Native" — no post-capture downscale.
-        presets: list[tuple[str, tuple[int, int] | None]] = [
-            (self._("Native (max)"),         None),
-            (self._("2K"),       (2560, 1920)),
-            (self._("FHD"),      (1920, 1440)),
-            (self._("HD"),       (1280, 960)),
-        ]
-
-        popover = Gtk.Popover()
-        popover.set_autohide(True)
-        list_box = Gtk.ListBox()
-        list_box.set_selection_mode(Gtk.SelectionMode.NONE)
-        list_box.add_css_class("boxed-list")
-        popover.set_child(list_box)
-
-        # Each row label is a _RotatableLabel registered in
-        # _rotatable_icons so the orientation tick rotates them in sync
-        # with the rest of the chrome — keeps the popover legible in
-        # landscape too.
-        rot = {
-            ORIENT_NORMAL:    0,
-            ORIENT_BOTTOM_UP: 180,
-            ORIENT_LEFT_UP:   270,
-            ORIENT_RIGHT_UP:  90,
-        }.get(self._device_orientation, 0)
-        # Drop any old popover labels from the rotation list so they
-        # don't accumulate when the popover is rebuilt.
-        self._rotatable_icons = [
-            i for i in self._rotatable_icons
-            if not getattr(i, "_yaga_res_popover_label", False)
-        ]
-        for label, wh in presets:
-            if wh is None:
-                text = label
-            else:
-                text = f"{label}  ({wh[0]}×{wh[1]})"
-            row_label = _RotatableLabel()
-            row_label.set_label(text)
-            row_label.set_xalign(0.0)
-            row_label.set_margin_top(8); row_label.set_margin_bottom(8)
-            row_label.set_margin_start(12); row_label.set_margin_end(12)
-            row_label.set_rotation_deg(rot)
-            row_label._yaga_res_popover_label = True  # type: ignore[attr-defined]
-            self._rotatable_icons.append(row_label)
-            row = Gtk.ListBoxRow()
-            row.set_child(row_label)
-            row.set_activatable(True)
-            row._yaga_image_res = wh  # type: ignore[attr-defined]
-            list_box.append(row)
-
-        def on_activated(_lb: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
-            wh = getattr(row, "_yaga_image_res", "__missing__")
-            popover.popdown()
-            if wh == "__missing__":
-                return
-            if wh == self._image_resolution:
-                return
-            self._image_resolution = wh
-            self._res_button.set_label(self._res_button_label_for(wh))
-
-        list_box.connect("row-activated", on_activated)
-
-        self._res_popover = popover
-        self._res_button.set_popover(popover)
-        self._res_button.set_label(
-            self._res_button_label_for(self._image_resolution)
-        )
-        self._res_button.set_visible(True)
-
-    def _res_button_label_for(
-        self, wh: tuple[int, int] | None,
-    ) -> str:
-        if wh is None:
-            return self._("Native")
-        return f"{wh[0]}×{wh[1]}"
 
     # ------------------------------------------------------------------
     # V4L2 controls panel
@@ -2519,47 +2442,73 @@ class CameraWindow(Adw.Window):
                 row.append(btn)
             box.append(row)
 
-        _section(
-            self._("Photo quality"),
-            [
-                (self._("Eco"),  60),
-                (self._("Std"),  85),
-                (self._("High"), 92),
-                (self._("Max"),  98),
-            ],
-            self._jpeg_quality,
-            self._set_jpeg_quality,
-            self._photo_quality_buttons,
-        )
+        # Sections are filtered by the current capture mode so the user
+        # only sees options relevant to what they're about to do. Photo
+        # mode: quality + size. Video mode: bitrate only.
+        if self._capture_mode == "photo":
+            _section(
+                self._("Photo quality"),
+                [
+                    (self._("Eco"),  60),
+                    (self._("Std"),  85),
+                    (self._("High"), 92),
+                    (self._("Max"),  98),
+                ],
+                self._jpeg_quality,
+                self._set_jpeg_quality,
+                self._photo_quality_buttons,
+            )
 
-        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+            box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        _section(
-            self._("Video quality"),
-            [
-                (self._("Eco"),   2000),
-                (self._("Std"),   4000),
-                (self._("High"),  8000),
-                (self._("Max"),  16000),
-            ],
-            self._video_bitrate_kbps,
-            self._set_video_bitrate,
-            self._video_quality_buttons,
-        )
+            # Photo size — string-keyed presets, built manually because
+            # the _section helper assumes ints.
+            size_header = Gtk.Label(label=self._("Photo size"), xalign=0)
+            size_header.add_css_class("heading")
+            box.append(size_header)
+            size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            size_presets: list[tuple[str, tuple[int, int] | None]] = [
+                (self._("Native"), None),
+                (self._("2K"),    (2560, 1920)),
+                (self._("FHD"),   (1920, 1440)),
+                (self._("HD"),    (1280, 960)),
+            ]
+            for label, wh in size_presets:
+                btn = Gtk.Button(label=label)
+                if wh == self._image_resolution:
+                    btn.add_css_class("suggested-action")
+                btn.connect("clicked", lambda _b, v=wh: self._set_image_resolution(v))
+                self._image_size_buttons.append((btn, wh))
+                size_row.append(btn)
+            box.append(size_row)
 
-        # Reminder: video recording itself is not yet wired up, so the
-        # bitrate stored here doesn't take effect until that lands.
-        hint = Gtk.Label(
-            label=self._(
-                "Video recording: encoder still to be wired up — "
-                "this bitrate is remembered for when it is."
-            ),
-            xalign=0,
-        )
-        hint.add_css_class("dim-label")
-        hint.set_wrap(True)
-        hint.set_max_width_chars(34)
-        box.append(hint)
+        elif self._capture_mode == "video":
+            _section(
+                self._("Video quality"),
+                [
+                    (self._("Eco"),   2000),
+                    (self._("Std"),   4000),
+                    (self._("High"),  8000),
+                    (self._("Max"),  16000),
+                ],
+                self._video_bitrate_kbps,
+                self._set_video_bitrate,
+                self._video_quality_buttons,
+            )
+            # Reminder: video recording itself is not yet wired up, so
+            # the bitrate stored here doesn't take effect until that
+            # lands.
+            hint = Gtk.Label(
+                label=self._(
+                    "Video recording: encoder still to be wired up — "
+                    "this bitrate is remembered for when it is."
+                ),
+                xalign=0,
+            )
+            hint.add_css_class("dim-label")
+            hint.set_wrap(True)
+            hint.set_max_width_chars(34)
+            box.append(hint)
 
         popover.set_child(box)
         return popover
@@ -2587,6 +2536,23 @@ class CameraWindow(Adw.Window):
                 btn.add_css_class("suggested-action")
             else:
                 btn.remove_css_class("suggested-action")
+
+    def _set_image_resolution(
+        self, wh: tuple[int, int] | None,
+    ) -> None:
+        self._image_resolution = wh
+        for btn, v in self._image_size_buttons:
+            if v == wh:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+
+    def _set_capture_mode(self, mode: str) -> None:
+        if mode == self._capture_mode or mode not in ("photo", "video"):
+            return
+        self._capture_mode = mode
+        # Rebuild the popover so it shows mode-relevant sections.
+        self._quality_button.set_popover(self._build_quality_popover())
 
     # ------------------------------------------------------------------
     # Zoom (digital, widget-snapshot only)
