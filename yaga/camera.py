@@ -2751,14 +2751,14 @@ class CameraWindow(Adw.Window):
             on_pick: Callable[[int], None],
             store: list[tuple[Gtk.Button, int]],
         ) -> None:
-            # Each section is its own sub-box so the header sits next to
-            # its row of buttons. Portrait = HORIZONTAL (header LEFT of
-            # control), landscape = VERTICAL in widget (header ABOVE
-            # control in widget which becomes header LEFT of control in
-            # the user's rotated view).
+            # Multi-button sections (Photo/Video quality, Photo size,
+            # Handedness): header ABOVE the row of buttons. Portrait =
+            # VERTICAL (header above buttons), landscape = HORIZONTAL
+            # in widget (header LEFT of buttons in widget = ABOVE in
+            # user's rotated view).
             section_orient = (
-                Gtk.Orientation.VERTICAL if landscape
-                else Gtk.Orientation.HORIZONTAL
+                Gtk.Orientation.HORIZONTAL if landscape
+                else Gtk.Orientation.VERTICAL
             )
             sec = Gtk.Box(orientation=section_orient, spacing=6)
             header = _rotated_text(title)
@@ -2790,10 +2790,12 @@ class CameraWindow(Adw.Window):
             )
             box.append(Gtk.Separator(orientation=inner_orient))
 
-            # Photo size: string-keyed presets, built manually.
+            # Photo size: string-keyed presets, built manually. Header
+            # above the row of buttons, same as the other multi-button
+            # sections.
             section_orient = (
-                Gtk.Orientation.VERTICAL if landscape
-                else Gtk.Orientation.HORIZONTAL
+                Gtk.Orientation.HORIZONTAL if landscape
+                else Gtk.Orientation.VERTICAL
             )
             size_sec = Gtk.Box(orientation=section_orient, spacing=6)
             size_header = _rotated_text(self._("Photo size"))
@@ -2866,8 +2868,16 @@ class CameraWindow(Adw.Window):
             lab.set_rotation_deg(label_rot)
             return lab
 
+        # Handedness has the multi-button layout (header ABOVE buttons),
+        # geotagging is a boolean (header NEXT TO the switch). Two
+        # separate orientation values for those two semantics.
         section_orient = (
-            Gtk.Orientation.VERTICAL if landscape else Gtk.Orientation.HORIZONTAL
+            Gtk.Orientation.HORIZONTAL if landscape
+            else Gtk.Orientation.VERTICAL
+        )
+        gps_section_orient = (
+            Gtk.Orientation.VERTICAL if landscape
+            else Gtk.Orientation.HORIZONTAL
         )
         sec = Gtk.Box(orientation=section_orient, spacing=6)
         header = _rotated_text(self._("Handedness"))
@@ -2897,7 +2907,7 @@ class CameraWindow(Adw.Window):
         # user-intent flag (self._geo_enabled) regardless of whether
         # GeoClue is actually available on the system — captures just
         # silently lack GPS if it isn't.
-        gps_sec = Gtk.Box(orientation=section_orient, spacing=6)
+        gps_sec = Gtk.Box(orientation=gps_section_orient, spacing=12)
         gps_header = _rotated_text(self._("Geotagging"))
         gps_header.set_xalign(0)
         gps_header.add_css_class("heading")
