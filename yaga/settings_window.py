@@ -114,8 +114,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         handedness_group.add(self._combo_row(
             "handedness", "Camera buttons",
             [
-                ("right", "Right-handed"),
-                ("left",  "Left-handed"),
+                ("right",   "Right-handed"),
+                ("left",    "Left-handed"),
+                ("neutral", "Neutral (centred)"),
             ],
         ))
 

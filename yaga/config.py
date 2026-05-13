@@ -123,7 +123,7 @@ class Settings:
         # typo in settings.json doesn't crash the layout logic in _build_ui.
         if settings.nav_position not in ("top", "bottom", "left", "right"):
             settings.nav_position = "top"
-        if settings.handedness not in ("left", "right"):
+        if settings.handedness not in ("left", "right", "neutral"):
             settings.handedness = "right"
         # Clamp / sanitise camera fields against hand-edited values.
         settings.camera_jpeg_quality = min(

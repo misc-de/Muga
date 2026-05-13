@@ -50,9 +50,12 @@ _CSS = b"""
 }
 .camera-countdown {
     color: #fff;
-    font-size: 96px;
-    font-weight: 200;
+    /* Doubled (was 96 px) and bold so the self-timer count reads from
+     * arm's length. */
+    font-size: 192px;
+    font-weight: 800;
     text-shadow: 0 0 24px rgba(0,0,0,0.7);
+    font-feature-settings: "tnum";
 }
 .camera-iconbtn {
     /* Touch target sized for phone thumbs (Material recommends >=48dp,
@@ -745,7 +748,9 @@ class CameraWindow(Adw.Window):
         self._save_dir = Path(save_dir)
         self._video_dir = Path(video_dir) if video_dir is not None else self._save_dir
         self._on_captured = on_captured
-        self._handedness = handedness if handedness in ("left", "right") else "right"
+        self._handedness = (
+            handedness if handedness in ("left", "right", "neutral") else "right"
+        )
         # Seed orientation state up front: the timer button is created
         # in the options bar before the orientation backend starts, and
         # its _RotatableIcon needs to know the current rotation.
@@ -897,13 +902,17 @@ class CameraWindow(Adw.Window):
         overlay.add_overlay(self._focus_rect)
 
         # Countdown — large centered number shown only while self-timer runs.
-        self._countdown = Gtk.Label(label="")
+        self._countdown = _RotatableLabel()
+        self._countdown.set_label("")
         self._countdown.add_css_class("camera-countdown")
         self._countdown.set_halign(Gtk.Align.CENTER)
         self._countdown.set_valign(Gtk.Align.CENTER)
         self._countdown.set_visible(False)
         self._countdown.set_can_target(False)
         overlay.add_overlay(self._countdown)
+        # Register so _apply_layout_for rotates the countdown number
+        # along with the other icon glyphs.
+        self._rotatable_icons.append(self._countdown)
 
         # Capturing spinner — shown over the (frozen) preview while the
         # transient image-mode pipeline reconfigures the HAL to capture
@@ -1032,6 +1041,18 @@ class CameraWindow(Adw.Window):
         self._capture_mode: str = "photo"
         self._quality_button.set_popover(self._build_quality_popover())
         top_right.append(self._quality_button)
+
+        # Settings popover — quick-access toggles that aren't really
+        # "quality" or "camera-control". Currently: handedness
+        # (right / left / neutral). Built fresh on every orientation
+        # change so the layout transposes like the quality popover.
+        self._settings_button = Gtk.MenuButton()
+        self._settings_button.set_child(_icon("preferences-system-symbolic"))
+        self._settings_button.add_css_class("camera-iconbtn")
+        self._settings_button.set_tooltip_text(self._("Settings"))
+        self._handedness_buttons: list[tuple[Gtk.Button, str]] = []
+        self._settings_button.set_popover(self._build_settings_popover())
+        top_right.append(self._settings_button)
 
         # Camera-switch lives in the same options row as the other
         # icons — only present when more than one capture device exists.
@@ -2207,7 +2228,12 @@ class CameraWindow(Adw.Window):
             self._quality_button.set_popover(self._build_quality_popover())
         except Exception:
             LOGGER.debug("quality popover rebuild failed", exc_info=True)
+        try:
+            self._settings_button.set_popover(self._build_settings_popover())
+        except Exception:
+            LOGGER.debug("settings popover rebuild failed", exc_info=True)
 
+        neutral = (self._handedness == "neutral")
         right = (self._handedness == "right")
 
         # Always reset every margin first so we can express each case
@@ -2229,34 +2255,53 @@ class CameraWindow(Adw.Window):
         center = Gtk.Align.CENTER
 
         if orientation == ORIENT_NORMAL:
-            # Shutter: bottom on handedness side, lower third.
-            self._shutter.set_halign(end if right else start)
-            self._shutter.set_valign(end)
-            self._shutter.set_margin_bottom(third)
-            if right:
-                self._shutter.set_margin_end(side)
+            if neutral:
+                # Shutter: bottom centre. Options: top centre.
+                self._shutter.set_halign(center)
+                self._shutter.set_valign(end)
+                self._shutter.set_margin_bottom(third)
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(start)
+                self._options_bar.set_margin_top(notch)
             else:
-                self._shutter.set_margin_start(side)
-            # Options: top centre, 40 px gap from the notch.
-            self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
-            self._options_bar.set_halign(center)
-            self._options_bar.set_valign(start)
-            self._options_bar.set_margin_top(notch)
+                # Shutter: bottom on handedness side, lower third.
+                self._shutter.set_halign(end if right else start)
+                self._shutter.set_valign(end)
+                self._shutter.set_margin_bottom(third)
+                if right:
+                    self._shutter.set_margin_end(side)
+                else:
+                    self._shutter.set_margin_start(side)
+                # Options: top centre, 40 px gap from the notch.
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(start)
+                self._options_bar.set_margin_top(notch)
 
         elif orientation == ORIENT_BOTTOM_UP:
-            # 180-deg-rotated normal: shutter on the OPPOSITE side,
-            # upper third; settings at the bottom (now visually top).
-            self._shutter.set_halign(start if right else end)
-            self._shutter.set_valign(start)
-            self._shutter.set_margin_top(third)
-            if right:
-                self._shutter.set_margin_start(side)
+            if neutral:
+                self._shutter.set_halign(center)
+                self._shutter.set_valign(start)
+                self._shutter.set_margin_top(third)
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(end)
+                self._options_bar.set_margin_bottom(notch)
             else:
-                self._shutter.set_margin_end(side)
-            self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
-            self._options_bar.set_halign(center)
-            self._options_bar.set_valign(end)
-            self._options_bar.set_margin_bottom(notch)
+                # 180-deg-rotated normal: shutter on the OPPOSITE side,
+                # upper third; settings at the bottom (now visually top).
+                self._shutter.set_halign(start if right else end)
+                self._shutter.set_valign(start)
+                self._shutter.set_margin_top(third)
+                if right:
+                    self._shutter.set_margin_start(side)
+                else:
+                    self._shutter.set_margin_end(side)
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(center)
+                self._options_bar.set_valign(end)
+                self._options_bar.set_margin_bottom(notch)
 
         elif orientation == ORIENT_LEFT_UP:
             # Phone rotated CW 90° (left side physically up). Compositor
@@ -2277,7 +2322,17 @@ class CameraWindow(Adw.Window):
             #     widget axis.
             user_vertical = max(120, self.get_width() // 3)
             inset = 70
-            if right:
+            if neutral:
+                # User's bottom-centre = widget right-centre; user's
+                # top-centre = widget left-centre.
+                self._shutter.set_halign(end)
+                self._shutter.set_valign(center)
+                self._shutter.set_margin_end(inset)
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(start)
+                self._options_bar.set_valign(center)
+                self._options_bar.set_margin_start(30)
+            elif right:
                 # User's bottom-right corner = widget top-right.
                 self._shutter.set_halign(end)
                 self._shutter.set_valign(start)
@@ -2305,7 +2360,17 @@ class CameraWindow(Adw.Window):
             # of LEFT_UP about both axes.
             user_vertical = max(120, self.get_width() // 3)
             inset = 70
-            if right:
+            if neutral:
+                # User's bottom-centre = widget left-centre; user's
+                # top-centre = widget right-centre.
+                self._shutter.set_halign(start)
+                self._shutter.set_valign(center)
+                self._shutter.set_margin_start(inset)
+                self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+                self._options_bar.set_halign(end)
+                self._options_bar.set_valign(center)
+                self._options_bar.set_margin_end(30)
+            elif right:
                 # User's bottom-right corner = widget bottom-left.
                 self._shutter.set_halign(start)
                 self._shutter.set_valign(end)
@@ -2584,6 +2649,92 @@ class CameraWindow(Adw.Window):
         popover.set_child(box)
         return popover
 
+    def _build_settings_popover(self) -> Gtk.Popover:
+        # Same orientation-aware layout pattern as the Quality popover:
+        # in landscape, the section + its button row are laid out so the
+        # user sees an upright stack and an upright row of buttons.
+        landscape = bool(self._layout_landscape)
+        outer_orient = (
+            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
+        )
+        inner_orient = (
+            Gtk.Orientation.VERTICAL if landscape else Gtk.Orientation.HORIZONTAL
+        )
+        label_rot = {
+            ORIENT_NORMAL:    0,
+            ORIENT_BOTTOM_UP: 180,
+            ORIENT_LEFT_UP:   270,
+            ORIENT_RIGHT_UP:  90,
+        }.get(self._device_orientation, 0)
+
+        self._handedness_buttons = []
+
+        popover = Gtk.Popover()
+        box = Gtk.Box(orientation=outer_orient, spacing=10)
+        box.set_margin_top(12); box.set_margin_bottom(12)
+        box.set_margin_start(12); box.set_margin_end(12)
+
+        def _rotated_text(text: str) -> _RotatableLabel:
+            lab = _RotatableLabel()
+            lab.set_label(text)
+            lab.set_rotation_deg(label_rot)
+            return lab
+
+        section_orient = (
+            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
+        )
+        sec = Gtk.Box(orientation=section_orient, spacing=6)
+        header = _rotated_text(self._("Handedness"))
+        header.set_xalign(0)
+        header.add_css_class("heading")
+        sec.append(header)
+        row = Gtk.Box(orientation=inner_orient, spacing=6)
+        presets: list[tuple[str, str]] = [
+            (self._("Right"),   "right"),
+            (self._("Left"),    "left"),
+            (self._("Neutral"), "neutral"),
+        ]
+        for label, value in presets:
+            btn = Gtk.Button()
+            btn.set_child(_rotated_text(label))
+            if value == self._handedness:
+                btn.add_css_class("suggested-action")
+            btn.connect("clicked", lambda _b, v=value: self._set_handedness(v))
+            self._handedness_buttons.append((btn, value))
+            row.append(btn)
+        sec.append(row)
+        box.append(sec)
+
+        popover.set_child(box)
+        return popover
+
+    def _set_handedness(self, value: str) -> None:
+        if value not in ("right", "left", "neutral"):
+            return
+        if value == self._handedness:
+            return
+        self._handedness = value
+        # Persist to settings (yaga.config.Settings stores it as
+        # `handedness` — same field as the app-wide preferences page).
+        if self._settings is not None:
+            try:
+                self._settings.handedness = value
+                self._settings.save()
+            except Exception:
+                LOGGER.debug("handedness persist failed", exc_info=True)
+        # Highlight the active button.
+        for btn, v in self._handedness_buttons:
+            if v == value:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+        # Re-run the layout pass for the current orientation so shutter
+        # and options bar reposition to the new side.
+        if self._applied_layout is not None:
+            current = self._applied_layout
+            self._applied_layout = None  # force re-apply
+            self._apply_layout_for(current)
+
     def _persist_settings(self) -> None:
         if self._settings is None:
             return
@@ -2675,10 +2826,10 @@ class CameraWindow(Adw.Window):
 
     def _on_geo_toggled(self, btn: Gtk.ToggleButton) -> None:
         if btn.get_active():
-            if not _HAS_GEXIV2:
-                btn.set_active(False)
-                self._show_toast(self._("GExiv2 missing — geotag unavailable"))
-                return
+            # Geo is fine without GExiv2 now — _write_exif_pillow can
+            # encode the GPS IFD too. We only need *some* EXIF backend,
+            # and Pillow is a hard dependency of Yaga anyway, so just
+            # try the GeoClue handshake.
             self._geo = GeoClient(app_id="yaga")
             ok = self._geo.start(
                 accuracy=5,
@@ -3438,60 +3589,133 @@ class CameraWindow(Adw.Window):
                 LOGGER.debug("on_captured callback failed", exc_info=True)
 
     def _write_exif(self, path: Path) -> None:
-        if not _HAS_GEXIV2:
-            return
-        device = self._current_device()
-        model = device.get("name") if device else None
-        now = time.strftime("%Y:%m:%d %H:%M:%S")
-        try:
-            md = GExiv2.Metadata()  # type: ignore[union-attr]
-            md.open_path(str(path))
-            md.set_tag_string("Exif.Image.Make", "Yaga")
-            if model:
-                # Strip non-printable bits some PipeWire descriptions carry.
-                clean = re.sub(r"[^\x20-\x7e]+", " ", model).strip()
-                if clean:
-                    md.set_tag_string("Exif.Image.Model", clean[:64])
-            md.set_tag_string("Exif.Image.Software", "Yaga")
-            md.set_tag_string("Exif.Image.DateTime", now)
-            md.set_tag_string("Exif.Photo.DateTimeOriginal", now)
-            md.set_tag_string("Exif.Photo.DateTimeDigitized", now)
+        # Prefer GExiv2 when it's available (proper Exiv2 backend, full
+        # tag support). Fall back to Pillow when the GExiv2 GIR isn't
+        # installed — covers the basic tags + GPS without requiring the
+        # gir1.2-gexiv2-0.10 system package.
+        if _HAS_GEXIV2:
+            self._write_exif_gexiv2(path)
+        else:
+            self._write_exif_pillow(path)
 
-            # EXIF orientation tag from the device's accelerometer-based
-            # 4-state lay at the moment of capture. Lets the gallery
-            # display upright regardless of how the phone was held:
-            #   1 = top-left   (no rotation needed)
-            #   3 = bottom-right (rotate 180 deg)
-            #   6 = right-top   (rotate 90 deg clockwise)
-            #   8 = left-bottom (rotate 90 deg counter-clockwise)
-            # Mapping assumes the sensor's top edge aligns with the
-            # device's top edge — true for most phone modules. If shots
-            # come out rotated, this is the table to revisit.
-            exif_orientation = {
+    def _current_exif_basics(self) -> dict[str, Any]:
+        """Common bits used by both EXIF backends."""
+        device = self._current_device()
+        model = (device.get("name") if device else None) or ""
+        if model:
+            model = re.sub(r"[^\x20-\x7e]+", " ", model).strip()[:64]
+        return {
+            "make": "Yaga",
+            "model": model,
+            "software": "Yaga",
+            "now": time.strftime("%Y:%m:%d %H:%M:%S"),
+            "orientation": {
+                # 1 = top-left, 3 = bottom-right (180), 6 = right-top
+                # (90 CW), 8 = left-bottom (90 CCW). Assumes sensor top
+                # edge aligns with device top — true for most phone
+                # modules.
                 ORIENT_NORMAL:    1,
                 ORIENT_BOTTOM_UP: 3,
                 ORIENT_LEFT_UP:   6,
                 ORIENT_RIGHT_UP:  8,
-            }.get(self._device_orientation, 1)
-            md.set_tag_string("Exif.Image.Orientation", str(exif_orientation))
+            }.get(self._device_orientation, 1),
+        }
 
-            # Geotag if the user has opted in and we have a fresh fix.
+    def _write_exif_gexiv2(self, path: Path) -> None:
+        basics = self._current_exif_basics()
+        try:
+            md = GExiv2.Metadata()  # type: ignore[union-attr]
+            md.open_path(str(path))
+            md.set_tag_string("Exif.Image.Make", basics["make"])
+            if basics["model"]:
+                md.set_tag_string("Exif.Image.Model", basics["model"])
+            md.set_tag_string("Exif.Image.Software", basics["software"])
+            md.set_tag_string("Exif.Image.DateTime", basics["now"])
+            md.set_tag_string("Exif.Photo.DateTimeOriginal", basics["now"])
+            md.set_tag_string("Exif.Photo.DateTimeDigitized", basics["now"])
+            md.set_tag_string(
+                "Exif.Image.Orientation", str(basics["orientation"])
+            )
             if self._geo is not None:
                 location = self._geo.latest()
                 if location is not None:
                     try:
                         md.set_gps_info(
-                            location["lon"], location["lat"], location.get("alt", 0.0)
+                            location["lon"], location["lat"],
+                            location.get("alt", 0.0),
                         )
                         md.set_tag_string(
                             "Exif.GPSInfo.GPSProcessingMethod", "GeoClue"
                         )
                     except Exception:
                         LOGGER.debug("set_gps_info failed", exc_info=True)
-
             md.save_file(str(path))
         except Exception:
-            LOGGER.debug("Could not write EXIF for %s", path, exc_info=True)
+            LOGGER.debug("Could not write EXIF (GExiv2) for %s", path, exc_info=True)
+
+    def _write_exif_pillow(self, path: Path) -> None:
+        """Pillow-based EXIF writer used when GExiv2 isn't installed.
+        Covers Make/Model/Software/DateTime/Orientation, plus GPS when
+        the user has the geo toggle on and there's a fresh fix."""
+        try:
+            from PIL import Image
+        except ImportError:
+            return
+        basics = self._current_exif_basics()
+        try:
+            img = Image.open(str(path))
+            exif = img.getexif()
+            # 0th IFD (image-level metadata).
+            exif[0x010F] = basics["make"]           # Make
+            if basics["model"]:
+                exif[0x0110] = basics["model"]      # Model
+            exif[0x0131] = basics["software"]       # Software
+            exif[0x0132] = basics["now"]            # DateTime
+            exif[0x0112] = int(basics["orientation"])  # Orientation
+            # Exif sub-IFD (Photo.* tags in Exiv2 vocabulary).
+            exif_ifd = exif.get_ifd(0x8769)
+            exif_ifd[0x9003] = basics["now"]        # DateTimeOriginal
+            exif_ifd[0x9004] = basics["now"]        # DateTimeDigitized
+            # GPS sub-IFD.
+            if self._geo is not None:
+                loc = self._geo.latest()
+                if loc is not None:
+                    gps = exif.get_ifd(0x8825)
+                    self._pillow_set_gps(gps, loc)
+            data = img.tobytes  # touch attr to ensure Pillow has decoded
+            img.save(
+                str(path), "JPEG",
+                exif=exif.tobytes(),
+                quality=max(0, min(100, self._jpeg_quality)),
+            )
+        except Exception:
+            LOGGER.debug("Could not write EXIF (Pillow) for %s", path, exc_info=True)
+
+    def _pillow_set_gps(self, gps_ifd: dict, location: dict) -> None:
+        lat = location.get("lat")
+        lon = location.get("lon")
+        if lat is None or lon is None:
+            return
+        alt = location.get("alt", 0.0) or 0.0
+
+        def to_dms(decimal: float) -> tuple:
+            d = int(decimal)
+            m_full = (decimal - d) * 60
+            m = int(m_full)
+            s = (m_full - m) * 60
+            return (
+                (d, 1),
+                (m, 1),
+                (int(round(s * 10000)), 10000),
+            )
+
+        gps_ifd[0x0000] = b"\x02\x02\x00\x00"        # GPSVersionID 2.2.0.0
+        gps_ifd[0x0001] = "N" if lat >= 0 else "S"   # LatitudeRef
+        gps_ifd[0x0002] = to_dms(abs(lat))           # Latitude
+        gps_ifd[0x0003] = "E" if lon >= 0 else "W"   # LongitudeRef
+        gps_ifd[0x0004] = to_dms(abs(lon))           # Longitude
+        gps_ifd[0x0005] = 0 if alt >= 0 else 1       # AltitudeRef
+        gps_ifd[0x0006] = (int(round(abs(alt) * 100)), 100)  # Altitude
 
     # ------------------------------------------------------------------
     # Screen-flash
