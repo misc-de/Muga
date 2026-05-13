@@ -574,6 +574,38 @@ class _ImageChrome(Gtk.DrawingArea):
         cr.stroke()
 
 
+class _RotatableIcon(Gtk.Image):
+    """Gtk.Image that paints itself rotated by `rotation_deg` around its
+    centre. Used inside the camera icon buttons so the glyph can follow
+    device orientation while the button's hit area stays unchanged —
+    rotating the entire button widget would break touch coordinates."""
+
+    __gtype_name__ = "YagaRotatableIcon"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._rotation_deg = 0.0
+
+    def set_rotation_deg(self, deg: float) -> None:
+        if abs(deg - self._rotation_deg) < 0.5:
+            return
+        self._rotation_deg = deg
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
+        if self._rotation_deg == 0:
+            Gtk.Image.do_snapshot(self, snapshot)
+            return
+        w = self.get_width()
+        h = self.get_height()
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(w / 2, h / 2))
+        snapshot.rotate(self._rotation_deg)
+        snapshot.translate(Graphene.Point().init(-w / 2, -h / 2))
+        Gtk.Image.do_snapshot(self, snapshot)
+        snapshot.restore()
+
+
 class MirroredPicture(Gtk.Picture):
     """Gtk.Picture that can render its content horizontally flipped and/or
     zoomed about its center.
@@ -795,8 +827,22 @@ class CameraWindow(Adw.Window):
         overlay.add_overlay(self._options_bar)
         top_right = self._options_bar  # alias for the appends below
 
+        # Each icon button gets a _RotatableIcon as its child so the
+        # glyph can rotate with the device orientation. The list lets us
+        # walk all of them in _apply_layout_for. The Gtk.Label-based
+        # buttons (timer, resolution) are intentionally not rotated;
+        # rotating Pango text inside a narrow pill clips badly.
+        self._rotatable_icons: list[_RotatableIcon] = []
+
+        def _icon(name: str) -> _RotatableIcon:
+            img = _RotatableIcon()
+            img.set_from_icon_name(name)
+            img.set_pixel_size(24)
+            self._rotatable_icons.append(img)
+            return img
+
         self._grid_button = Gtk.ToggleButton()
-        self._grid_button.set_icon_name("view-grid-symbolic")
+        self._grid_button.set_child(_icon("view-grid-symbolic"))
         self._grid_button.add_css_class("camera-iconbtn")
         self._grid_button.set_tooltip_text(self._("Grid"))
         self._grid_button.connect("toggled", self._on_grid_toggled)
@@ -819,7 +865,7 @@ class CameraWindow(Adw.Window):
 
         # Manual-controls gear — only shown when v4l2-ctl is installed.
         self._gear_button = Gtk.MenuButton()
-        self._gear_button.set_icon_name("emblem-system-symbolic")
+        self._gear_button.set_child(_icon("emblem-system-symbolic"))
         self._gear_button.add_css_class("camera-iconbtn")
         self._gear_button.set_tooltip_text(self._("Camera controls"))
         self._gear_button.set_visible(False)
@@ -832,11 +878,22 @@ class CameraWindow(Adw.Window):
         # this across sessions on purpose; geotagging is intentional state
         # the user re-confirms each time they open the camera.
         self._geo_button = Gtk.ToggleButton()
-        self._geo_button.set_icon_name("mark-location-symbolic")
+        self._geo_button.set_child(_icon("mark-location-symbolic"))
         self._geo_button.add_css_class("camera-iconbtn")
         self._geo_button.set_tooltip_text(self._("Geotag photos"))
         self._geo_button.connect("toggled", self._on_geo_toggled)
         top_right.append(self._geo_button)
+
+        # Camera-switch lives in the same options row as the other
+        # icons — only present when more than one capture device exists.
+        self._rotate_button: Gtk.Button | None = None
+        if len(self._devices) > 1:
+            self._rotate_button = Gtk.Button()
+            self._rotate_button.set_child(_icon("camera-switch-symbolic"))
+            self._rotate_button.add_css_class("camera-iconbtn")
+            self._rotate_button.set_tooltip_text(self._("Switch camera"))
+            self._rotate_button.connect("clicked", lambda _b: self._switch_camera())
+            top_right.append(self._rotate_button)
 
         # Single capture button. Positioned on the handedness side and
         # repositioned by _on_orientation_tick: lower-third in portrait,
@@ -878,27 +935,6 @@ class CameraWindow(Adw.Window):
         if not self._orientation.start(self._on_orientation_changed):
             self._orientation = None
             self.add_tick_callback(self._on_orientation_tick)
-
-        # Camera-switch — only added when more than one capture device exists.
-        # Sits in the bottom corner on the *opposite* side of the shutter
-        # so the user's thumb doesn't shadow it while framing.
-        self._rotate_button: Gtk.Button | None = None
-        if len(self._devices) > 1:
-            opposite_align = (
-                Gtk.Align.END if self._handedness == "left" else Gtk.Align.START
-            )
-            self._rotate_button = Gtk.Button.new_from_icon_name("camera-switch-symbolic")
-            self._rotate_button.add_css_class("camera-iconbtn")
-            self._rotate_button.set_halign(opposite_align)
-            self._rotate_button.set_valign(Gtk.Align.END)
-            if self._handedness == "left":
-                self._rotate_button.set_margin_end(24)
-            else:
-                self._rotate_button.set_margin_start(24)
-            self._rotate_button.set_margin_bottom(24)
-            self._rotate_button.set_tooltip_text(self._("Switch camera"))
-            self._rotate_button.connect("clicked", lambda _b: self._switch_camera())
-            overlay.add_overlay(self._rotate_button)
 
         # Toast for status / errors.
         self._toast = Gtk.Label(label="")
@@ -1972,6 +2008,18 @@ class CameraWindow(Adw.Window):
             return
         self._applied_layout = orientation
         self._layout_landscape = orientation_is_landscape(orientation)
+
+        # Rotate every icon glyph so it stays upright relative to the
+        # user's view. Mapping is the standard "compensate for device
+        # orientation" set; CSS-style angles (positive = clockwise).
+        icon_rotation = {
+            ORIENT_NORMAL:    0,
+            ORIENT_BOTTOM_UP: 180,
+            ORIENT_LEFT_UP:   90,
+            ORIENT_RIGHT_UP:  270,
+        }.get(orientation, 0)
+        for img in self._rotatable_icons:
+            img.set_rotation_deg(icon_rotation)
 
         right = (self._handedness == "right")
 
