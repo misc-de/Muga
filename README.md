@@ -32,9 +32,7 @@ Yaga is a gallery app that feels right at home on a modern GNOME desktop and ada
 separate tabs for Photos, Pictures, Videos, Screenshots, and any extra folders you add
 - **Built-in camera**  
 capture photos and record video without leaving the app; swipe the shutter between photo and video modes. On Halium / gst-droid phones (FuriOS, Droidian, …) the camera drives the HAL directly:
-  - flash for photos and continuous torch (LED light) for video, persistent across sessions
   - optional geotagging via GeoClue2, with EXIF written in place — no JPEG re-encode
-  - accelerometer-driven orientation; chrome rotates without rotating the framebuffer
   - self-timer (3 / 10 s), pinch-to-zoom, tap-to-focus, JPEG quality presets, video bitrate presets
   - handedness toggle (right / left / neutral) so the shutter button sits under your thumb
 - **Mobile-adaptive UI**  
