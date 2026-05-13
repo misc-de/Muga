@@ -108,6 +108,11 @@ _CSS = b"""
 .shutter-button:hover > .shutter-core { background-color: #ff5247; }
 .shutter-button:active > .shutter-core { background-color: #c0322a; }
 .shutter-button:disabled > .shutter-core { background-color: #6a6a6a; }
+.camera-timer-text {
+    font-weight: 800;
+    font-size: 22px;
+    font-feature-settings: "tnum";
+}
 """
 
 
@@ -606,6 +611,40 @@ class _RotatableIcon(Gtk.Image):
         snapshot.restore()
 
 
+class _RotatableLabel(Gtk.Label):
+    """Same snapshot-rotation trick as _RotatableIcon but for text, so
+    the timer's "3s" / "10s" label can rotate with device orientation.
+    Bounding box stays axis-aligned, so the button's hit area is
+    unaffected and the rotated text remains inside the button as long
+    as it would have fit unrotated (true for the 1-3 char timer
+    strings)."""
+
+    __gtype_name__ = "YagaRotatableLabel"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._rotation_deg = 0.0
+
+    def set_rotation_deg(self, deg: float) -> None:
+        if abs(deg - self._rotation_deg) < 0.5:
+            return
+        self._rotation_deg = deg
+        self.queue_draw()
+
+    def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
+        if self._rotation_deg == 0:
+            Gtk.Label.do_snapshot(self, snapshot)
+            return
+        w = self.get_width()
+        h = self.get_height()
+        snapshot.save()
+        snapshot.translate(Graphene.Point().init(w / 2, h / 2))
+        snapshot.rotate(self._rotation_deg)
+        snapshot.translate(Graphene.Point().init(-w / 2, -h / 2))
+        Gtk.Label.do_snapshot(self, snapshot)
+        snapshot.restore()
+
+
 class MirroredPicture(Gtk.Picture):
     """Gtk.Picture that can render its content horizontally flipped and/or
     zoomed about its center.
@@ -704,6 +743,13 @@ class CameraWindow(Adw.Window):
         self._device_orientation: str = ORIENT_NORMAL
         self._applied_layout: str | None = None
         self._layout_landscape: bool | None = None
+        # Photo quality (jpegenc quality, 0-100) and video bitrate (kbps).
+        # Live-updateable on the running jpegenc element so changing the
+        # preset doesn't have to restart the camera pipeline. The video
+        # bitrate is stored for the recording branch we'll wire up
+        # alongside the actual record encoder.
+        self._jpeg_quality: int = 92
+        self._video_bitrate_kbps: int = 4000
         self._Gst = _gst()
         self._pipeline: Any = None
         self._bus: Any = None
@@ -890,6 +936,19 @@ class CameraWindow(Adw.Window):
         self._geo_button.connect("toggled", self._on_geo_toggled)
         top_right.append(self._geo_button)
 
+        # Quality picker — popover with photo (jpeg quality) and video
+        # (bitrate) presets. Photo quality updates live on the running
+        # jpegenc element; video applies once the recording branch is
+        # wired up.
+        self._quality_button = Gtk.MenuButton()
+        self._quality_button.set_child(_icon("applications-graphics-symbolic"))
+        self._quality_button.add_css_class("camera-iconbtn")
+        self._quality_button.set_tooltip_text(self._("Quality"))
+        self._photo_quality_buttons: list[tuple[Gtk.Button, int]] = []
+        self._video_quality_buttons: list[tuple[Gtk.Button, int]] = []
+        self._quality_button.set_popover(self._build_quality_popover())
+        top_right.append(self._quality_button)
+
         # Camera-switch lives in the same options row as the other
         # icons — only present when more than one capture device exists.
         self._rotate_button: Gtk.Button | None = None
@@ -1053,11 +1112,14 @@ class CameraWindow(Adw.Window):
         # last 2 source-pool buffers even while idle, just adding pressure
         # on droidcamsrc's pool.
         if has_jpeg and has_appsink:
+            # Name the jpegenc element so _set_jpeg_quality can live-
+            # update its quality property without rebuilding the pipeline.
+            q = max(0, min(100, self._jpeg_quality))
             if on_halium:
                 snapshot_branch = (
                     "t. ! valve name=shutter drop=true "
                     "   ! queue leaky=downstream max-size-buffers=2 "
-                    "   ! videoconvert ! jpegenc quality=92 "
+                    f"   ! videoconvert ! jpegenc name=snap_jpeg quality={q} "
                     "   ! appsink name=snap emit-signals=true "
                     "             max-buffers=1 drop=true sync=false async=false"
                 )
@@ -1065,7 +1127,7 @@ class CameraWindow(Adw.Window):
                 snapshot_branch = (
                     "t. ! queue leaky=downstream max-size-buffers=2 "
                     "   ! valve name=shutter drop=true "
-                    "   ! videoconvert ! jpegenc quality=92 "
+                    f"   ! videoconvert ! jpegenc name=snap_jpeg quality={q} "
                     "   ! appsink name=snap emit-signals=true "
                     "             max-buffers=1 drop=true sync=false async=false"
                 )
@@ -2191,13 +2253,25 @@ class CameraWindow(Adw.Window):
             self._timer_button.set_child(icon)
             self._timer_button.set_tooltip_text(self._("Self-timer off"))
         else:
-            # Label mode — drop the icon from the rotation list (if any)
-            # so we don't try to rotate a widget that isn't on screen.
+            # Label mode. Use a _RotatableLabel so the "3s" / "10s"
+            # text rotates with device orientation just like the icon
+            # variants. Bold/large styling comes from .camera-timer-text.
             self._rotatable_icons = [
                 i for i in self._rotatable_icons
                 if i.get_parent() is not self._timer_button
             ]
-            self._timer_button.set_label(f"{value}s")
+            label = _RotatableLabel()
+            label.set_label(f"{value}s")
+            label.add_css_class("camera-timer-text")
+            rot = {
+                ORIENT_NORMAL:    0,
+                ORIENT_BOTTOM_UP: 180,
+                ORIENT_LEFT_UP:   270,
+                ORIENT_RIGHT_UP:  90,
+            }.get(self._device_orientation, 0)
+            label.set_rotation_deg(rot)
+            self._rotatable_icons.append(label)
+            self._timer_button.set_child(label)
             self._timer_button.set_tooltip_text(
                 self._("Self-timer: %d seconds") % value
             )
@@ -2237,6 +2311,107 @@ class CameraWindow(Adw.Window):
     def _on_grid_toggled(self, btn: Gtk.ToggleButton) -> None:
         self._grid_on = btn.get_active()
         self._chrome.set_grid_visible(self._grid_on)
+
+    # ------------------------------------------------------------------
+    # Quality picker (photo: jpegenc quality, video: bitrate)
+    # ------------------------------------------------------------------
+
+    def _build_quality_popover(self) -> Gtk.Popover:
+        popover = Gtk.Popover()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+
+        def _section(
+            title: str,
+            presets: list[tuple[str, int]],
+            current: int,
+            on_pick: Callable[[int], None],
+            store: list[tuple[Gtk.Button, int]],
+        ) -> None:
+            header = Gtk.Label(label=title, xalign=0)
+            header.add_css_class("heading")
+            box.append(header)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            for label, value in presets:
+                btn = Gtk.Button(label=label)
+                if value == current:
+                    btn.add_css_class("suggested-action")
+                btn.connect("clicked", lambda _b, v=value: on_pick(v))
+                store.append((btn, value))
+                row.append(btn)
+            box.append(row)
+
+        _section(
+            self._("Photo quality"),
+            [
+                (self._("Eco"),  60),
+                (self._("Std"),  85),
+                (self._("High"), 92),
+                (self._("Max"),  98),
+            ],
+            self._jpeg_quality,
+            self._set_jpeg_quality,
+            self._photo_quality_buttons,
+        )
+
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+
+        _section(
+            self._("Video quality"),
+            [
+                (self._("Eco"),   2000),
+                (self._("Std"),   4000),
+                (self._("High"),  8000),
+                (self._("Max"),  16000),
+            ],
+            self._video_bitrate_kbps,
+            self._set_video_bitrate,
+            self._video_quality_buttons,
+        )
+
+        # Reminder: video recording itself is not yet wired up, so the
+        # bitrate stored here doesn't take effect until that lands.
+        hint = Gtk.Label(
+            label=self._(
+                "Video recording: encoder still to be wired up — "
+                "this bitrate is remembered for when it is."
+            ),
+            xalign=0,
+        )
+        hint.add_css_class("dim-label")
+        hint.set_wrap(True)
+        hint.set_max_width_chars(34)
+        box.append(hint)
+
+        popover.set_child(box)
+        return popover
+
+    def _set_jpeg_quality(self, value: int) -> None:
+        self._jpeg_quality = value
+        # Live-update the running jpegenc; no pipeline restart needed.
+        if self._pipeline is not None:
+            jpeg = self._pipeline.get_by_name("snap_jpeg")
+            if jpeg is not None:
+                try:
+                    jpeg.set_property("quality", value)
+                except Exception:
+                    LOGGER.debug("jpegenc quality update failed", exc_info=True)
+        for btn, v in self._photo_quality_buttons:
+            if v == value:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
+
+    def _set_video_bitrate(self, value: int) -> None:
+        self._video_bitrate_kbps = value
+        for btn, v in self._video_quality_buttons:
+            if v == value:
+                btn.add_css_class("suggested-action")
+            else:
+                btn.remove_css_class("suggested-action")
 
     # ------------------------------------------------------------------
     # Zoom (digital, widget-snapshot only)
