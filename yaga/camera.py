@@ -2009,13 +2009,15 @@ class CameraWindow(Adw.Window):
         self._layout_landscape = orientation_is_landscape(orientation)
 
         # Rotate every icon glyph so it stays upright relative to the
-        # user's view. Mapping is the standard "compensate for device
-        # orientation" set; CSS-style angles (positive = clockwise).
+        # user's view. Empirically the GSK rotate() direction lands on
+        # the opposite sign from what I'd guess, so the 90/270 values
+        # are swapped compared to the standard "compensate for device
+        # orientation" cookbook.
         icon_rotation = {
             ORIENT_NORMAL:    0,
             ORIENT_BOTTOM_UP: 180,
-            ORIENT_LEFT_UP:   90,
-            ORIENT_RIGHT_UP:  270,
+            ORIENT_LEFT_UP:   270,
+            ORIENT_RIGHT_UP:  90,
         }.get(orientation, 0)
         for img in self._rotatable_icons:
             img.set_rotation_deg(icon_rotation)
@@ -2175,8 +2177,8 @@ class CameraWindow(Adw.Window):
             rot = {
                 ORIENT_NORMAL:    0,
                 ORIENT_BOTTOM_UP: 180,
-                ORIENT_LEFT_UP:   90,
-                ORIENT_RIGHT_UP:  270,
+                ORIENT_LEFT_UP:   270,
+                ORIENT_RIGHT_UP:  90,
             }.get(self._device_orientation, 0)
             icon.set_rotation_deg(rot)
             # Replace any stale timer-icon in the rotation list with
