@@ -346,7 +346,11 @@ class CameraWindow(Adw.Window):
         # its _RotatableIcon needs to know the current rotation.
         self._device_orientation: str = ORIENT_NORMAL
         self._applied_layout: str | None = None
-        self._layout_landscape: bool | None = None
+        # Tracks the active layout's landscape-ness (bool). Renamed
+        # from _layout_landscape to dodge the name clash with the
+        # _layout_landscape() method — assigning the bool was
+        # shadowing the method on the instance.
+        self._layout_is_landscape: bool | None = None
         # List of widgets whose glyph/text needs to rotate with device
         # orientation. Initialised up front because the countdown label
         # and the options-bar icon buttons (all _Rotatable*) register
@@ -1963,7 +1967,7 @@ class CameraWindow(Adw.Window):
         if orientation == self._applied_layout:
             return
         self._applied_layout = orientation
-        self._layout_landscape = orientation_is_landscape(orientation)
+        self._layout_is_landscape = orientation_is_landscape(orientation)
 
         # Rotate every icon glyph so it stays upright relative to the
         # user's view. Empirically the GSK rotate() direction lands on
@@ -1974,8 +1978,8 @@ class CameraWindow(Adw.Window):
         # The Quality popover lays out its sections + button rows
         # differently in portrait vs. landscape (transposed orientation
         # + rotated text labels), so rebuild it whenever orientation
-        # flips. _build_quality_popover reads self._layout_landscape /
-        # self._device_orientation directly.
+        # flips. _build_quality_popover reads self._layout_is_landscape
+        # / self._device_orientation directly.
         try:
             self._quality_button.set_popover(self._build_quality_popover())
         except Exception:
@@ -2032,15 +2036,11 @@ class CameraWindow(Adw.Window):
             flip_180 = (orientation == ORIENT_BOTTOM_UP)
             self._layout_portrait(flip_180=flip_180, **kw)
         elif right and is_landscape:
-            # Right-handed in landscape: keep the shutter at the
-            # widget's bottom-right corner — same place it sits in
-            # portrait right-handed. The user wants a stable "shutter
-            # under the right thumb in the screen's bottom-right
-            # corner" regardless of how the phone is tilted; the
-            # earlier landscape-specific corner placement (which moved
-            # the shutter to the user's bottom-right in widget coords)
-            # felt off.
-            self._layout_portrait(flip_180=False, **kw)
+            # Right-handed in landscape: shutter pinned at the widget
+            # RIGHT edge, vertically centred (per user spec — "shutter
+            # rechts und mittig"). Icons keep the portrait notch row at
+            # the top so they don't move when the phone tilts.
+            self._layout_landscape_right_center(**kw)
         elif orientation == ORIENT_NORMAL:
             self._layout_portrait(flip_180=False, **kw)
         elif orientation == ORIENT_BOTTOM_UP:
@@ -2144,6 +2144,33 @@ class CameraWindow(Adw.Window):
             flip=flip_180,
         )
 
+    def _layout_landscape_right_center(
+        self,
+        *,
+        neutral: bool,
+        right: bool,
+        third: int,
+        user_vertical: int,
+    ) -> None:
+        # Right-handed landscape: shutter pinned at the WIDGET right
+        # edge, vertically centred. Icons stay in a horizontal row at
+        # the widget top with the portrait notch margin so the chrome
+        # placement is stable across orientation changes.
+        notch = _OPTIONS_NOTCH_MARGIN
+        side = _SHUTTER_SIDE_MARGIN
+        end, start, center = Gtk.Align.END, Gtk.Align.START, Gtk.Align.CENTER
+        self._apply_placement(
+            self._shutter,
+            halign=end, valign=center,
+            m_end=side,
+        )
+        self._options_bar.set_orientation(Gtk.Orientation.HORIZONTAL)
+        self._apply_placement(
+            self._options_bar,
+            halign=center, valign=start,
+            m_top=notch,
+        )
+
     def _layout_landscape(
         self,
         *,
@@ -2216,7 +2243,7 @@ class CameraWindow(Adw.Window):
         h = self.get_height()
         if w <= 0 or h <= 0:
             return True  # GLib.SOURCE_CONTINUE
-        if self._layout_landscape:
+        if self._layout_is_landscape:
             landscape = w > h * 1.05
         else:
             landscape = w > h * 1.25
@@ -2317,7 +2344,7 @@ class CameraWindow(Adw.Window):
         # (which is vertical in the user's view); each inner row stacks
         # the buttons VERTICALLY in widget space (horizontal for user).
         # Button labels use _RotatableLabel so they're upright.
-        landscape = bool(self._layout_landscape)
+        landscape = bool(self._layout_is_landscape)
         outer_orient = (
             Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
         )
@@ -2450,7 +2477,7 @@ class CameraWindow(Adw.Window):
         # Same orientation-aware layout pattern as the Quality popover:
         # in landscape, the section + its button row are laid out so the
         # user sees an upright stack and an upright row of buttons.
-        landscape = bool(self._layout_landscape)
+        landscape = bool(self._layout_is_landscape)
         outer_orient = (
             Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
         )
