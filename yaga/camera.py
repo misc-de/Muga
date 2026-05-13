@@ -658,6 +658,10 @@ class CameraWindow(Adw.Window):
         # Flash (photo) / Torch (video). Single toggle button — semantics
         # change with capture mode. Hardware is Halium-only; the button
         # hides on non-droidcamsrc devices via _start_pipeline.
+        # _capture_mode needs to exist before _update_flash_tooltip
+        # reads it; the later assignment near _quality_button is just a
+        # confirmation, this is the real initialiser.
+        self._capture_mode: str = "photo"
         self._flash_enabled: bool = bool(
             getattr(settings, "camera_flash_enabled", False)
         ) if settings is not None else False
@@ -717,10 +721,9 @@ class CameraWindow(Adw.Window):
         self._image_size_buttons: list[
             tuple[Gtk.Button, tuple[int, int] | None]
         ] = []
-        # Capture mode: "photo" or "video". Drives which sections the
-        # Quality popover shows. Until a mode-toggle UI lands (when
-        # video recording is wired up), this stays at "photo".
-        self._capture_mode: str = "photo"
+        # _capture_mode initialised earlier (near _flash_button) so
+        # _update_flash_tooltip can read it; the Quality popover build
+        # below also reads it via _build_quality_popover.
         self._quality_button.set_popover(self._build_quality_popover())
         top_right.append(self._quality_button)
 
