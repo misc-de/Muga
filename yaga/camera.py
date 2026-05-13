@@ -2780,19 +2780,26 @@ class CameraWindow(Adw.Window):
         self._capture_signal_sink = sink
 
         if sink is self._imgsink:
-            # Trigger the HAL still-capture, but on a short delay so the
-            # imgsrc branch's buffer pool finishes being allocated after
-            # the signal connection establishes negotiation. Without the
-            # delay we'd hit "gst_buffer_pool_set_flushing: pool is not
-            # a buffer pool" because start-capture races the negotiation.
-            def _emit_start_capture():
+            # Trigger the HAL still-capture. There are two issues we
+            # have to dodge on gst-droid pre-PR#39:
+            #   1. Race between caps-negotiation on the imgsrc branch
+            #      and start-capture, which otherwise asserts
+            #      `gst_buffer_pool_set_flushing: pool is not a buffer
+            #      pool`. We pin caps=image/jpeg on the imgsink to make
+            #      negotiation deterministic, plus add a small delay.
+            #   2. droid_media_camera_take_picture can deadlock when
+            #      called from the same thread that pulls preview
+            #      frames. We dispatch the emit from a worker thread so
+            #      it doesn't compete with the GLib main loop.
+            import threading
+            def _emit_start_capture_on_thread():
                 src = self._pipeline.get_by_name("src") if self._pipeline else None
                 if src is None:
-                    return False
+                    return
                 try:
                     src.emit("start-capture")
                     print(
-                        "[yaga.camera] capture: start-capture emitted",
+                        "[yaga.camera] capture: start-capture emitted (worker thread)",
                         file=sys.stderr, flush=True,
                     )
                 except Exception as exc:
@@ -2800,8 +2807,14 @@ class CameraWindow(Adw.Window):
                         f"[yaga.camera] capture: start-capture failed: {exc}",
                         file=sys.stderr, flush=True,
                     )
+            def _schedule_emit():
+                threading.Thread(
+                    target=_emit_start_capture_on_thread,
+                    name="yaga-start-capture",
+                    daemon=True,
+                ).start()
                 return False
-            GLib.timeout_add(150, _emit_start_capture)
+            GLib.timeout_add(150, _schedule_emit)
         else:
             # vfsrc path: open the valve so jpegenc gets one frame.
             if self._valve is not None:
