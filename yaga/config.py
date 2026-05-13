@@ -72,6 +72,10 @@ class Settings:
     camera_image_resolution: list | None = None
     # Video record bitrate (kbps) — applied when the record path lands.
     camera_video_bitrate_kbps: int = 4000
+    # Camera geotagging: user intent. Boolean on/off. When on, the camera
+    # tries to acquire a GPS fix via GeoClue; if unavailable, silently
+    # no-op (no error toast).
+    camera_geo_enabled: bool = False
 
     # User-defined ordering of the four built-in media folders. Items not in
     # the list (e.g. legacy upgrades that didn't write the field) fall back to

@@ -57,29 +57,43 @@ _CSS = b"""
     text-shadow: 0 0 24px rgba(0,0,0,0.7);
     font-feature-settings: "tnum";
 }
+/* All icon buttons in the options bar share this style, regardless of
+ * underlying widget type (Button, ToggleButton, MenuButton). Pure
+ * transparent background in every state - feedback comes from icon
+ * color/opacity changes only, so we never get the "some pills, some
+ * not" mismatch that Adwaita's default per-widget-class styling gives.
+ */
+.camera-iconbtn,
+.camera-iconbtn:hover,
+.camera-iconbtn:active,
+.camera-iconbtn:checked,
+.camera-iconbtn:focus,
+.camera-iconbtn:focus-visible,
+.camera-iconbtn:disabled {
+    background: none;
+    background-image: none;
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    outline: none;
+    -gtk-outline-radius: 0;
+    padding: 0;
+    margin: 0;
+}
 .camera-iconbtn {
-    /* Touch target sized for phone thumbs (Material recommends >=48dp,
-     * Apple HIG >=44pt; 56 leaves enough margin that even imprecise
-     * presses register on the first try). Background is transparent in
-     * the idle state; hover/active/checked dial in subtle highlights so
-     * only the actively-engaged button stands out from the row. */
     min-width: 56px;
     min-height: 56px;
-    padding: 0;
-    border-radius: 999px;
-    background-color: transparent;
     color: #fff;
-    border: none;
-    box-shadow: none;
     transition: none;
 }
 .camera-iconbtn > image { -gtk-icon-size: 26px; }
-.camera-iconbtn:hover { background-color: rgba(255, 255, 255, 0.12); }
-.camera-iconbtn:active { background-color: rgba(255, 255, 255, 0.20); }
-.camera-iconbtn:checked {
-    background-color: rgba(255, 255, 255, 0.25);
-    color: #fff;
-}
+/* Feedback states use only opacity + color (no fills) so the row stays
+ * visually consistent - no rectangle here, pill there. */
+.camera-iconbtn:hover    { opacity: 0.85; }
+.camera-iconbtn:active   { opacity: 0.60; }
+.camera-iconbtn:checked  { color: #fbb03b; }
+.camera-iconbtn:disabled { opacity: 0.35; }
 .camera-resbtn {
     min-height: 44px;
     padding: 0 16px;
@@ -1035,8 +1049,18 @@ class CameraWindow(Adw.Window):
         # this across sessions on purpose; geotagging is intentional state
         # the user re-confirms each time they open the camera.
         # Geotag toggle is no longer a top-level icon — it lives inside
-        # the Camera Settings popover as a second-level option.
+        # the Camera Settings popover as a second-level boolean. The
+        # flag below is the user-intent source-of-truth; self._geo is
+        # the actual GeoClient handle which is None when GeoClue is
+        # unavailable (silent fail).
         self._geo_button: Gtk.ToggleButton | None = None
+        self._geo_enabled: bool = bool(
+            getattr(settings, "camera_geo_enabled", False)
+        ) if settings is not None else False
+        # Auto-attach the GeoClient at startup if the user previously
+        # enabled it. Silent if GeoClue isn't on the system.
+        if self._geo_enabled:
+            self._try_start_geo_silent()
 
         # Quality picker — popover with photo (jpeg quality) and video
         # (bitrate) presets. Photo quality updates live on the running
@@ -2789,10 +2813,10 @@ class CameraWindow(Adw.Window):
 
         box.append(Gtk.Separator(orientation=inner_orient))
 
-        # Geotagging toggle. Lives in the settings popover instead of
-        # the top-level icon row so the bar isn't cluttered with rarely-
-        # used controls. The toggle reflects whether a GeoClient is
-        # active right now (self._geo is not None).
+        # Geotagging toggle. Boolean on/off — reflects the user-intent
+        # flag (self._geo_enabled) regardless of whether GeoClue is
+        # actually available on the system. If GeoClue is missing or
+        # refuses, captures just won't get GPS embedded (silently).
         gps_sec = Gtk.Box(orientation=section_orient, spacing=6)
         gps_header = _rotated_text(self._("Geotagging"))
         gps_header.set_xalign(0)
@@ -2800,9 +2824,9 @@ class CameraWindow(Adw.Window):
         gps_sec.append(gps_header)
         self._geo_button = Gtk.ToggleButton()
         self._geo_button.set_child(_rotated_text(
-            self._("On") if self._geo is not None else self._("Off")
+            self._("On") if self._geo_enabled else self._("Off")
         ))
-        self._geo_button.set_active(self._geo is not None)
+        self._geo_button.set_active(self._geo_enabled)
         self._geo_button.connect("toggled", self._on_geo_toggled)
         gps_sec.append(self._geo_button)
         box.append(gps_sec)
@@ -2941,56 +2965,58 @@ class CameraWindow(Adw.Window):
     # Geotagging
     # ------------------------------------------------------------------
 
+    def _try_start_geo_silent(self) -> None:
+        """Best-effort GeoClue handshake. Quietly does nothing if
+        GeoClue isn't available — the geotag flag stays in the user's
+        intended state, captures just won't get GPS embedded."""
+        if self._geo is not None:
+            return
+        self._geo = GeoClient(app_id="yaga")
+        ok = self._geo.start(
+            accuracy=8,
+            on_update=self._on_geo_update,
+            on_error=lambda msg: GLib.idle_add(self._on_geo_error, msg),
+        )
+        if not ok:
+            self._geo = None
+
     def _on_geo_toggled(self, btn: Gtk.ToggleButton) -> None:
-        if btn.get_active():
-            # Geo is fine without GExiv2 now — _write_exif_pillow can
-            # encode the GPS IFD too. We only need *some* EXIF backend,
-            # and Pillow is a hard dependency of Yaga anyway, so just
-            # try the GeoClue handshake.
-            self._geo = GeoClient(app_id="yaga")
-            ok = self._geo.start(
-                accuracy=5,
-                on_update=self._on_geo_update,
-                on_error=lambda msg: GLib.idle_add(self._on_geo_error, msg),
-            )
-            if not ok:
-                btn.set_active(False)
-                self._geo = None
-                self._show_toast(self._("GeoClue not available"))
-                return
-            self._show_toast(self._("Locating…"))
+        # Boolean on/off. Persists the user-intent flag and tries to
+        # start/stop the GeoClient. Silent on failure — no toast if
+        # GeoClue isn't on the system, just no GPS in captures.
+        self._geo_enabled = bool(btn.get_active())
+        if self._settings is not None:
+            try:
+                self._settings.camera_geo_enabled = self._geo_enabled
+                self._settings.save()
+            except Exception:
+                LOGGER.debug("geo_enabled persist failed", exc_info=True)
+        if self._geo_enabled:
+            self._try_start_geo_silent()
         else:
             if self._geo is not None:
-                self._geo.stop()
+                try:
+                    self._geo.stop()
+                except Exception:
+                    pass
                 self._geo = None
-
     def _on_geo_update(self, location: dict[str, Any] | None) -> None:
-        # Signal arrives on the main loop already (GDBus dispatches there),
-        # so it's safe to touch widgets without idle_add. Toast only on the
-        # first fix to avoid spamming as location refines.
-        if location is None:
-            return
-        if getattr(self, "_geo_toasted", False):
-            return
-        self._geo_toasted = True
-        self._show_toast(self._("Location ready"))
+        # Silent — no toast on first fix. The capture path reads the
+        # GeoClient's `latest()` directly so we don't need to surface
+        # progress to the UI.
+        pass
 
     def _on_geo_error(self, message: str) -> bool:
-        self._show_toast(message)
-        # Clear our state; the popover toggle reflects self._geo on
-        # next rebuild. Direct set_active is best-effort because the
-        # toggle widget might have been destroyed with the popover.
+        # Silent fail: log for debugging, stop the GeoClient, leave the
+        # user-intent flag (_geo_enabled) alone so the next attempt can
+        # succeed if GeoClue becomes available later. No toast.
+        LOGGER.debug("GeoClue error: %s", message)
         if self._geo is not None:
             try:
                 self._geo.stop()
             except Exception:
                 pass
             self._geo = None
-        if self._geo_button is not None:
-            try:
-                self._geo_button.set_active(False)
-            except Exception:
-                pass
         return False
 
     # ------------------------------------------------------------------
