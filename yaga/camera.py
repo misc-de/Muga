@@ -2493,52 +2493,34 @@ class CameraWindow(Adw.Window):
         return popover
 
     def _build_settings_popover(self) -> Gtk.Popover:
-        # Same orientation-aware layout pattern as the Quality popover:
-        # in landscape, the section + its button row are laid out so the
-        # user sees an upright stack and an upright row of buttons.
-        landscape = bool(self._layout_is_landscape)
-        outer_orient = (
-            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
-        )
-        inner_orient = (
-            Gtk.Orientation.VERTICAL if landscape else Gtk.Orientation.HORIZONTAL
-        )
-        label_rot = _ICON_ROTATION_DEG.get(self._device_orientation, 0)
-
+        # Settings popover renders in PORTRAIT layout regardless of
+        # device orientation. Earlier iterations rotated the text and
+        # the switch in landscape so they "appeared upright" in the
+        # user's tilted view — but the rotated widgets clipped (the
+        # leading 'G' of "Geotagging" disappeared) and the switch
+        # ended up oriented along an axis the user didn't expect.
+        # Keeping a single portrait layout means the user tilts their
+        # head once to read the popover but the contents always look
+        # like a normal column of horizontal controls.
         self._handedness_buttons = []
 
         popover = Gtk.Popover()
-        box = Gtk.Box(orientation=outer_orient, spacing=10)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.set_margin_top(12); box.set_margin_bottom(12)
         box.set_margin_start(12); box.set_margin_end(12)
 
-        def _rotated_text(text: str) -> _RotatableLabel:
-            lab = _RotatableLabel()
+        def _text(text: str) -> Gtk.Label:
+            lab = Gtk.Label()
             lab.set_label(text)
-            lab.set_rotation_deg(label_rot)
             return lab
 
-        # Handedness has the multi-button layout (header ABOVE buttons),
-        # geotagging is a boolean (header NEXT TO the switch). Two
-        # separate orientation values for those two semantics.
-        section_orient = (
-            Gtk.Orientation.HORIZONTAL if landscape
-            else Gtk.Orientation.VERTICAL
-        )
-        gps_section_orient = (
-            Gtk.Orientation.VERTICAL if landscape
-            else Gtk.Orientation.HORIZONTAL
-        )
-        sec = Gtk.Box(orientation=section_orient, spacing=6)
-        header = _rotated_text(self._("Handedness"))
+        # Handedness: header above a horizontal row of three buttons.
+        sec = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        header = _text(self._("Handedness"))
         header.set_xalign(0)
         header.add_css_class("heading")
-        # valign=CENTER so the rotated label takes its natural size
-        # instead of stretching to fill the section height; otherwise
-        # the rotated text appears floating in the middle of a tall
-        # column with excessive top/bottom padding in the user's view.
-        header.set_valign(Gtk.Align.CENTER)
-        row = Gtk.Box(orientation=inner_orient, spacing=6)
+        sec.append(header)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         presets: list[tuple[str, str]] = [
             (self._("Right"),   "right"),
             (self._("Left"),    "left"),
@@ -2546,55 +2528,32 @@ class CameraWindow(Adw.Window):
         ]
         for label, value in presets:
             btn = Gtk.Button()
-            btn.set_child(_rotated_text(label))
+            btn.set_child(_text(label))
             if value == self._handedness:
                 btn.add_css_class("suggested-action")
             btn.connect("clicked", lambda _b, v=value: self._set_handedness(v))
             self._handedness_buttons.append((btn, value))
             row.append(btn)
-        for w in self._orient_seq([header, row]):
-            sec.append(w)
+        sec.append(row)
         box.append(sec)
 
-        box.append(Gtk.Separator(orientation=inner_orient))
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
 
-        # Geotagging: real boolean via _RotatableSwitch so it rotates
-        # in sync with the rest of the chrome (Gtk.Switch is normally
-        # horizontal in widget-space, which appears vertical in
-        # landscape without rotation). The switch sits at the user's
-        # RIGHT regardless of orientation; achieved by reversing the
-        # widget child order on BOTTOM_UP / RIGHT_UP (handled by
-        # _orient_seq).
-        gps_sec = Gtk.Box(orientation=gps_section_orient, spacing=12)
-        gps_header = _rotated_text(self._("Geotagging"))
+        # Geotagging: header on the left, switch on the right — a
+        # standard one-row boolean.
+        gps_sec = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        gps_header = _text(self._("Geotagging"))
         gps_header.set_xalign(0)
         gps_header.add_css_class("heading")
         gps_header.set_hexpand(True)
         gps_header.set_valign(Gtk.Align.CENTER)
-        self._geo_switch = _RotatableSwitch()
+        self._geo_switch = Gtk.Switch()
         self._geo_switch.set_active(self._geo_enabled)
         self._geo_switch.set_halign(Gtk.Align.END)
         self._geo_switch.set_valign(Gtk.Align.CENTER)
-        self._geo_switch.set_rotation_deg(label_rot)
-        self._register_rotatable(self._geo_switch)
         self._geo_switch.connect("state-set", self._on_geo_switch_state_set)
-        # Place the switch at the user's RIGHT edge regardless of
-        # orientation. The widget edge that maps to "user's right"
-        # differs per device orientation, and the reversal logic in
-        # _orient_seq is designed for horizontal boxes only — it gets
-        # the answer backwards for the vertical landscape box. Hand-
-        # roll the per-orientation order:
-        #
-        #   NORMAL    (HORIZONTAL box): user's right = widget right  → [header, switch]
-        #   BOTTOM_UP (HORIZONTAL box): user's right = widget left   → [switch, header]
-        #   LEFT_UP   (VERTICAL   box): user's right = widget top    → [switch, header]
-        #   RIGHT_UP  (VERTICAL   box): user's right = widget bottom → [header, switch]
-        if self._device_orientation in (ORIENT_BOTTOM_UP, ORIENT_LEFT_UP):
-            gps_items = [self._geo_switch, gps_header]
-        else:
-            gps_items = [gps_header, self._geo_switch]
-        for w in gps_items:
-            gps_sec.append(w)
+        gps_sec.append(gps_header)
+        gps_sec.append(self._geo_switch)
         box.append(gps_sec)
 
         popover.set_child(box)
