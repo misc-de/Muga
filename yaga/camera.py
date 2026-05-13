@@ -60,25 +60,25 @@ _CSS = b"""
 .camera-iconbtn {
     /* Touch target sized for phone thumbs (Material recommends >=48dp,
      * Apple HIG >=44pt; 56 leaves enough margin that even imprecise
-     * presses register on the first try). */
+     * presses register on the first try). Background is transparent in
+     * the idle state; hover/active/checked dial in subtle highlights so
+     * only the actively-engaged button stands out from the row. */
     min-width: 56px;
     min-height: 56px;
     padding: 0;
     border-radius: 999px;
-    background-color: rgba(0, 0, 0, 0.45);
+    background-color: transparent;
     color: #fff;
     border: none;
     box-shadow: none;
-    /* No transitions on the colour states - touchscreen users perceive
-     * the default 200 ms ease as the button 'thinking' before it acts. */
     transition: none;
 }
-.camera-iconbtn > image { -gtk-icon-size: 24px; }
-.camera-iconbtn:hover { background-color: rgba(0, 0, 0, 0.65); }
-.camera-iconbtn:active { background-color: rgba(255, 255, 255, 0.15); }
+.camera-iconbtn > image { -gtk-icon-size: 26px; }
+.camera-iconbtn:hover { background-color: rgba(255, 255, 255, 0.12); }
+.camera-iconbtn:active { background-color: rgba(255, 255, 255, 0.20); }
 .camera-iconbtn:checked {
-    background-color: rgba(255, 255, 255, 0.85);
-    color: #000;
+    background-color: rgba(255, 255, 255, 0.25);
+    color: #fff;
 }
 .camera-resbtn {
     min-height: 44px;
@@ -2898,9 +2898,20 @@ class CameraWindow(Adw.Window):
         # Rebuild the popover so it shows mode-relevant sections.
         self._quality_button.set_popover(self._build_quality_popover())
         self._update_shutter_icon()
+        self._apply_mode_visibility()
         self._show_toast(
             self._("Video mode") if mode == "video" else self._("Photo mode")
         )
+
+    def _apply_mode_visibility(self) -> None:
+        """Hide options-bar buttons that don't apply to the current
+        capture mode. Currently the self-timer is photo-only; everything
+        else is useful in both modes."""
+        photo_only = (self._capture_mode == "photo")
+        try:
+            self._timer_button.set_visible(photo_only)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Zoom (digital, widget-snapshot only)
@@ -3696,27 +3707,48 @@ class CameraWindow(Adw.Window):
         vf_queue.link(vf_convert)
         vf_convert.link(vf_sink)
 
-        # vidsrc → queue → h264parse → mp4mux → filesink.
-        # gst-droid's vidsrc emits HAL-encoded H264 buffers when mode=2
-        # and start-capture is in flight — so we don't need a software
-        # encoder. h264parse hands the stream to mp4mux which finalises
-        # on EOS.
+        # vidsrc → queue → videoconvert → encoder → h264parse → mp4mux
+        # → filesink. The "cannot record video in raw mode" error we
+        # saw earlier confirms vidsrc on this HAL emits raw video, so
+        # we need a software h264 encoder inline. Prefer gst-droid's
+        # hardware droidvenc when it's installed; fall back to x264enc.
+        # The bitrate comes from the user-picked Video-quality preset.
         path = self._build_video_path()
         self._video_path = path
         vid_queue = gst.ElementFactory.make("queue", "vid_queue")
-        h264parse = gst.ElementFactory.make("h264parse", "h264")
+        vid_convert = gst.ElementFactory.make("videoconvert", "vid_convert")
+        encoder = gst.ElementFactory.make("droidvenc", "h264enc")
+        encoder_kind = "droidvenc"
+        if encoder is None:
+            encoder = gst.ElementFactory.make("x264enc", "h264enc")
+            encoder_kind = "x264enc"
+        h264parse = gst.ElementFactory.make("h264parse", "h264parse")
         mp4mux = gst.ElementFactory.make("mp4mux", "mux")
         filesink = gst.ElementFactory.make("filesink", "filesink")
-        if None in (vid_queue, h264parse, mp4mux, filesink):
+        if None in (vid_queue, vid_convert, encoder, h264parse, mp4mux, filesink):
             return self._video_recording_failed(
-                "video-record elements unavailable (need h264parse + mp4mux)"
+                "video-record elements unavailable (need an h264 encoder + mp4mux)"
             )
         vid_queue.set_property("max-size-buffers", 0)
         vid_queue.set_property("max-size-time", 0)
         vid_queue.set_property("max-size-bytes", 0)
+        # Encoder tuning. x264enc supports `bitrate` (kbps) and
+        # `tune=zerolatency` for live capture; droidvenc has the same
+        # bitrate property.
+        try:
+            encoder.set_property("bitrate", int(self._video_bitrate_kbps))
+        except Exception:
+            pass
+        if encoder_kind == "x264enc":
+            try:
+                encoder.set_property("tune", "zerolatency")
+                encoder.set_property("speed-preset", "ultrafast")
+            except Exception:
+                pass
         filesink.set_property("location", str(path))
         filesink.set_property("sync", False)
-        pipeline.add(vid_queue); pipeline.add(h264parse)
+        pipeline.add(vid_queue); pipeline.add(vid_convert)
+        pipeline.add(encoder); pipeline.add(h264parse)
         pipeline.add(mp4mux); pipeline.add(filesink)
         vid_pad = src.get_static_pad("vidsrc")
         if vid_pad is None:
@@ -3730,9 +3762,23 @@ class CameraWindow(Adw.Window):
         if vid_pad.link(vid_queue.get_static_pad("sink")) != gst.PadLinkReturn.OK:
             pipeline.set_state(gst.State.NULL)
             return self._video_recording_failed("vidsrc -> queue link failed")
-        vid_queue.link(h264parse)
+        if not vid_queue.link(vid_convert):
+            return self._video_recording_failed("queue -> videoconvert link failed")
+        if not vid_convert.link(encoder):
+            return self._video_recording_failed(
+                f"videoconvert -> {encoder_kind} link failed (caps?)"
+            )
+        if not encoder.link(h264parse):
+            return self._video_recording_failed(
+                f"{encoder_kind} -> h264parse link failed"
+            )
         h264parse.link(mp4mux)
         mp4mux.link(filesink)
+        print(
+            f"[yaga.camera] video-record: using {encoder_kind} "
+            f"@ {self._video_bitrate_kbps} kbps",
+            file=sys.stderr, flush=True,
+        )
 
         self._video_pipeline = pipeline
         self._video_src = src
