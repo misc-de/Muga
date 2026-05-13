@@ -11,6 +11,7 @@ from .config import THUMB_DIR
 from .models import MediaItem
 
 LOGGER = logging.getLogger(__name__)
+_VIDEO_THUMB_TIMEOUT_SEC = 20
 
 # Sync the decompression-bomb cap with editor/_pil.py at import time so the
 # scanner thumbnail path is also protected — a hostile NC server could
@@ -144,8 +145,20 @@ class Thumbnailer:
         else:
             return None
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_VIDEO_THUMB_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired:
+            LOGGER.warning("Video thumbnailer timed out for %s", path)
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
         except (OSError, subprocess.CalledProcessError):
             return None
         return str(target) if target.exists() else None
-

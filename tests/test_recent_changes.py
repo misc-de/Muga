@@ -1370,13 +1370,15 @@ def test_find_nav_button_at_walks_nav_box_children() -> None:
     """The helper finds the ToggleButton whose allocation contains a press
     point — used so the tap-fallback can fire the right button's toggled
     handler even though we claimed the sequence before the click saw it."""
+    import yaga.app as app_mod
     from yaga.app import GalleryWindow
-    from gi.repository import Gtk
 
     # Build a fake nav_box with two "buttons" at known positions.
-    class _FakeBtn(Gtk.ToggleButton):
+    class _FakeToggleButton:
+        pass
+
+    class _FakeBtn(_FakeToggleButton):
         def __init__(self, bx, by, bw, bh):
-            super().__init__()
             self._b = SimpleNamespace(
                 get_x=lambda: bx, get_y=lambda: by,
                 get_width=lambda: bw, get_height=lambda: bh,
@@ -1386,8 +1388,6 @@ def test_find_nav_button_at_walks_nav_box_children() -> None:
 
     b1 = _FakeBtn(0, 0, 50, 40)
     b2 = _FakeBtn(50, 0, 50, 40)
-    # Walk via get_first_child / get_next_sibling; emulate with a closure.
-    siblings = {id(b1): b2, id(b2): None}
     nav_box = SimpleNamespace(
         get_first_child=lambda: b1,
     )
@@ -1395,14 +1395,19 @@ def test_find_nav_button_at_walks_nav_box_children() -> None:
     b1.get_next_sibling = lambda: b2
     b2.get_next_sibling = lambda: None
     fake = SimpleNamespace(nav_box=nav_box)
-    # Point in b1.
-    found = GalleryWindow._find_nav_button_at(fake, 10.0, 10.0)
-    assert found is b1
-    # Point in b2.
-    found = GalleryWindow._find_nav_button_at(fake, 75.0, 10.0)
-    assert found is b2
-    # Point outside both.
-    assert GalleryWindow._find_nav_button_at(fake, 200.0, 200.0) is None
+    old_toggle_button = app_mod.Gtk.ToggleButton
+    try:
+        app_mod.Gtk.ToggleButton = _FakeToggleButton
+        # Point in b1.
+        found = GalleryWindow._find_nav_button_at(fake, 10.0, 10.0)
+        assert found is b1
+        # Point in b2.
+        found = GalleryWindow._find_nav_button_at(fake, 75.0, 10.0)
+        assert found is b2
+        # Point outside both.
+        assert GalleryWindow._find_nav_button_at(fake, 200.0, 200.0) is None
+    finally:
+        app_mod.Gtk.ToggleButton = old_toggle_button
 
 
 def test_date_header_arrow_visibility_is_neighbour_based() -> None:

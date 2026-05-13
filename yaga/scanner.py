@@ -15,7 +15,6 @@ class MediaScanner:
     def __init__(self, database: Database, thumbnailer: Thumbnailer) -> None:
         self.database = database
         self.thumbnailer = thumbnailer
-        self._visited_inodes: set[tuple] = set()  # Track (device, inode) to prevent symlink loops
         # Categories whose root location is gone (missing on disk / 404 on server).
         # Maps category → human-readable folder name shown in the empty state.
         self.missing_root: dict[str, str] = {}
@@ -25,7 +24,6 @@ class MediaScanner:
              excluded_subtrees: list[str] | None = None) -> None:
         started = time.time()
         scanned_categories: list[str] = []
-        self._visited_inodes.clear()  # Reset for fresh scan
         excluded_paths = [Path(p).expanduser() for p in (excluded_subtrees or [])]
 
         for category, _label, root_text in categories:
@@ -79,18 +77,11 @@ class MediaScanner:
                     ):
                         continue
                 
-                # Optional: Track visited directories (inode) to detect symlink loops
-                # This provides defense-in-depth if rglob() encounters symlinks
                 try:
-                    stat = path.stat()
-                    inode_key = (stat.st_dev, stat.st_ino)
-                    if inode_key in self._visited_inodes and path.is_dir():
-                        LOGGER.debug("Skipping already-visited directory (potential symlink loop): %s", path)
-                        continue
-                    if path.is_dir():
-                        self._visited_inodes.add(inode_key)
+                    path.stat()
                 except (OSError, ValueError):
-                    # If we can't stat the path, skip it (broken symlink, permission denied, etc.)
+                    # If we can't stat the file, skip it (permission denied,
+                    # removed while scanning, broken filesystem entry, etc.).
                     LOGGER.debug("Skipping path that cannot be stat'd: %s", path)
                     continue
                 

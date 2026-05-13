@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS media (
 CREATE INDEX IF NOT EXISTS idx_media_category ON media(category);
 CREATE INDEX IF NOT EXISTS idx_media_folder ON media(folder);
 CREATE INDEX IF NOT EXISTS idx_media_mtime ON media(mtime);
+CREATE INDEX IF NOT EXISTS idx_media_cat_type_folder_mtime_name
+    ON media(category, media_type, folder, mtime DESC, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_media_cat_type_mtime_name
+    ON media(category, media_type, mtime DESC, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_media_type_mtime_name
+    ON media(media_type, mtime DESC, name COLLATE NOCASE);
 """
 
 _MIGRATION_V1 = """
@@ -81,6 +87,16 @@ CREATE TRIGGER IF NOT EXISTS media_au AFTER UPDATE ON media BEGIN
     INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
     INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
 END;
+"""
+
+_MIGRATION_V5 = """
+CREATE INDEX IF NOT EXISTS idx_media_cat_type_folder_mtime_name
+    ON media(category, media_type, folder, mtime DESC, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_media_cat_type_mtime_name
+    ON media(category, media_type, mtime DESC, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_media_type_mtime_name
+    ON media(media_type, mtime DESC, name COLLATE NOCASE);
+PRAGMA user_version = 5;
 """
 
 
@@ -199,6 +215,12 @@ class Database:
                 self.conn.commit()
             except sqlite3.OperationalError:
                 pass
+        if version < 5:
+            try:
+                self.conn.executescript(_MIGRATION_V5)
+                self.conn.commit()
+            except sqlite3.OperationalError as exc:
+                LOGGER.warning("Could not create media performance indexes: %s", exc)
 
     def upsert_media(self, *, path: Path, category: str, media_type: str, folder: str, thumb_path: str | None) -> None:
         stat = path.stat()
