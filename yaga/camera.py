@@ -91,16 +91,23 @@ _CSS = b"""
     color: #fff;
     transition: none;
 }
-/* MenuButton wraps its content in an internal <button> child which
- * Adwaita sizes differently from a plain Button or ToggleButton - we
- * have to force it back to the same dimensions so the icon doesn't
- * shrink relative to the rest of the row. */
-.camera-iconbtn > button {
+/* MenuButton wraps its content in an internal <button> child (and
+ * possibly more boxes), so the icon needs reaching via descendant
+ * selectors, not just direct-child. We also bump the icon's own
+ * pixel_size in Python (set_pixel_size(26)) so even themes that
+ * ignore -gtk-icon-size still render at the correct size. */
+.camera-iconbtn button,
+.camera-iconbtn box {
     min-width: 56px;
     min-height: 56px;
+    padding: 0;
+    margin: 0;
 }
-.camera-iconbtn > image,
-.camera-iconbtn > button > image { -gtk-icon-size: 26px; }
+.camera-iconbtn image {
+    -gtk-icon-size: 26px;
+    min-width: 26px;
+    min-height: 26px;
+}
 /* Feedback via opacity / icon-color only so the row stays uniform. */
 .camera-iconbtn:hover    { opacity: 0.85; }
 .camera-iconbtn:active   { opacity: 0.60; }
@@ -1069,10 +1076,11 @@ class CameraWindow(Adw.Window):
         def _icon(name: str) -> _RotatableIcon:
             img = _RotatableIcon()
             img.set_from_icon_name(name)
-            # No explicit pixel_size — let the per-button CSS rules
-            # (`.camera-iconbtn > image { -gtk-icon-size: 24px }` etc.)
-            # govern, so icons match the visual treatment of the rest
-            # of the Adwaita widgets.
+            # Explicit pixel_size so MenuButton's internal layout (which
+            # ignored our CSS -gtk-icon-size in some Adwaita versions)
+            # renders at the same size as Button/ToggleButton-hosted
+            # icons. Matches the .camera-iconbtn image CSS rule.
+            img.set_pixel_size(26)
             self._rotatable_icons.append(img)
             return img
 
@@ -2744,10 +2752,13 @@ class CameraWindow(Adw.Window):
             store: list[tuple[Gtk.Button, int]],
         ) -> None:
             # Each section is its own sub-box so the header sits next to
-            # its row of buttons in both layouts.
+            # its row of buttons. Portrait = HORIZONTAL (header LEFT of
+            # control), landscape = VERTICAL in widget (header ABOVE
+            # control in widget which becomes header LEFT of control in
+            # the user's rotated view).
             section_orient = (
-                Gtk.Orientation.HORIZONTAL if landscape
-                else Gtk.Orientation.VERTICAL
+                Gtk.Orientation.VERTICAL if landscape
+                else Gtk.Orientation.HORIZONTAL
             )
             sec = Gtk.Box(orientation=section_orient, spacing=6)
             header = _rotated_text(title)
@@ -2781,8 +2792,8 @@ class CameraWindow(Adw.Window):
 
             # Photo size: string-keyed presets, built manually.
             section_orient = (
-                Gtk.Orientation.HORIZONTAL if landscape
-                else Gtk.Orientation.VERTICAL
+                Gtk.Orientation.VERTICAL if landscape
+                else Gtk.Orientation.HORIZONTAL
             )
             size_sec = Gtk.Box(orientation=section_orient, spacing=6)
             size_header = _rotated_text(self._("Photo size"))
@@ -2820,16 +2831,6 @@ class CameraWindow(Adw.Window):
                 self._set_video_bitrate,
                 self._video_quality_buttons,
             )
-            hint = _rotated_text(
-                self._(
-                    "Video recording: encoder still to be wired up — "
-                    "this bitrate is remembered for when it is."
-                )
-            )
-            hint.add_css_class("dim-label")
-            hint.set_wrap(True)
-            hint.set_max_width_chars(34)
-            box.append(hint)
 
         popover.set_child(box)
         return popover
@@ -2866,7 +2867,7 @@ class CameraWindow(Adw.Window):
             return lab
 
         section_orient = (
-            Gtk.Orientation.HORIZONTAL if landscape else Gtk.Orientation.VERTICAL
+            Gtk.Orientation.VERTICAL if landscape else Gtk.Orientation.HORIZONTAL
         )
         sec = Gtk.Box(orientation=section_orient, spacing=6)
         header = _rotated_text(self._("Handedness"))
