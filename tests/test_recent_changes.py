@@ -49,7 +49,7 @@ def test_video_light_toggle_turns_torch_on_before_recording() -> None:
         _pipeline=None,
     )
 
-    with patch("yaga.camera._set_torch_sysfs") as set_torch:
+    with patch("yaga.camera.set_torch_sysfs") as set_torch:
         CameraWindow._apply_flash_to_pipeline(fake)
 
     set_torch.assert_called_once_with(True)
@@ -65,7 +65,7 @@ def test_photo_mode_keeps_sysfs_torch_off() -> None:
         _pipeline=None,
     )
 
-    with patch("yaga.camera._set_torch_sysfs") as set_torch:
+    with patch("yaga.camera.set_torch_sysfs") as set_torch:
         CameraWindow._apply_flash_to_pipeline(fake)
 
     set_torch.assert_called_once_with(False)

@@ -8,6 +8,7 @@ set -euo pipefail
 #   • a launcher script  → ~/.local/bin/yaga
 #   • the app icon       → ~/.local/share/icons/hicolor/128x128/apps/
 #   • the desktop entry  → ~/.local/share/applications/
+#   • AppStream metadata → ~/.local/share/metainfo/
 #
 # The Python source stays right here in the project directory.
 # ---------------------------------------------------------------------------
@@ -42,6 +43,12 @@ sed "s|Exec=.*|Exec=${LOCAL}/bin/yaga|" \
     "${SCRIPT_DIR}/data/io.github.miscde.Yaga.desktop" \
     > "${LOCAL}/share/applications/io.github.miscde.Yaga.desktop"
 echo "  ✓ desktop   ${LOCAL}/share/applications/io.github.miscde.Yaga.desktop"
+
+# ── AppStream metadata ───────────────────────────────────────────────────────
+install -Dm644 \
+    "${SCRIPT_DIR}/data/io.github.miscde.Yaga.metainfo.xml" \
+    "${LOCAL}/share/metainfo/io.github.miscde.Yaga.metainfo.xml"
+echo "  ✓ metainfo  ${LOCAL}/share/metainfo/io.github.miscde.Yaga.metainfo.xml"
 
 # ── Refresh system caches ────────────────────────────────────────────────────
 gtk-update-icon-cache -f -t "${LOCAL}/share/icons/hicolor" 2>/dev/null || true

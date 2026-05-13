@@ -1,10 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Yaga
+GenericName=Photo Gallery
 Comment=Browse photos and videos
 Exec=python3 -m yaga
 Icon=io.github.miscde.Yaga
 Terminal=false
 Categories=GNOME;GTK;Graphics;Photography;
+Keywords=photo;gallery;camera;video;nextcloud;
 StartupNotify=true
-

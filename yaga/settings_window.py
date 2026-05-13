@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import platform
+import sys
 import threading
 from pathlib import Path
 
@@ -10,7 +13,8 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
-from .config import Settings
+from .camera_torch import TORCH_SYSFS_PATHS
+from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
 
 class SettingsWindow(Adw.PreferencesWindow):
     def __init__(self, parent: GalleryWindow, initial_page: str | None = None) -> None:
@@ -154,6 +158,136 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._refresh_cache_size_display()
 
         self._build_nextcloud_page()
+        self._build_diagnostics_page()
+
+    def _build_diagnostics_page(self) -> None:
+        page = Adw.PreferencesPage(
+            title=self._("Diagnostics"),
+            icon_name="dialog-information-symbolic",
+        )
+        page.set_name("diagnostics")
+        self.add(page)
+
+        group = Adw.PreferencesGroup(
+            title=self._("Diagnostics"),
+            description=self._(
+                "Copy this when reporting camera, Nextcloud, or media-scan issues."
+            ),
+        )
+        page.add(group)
+
+        copy_row = Adw.ActionRow(
+            title=self._("Diagnostic report"),
+            subtitle=self._("Includes paths, runtime versions, camera plugins, and status flags."),
+        )
+        copy_btn = Gtk.Button(label=self._("Copy"))
+        copy_btn.set_valign(Gtk.Align.CENTER)
+        copy_btn.connect("clicked", self._copy_diagnostics)
+        copy_row.add_suffix(copy_btn)
+        group.add(copy_row)
+
+        self._diagnostics_view = Gtk.TextView()
+        self._diagnostics_view.set_editable(False)
+        self._diagnostics_view.set_cursor_visible(False)
+        self._diagnostics_view.set_monospace(True)
+        self._diagnostics_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._diagnostics_view.set_top_margin(10)
+        self._diagnostics_view.set_bottom_margin(10)
+        self._diagnostics_view.set_left_margin(10)
+        self._diagnostics_view.set_right_margin(10)
+        self._diagnostics_view.get_buffer().set_text(self._diagnostics_text())
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_min_content_height(260)
+        scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self._diagnostics_view)
+        group.add(scroller)
+
+    def _copy_diagnostics(self, btn: Gtk.Button) -> None:
+        text = self._diagnostics_text()
+        self._diagnostics_view.get_buffer().set_text(text)
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_clipboard().set(text)
+        btn.set_label(self._("Copied"))
+        GLib.timeout_add_seconds(2, lambda: (btn.set_label(self._("Copy")), False)[1])
+
+    def _diagnostics_text(self) -> str:
+        gst_info = self._gst_diagnostics()
+        s = self.settings
+        parent = self.parent_window
+        lines = [
+            "Yaga diagnostics",
+            "================",
+            f"Python: {sys.version.split()[0]}",
+            f"Platform: {platform.platform()}",
+            f"Executable: {sys.executable}",
+            f"PID: {os.getpid()}",
+            "",
+            "Paths",
+            "-----",
+            f"Config: {CONFIG_DIR}",
+            f"Cache: {CACHE_DIR}",
+            f"Data: {DATA_DIR}",
+            f"Database: {DB_PATH} ({'exists' if DB_PATH.exists() else 'missing'})",
+            f"Debug log: {DEBUG_LOG_PATH} ({'exists' if DEBUG_LOG_PATH.exists() else 'missing'})",
+            "",
+            "Media folders",
+            "-------------",
+            f"Overview: hidden={s.pictures_hidden}, filter={s.pictures_media_filter}",
+            f"Photos: {s.photos_dir}",
+            f"Pictures legacy path: {s.pictures_dir}",
+            f"Videos: {s.videos_dir}",
+            f"Screenshots: {s.screenshots_dir}",
+            f"Extra locations: {len(s.extra_locations)}",
+            "",
+            "Nextcloud",
+            "---------",
+            f"Enabled: {s.nextcloud_enabled}",
+            f"Session active: {getattr(parent, '_nc_session_active', False)}",
+            f"URL set: {bool(s.nextcloud_url)}",
+            f"User set: {bool(s.nextcloud_user)}",
+            f"Photos path: {s.nextcloud_photos_path}",
+            f"Thumbnail-only scan: {s.nextcloud_thumbnail_only}",
+            "",
+            "Camera settings",
+            "---------------",
+            f"Handedness: {s.handedness}",
+            f"JPEG quality: {s.camera_jpeg_quality}",
+            f"Image resolution: {s.camera_image_resolution or 'native/default'}",
+            f"Video quality preset: {s.camera_video_bitrate_kbps} kbps",
+            f"Geotagging enabled: {s.camera_geo_enabled}",
+            f"Flash/video-light enabled: {s.camera_flash_enabled}",
+            "",
+            "GStreamer",
+            "---------",
+            *gst_info,
+            "",
+            "Torch sysfs",
+            "-----------",
+        ]
+        for path in TORCH_SYSFS_PATHS:
+            p = Path(path)
+            writable = os.access(path, os.W_OK)
+            lines.append(f"{path}: {'exists' if p.exists() else 'missing'}, writable={writable}")
+        return "\n".join(lines) + "\n"
+
+    def _gst_diagnostics(self) -> list[str]:
+        try:
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst  # type: ignore
+            Gst.init(None)
+        except Exception as exc:
+            return [f"Unavailable: {exc}"]
+        factories = (
+            "droidcamsrc", "gtk4paintablesink", "v4l2src", "pipewiresrc",
+            "autovideosrc", "appsink", "jpegenc", "jpegdec", "matroskamux",
+            "filesink", "zxing",
+        )
+        out = [f"Version: {Gst.version_string()}"]
+        for name in factories:
+            out.append(f"{name}: {bool(Gst.ElementFactory.find(name))}")
+        return out
 
     def _build_nextcloud_page(self) -> None:
         page = Adw.PreferencesPage(title="Nextcloud", icon_name="folder-remote-symbolic")

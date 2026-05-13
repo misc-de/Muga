@@ -18,6 +18,9 @@ echo "  ✓ removed icon"
 rm -f "${LOCAL}/share/applications/io.github.miscde.Yaga.desktop"
 echo "  ✓ removed desktop entry"
 
+rm -f "${LOCAL}/share/metainfo/io.github.miscde.Yaga.metainfo.xml"
+echo "  ✓ removed metainfo"
+
 gtk-update-icon-cache -f -t "${LOCAL}/share/icons/hicolor" 2>/dev/null || true
 update-desktop-database "${LOCAL}/share/applications" 2>/dev/null || true
 

@@ -29,5 +29,12 @@ yaga = [
     "data/*.css",
 ]
 
+[tool.setuptools.data-files]
+"share/applications" = ["data/io.github.miscde.Yaga.desktop"]
+"share/metainfo" = ["data/io.github.miscde.Yaga.metainfo.xml"]
+"share/icons/hicolor/128x128/apps" = [
+    "yaga/data/icons/hicolor/128x128/apps/io.github.miscde.Yaga.png",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -176,6 +176,14 @@ TRANSLATIONS = {
         "Video": "Video",
         "External player command": "External player command",
         "Leave empty to use built-in playback": "Leave empty to use built-in playback",
+        "Diagnostics": "Diagnostics",
+        "Copy this when reporting camera, Nextcloud, or media-scan issues.":
+            "Copy this when reporting camera, Nextcloud, or media-scan issues.",
+        "Diagnostic report": "Diagnostic report",
+        "Includes paths, runtime versions, camera plugins, and status flags.":
+            "Includes paths, runtime versions, camera plugins, and status flags.",
+        "Copy": "Copy",
+        "Copied": "Copied",
         "Folder structure": "Folder structure",
         "All media": "All media",
         "No configured folder exists yet.": "No configured folder exists yet.",
@@ -434,6 +442,14 @@ TRANSLATIONS = {
         "Video": "Video",
         "External player command": "Externer Player-Befehl",
         "Leave empty to use built-in playback": "Leer lassen für integrierte Wiedergabe",
+        "Diagnostics": "Diagnose",
+        "Copy this when reporting camera, Nextcloud, or media-scan issues.":
+            "Beim Melden von Kamera-, Nextcloud- oder Medien-Scan-Problemen kopieren.",
+        "Diagnostic report": "Diagnosebericht",
+        "Includes paths, runtime versions, camera plugins, and status flags.":
+            "Enthält Pfade, Laufzeitversionen, Kamera-Plugins und Statuswerte.",
+        "Copy": "Kopieren",
+        "Copied": "Kopiert",
         "Folder structure": "Ordnerstruktur",
         "All media": "Alle Medien",
         "No configured folder exists yet.": "Noch kein konfigurierter Ordner vorhanden.",

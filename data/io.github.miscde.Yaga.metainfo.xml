@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.miscde.Yaga</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Yaga</name>
+  <summary>Browse photos and videos</summary>
+  <developer id="io.github.miscde">
+    <name>miscde</name>
+  </developer>
+  <description>
+    <p>
+      Yaga is a GTK 4 and libadwaita photo gallery for Linux desktops and
+      phones. It indexes local media folders, shows cached thumbnails, plays
+      videos, edits photos, connects to Nextcloud Photos, and includes a
+      camera for photo and video capture.
+    </p>
+    <p>
+      On Halium and gst-droid based phones such as FuriOS devices, Yaga can
+      use the device camera HAL directly for flash, video light, orientation,
+      and geotagging workflows.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.miscde.Yaga.desktop</launchable>
+  <categories>
+    <category>Graphics</category>
+    <category>Photography</category>
+  </categories>
+  <url type="homepage">https://github.com/miscde/Yaga</url>
+  <provides>
+    <binary>yaga</binary>
+  </provides>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-05-14" />
+  </releases>
+</component>

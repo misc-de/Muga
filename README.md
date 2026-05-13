@@ -33,7 +33,7 @@ separate tabs for Photos, Pictures, Videos, Screenshots, and any extra folders y
 - **Built-in camera**  
 capture photos and record video without leaving the app; swipe the shutter between photo and video modes. On Halium / gst-droid phones (FuriOS, Droidian, …) the camera drives the HAL directly:
   - optional geotagging via GeoClue2, with EXIF written in place — no JPEG re-encode
-  - self-timer (3 / 10 s), pinch-to-zoom, tap-to-focus, JPEG quality presets, video bitrate presets
+  - self-timer (3 / 10 s), pinch-to-zoom, tap-to-focus, flash for photos, video light / torch for recording, JPEG quality presets, video quality presets
   - handedness toggle (right / left / neutral) so the shutter button sits under your thumb
 - **Mobile-adaptive UI**  
 narrow-window breakpoints hide / re-order desktop-only chrome on phones; pull-to-refresh replaces the title-bar refresh icon
@@ -70,6 +70,23 @@ python3 -m yaga
 **Uninstall:**
 ```bash
 bash uninstall.sh
+```
+
+For camera release checks on phones and desktops, see
+[docs/camera-validation.md](docs/camera-validation.md).
+
+---
+
+## Diagnostics
+
+Open **Settings → Diagnostics** to copy a compact report for bug reports.
+It includes runtime versions, storage paths, media-folder settings,
+Nextcloud connection state, GStreamer camera plugins, and detected torch
+sysfs paths. It does **not** include passwords or app tokens.
+
+For camera debugging from a terminal, run:
+```bash
+YAGA_CAMERA_DEBUG=1 python3 -m yaga
 ```
 
 ---

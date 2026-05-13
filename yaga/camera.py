@@ -27,6 +27,7 @@ except (ValueError, ImportError):
 from . import camera_controls
 from .camera_controls import V4l2Control
 from .camera_geo import GeoClient
+from .camera_torch import set_torch_sysfs
 from .camera_orientation import (
     OrientationClient,
     ORIENT_NORMAL,
@@ -108,43 +109,6 @@ _FLASH_MODE_OFF = 0
 _FLASH_MODE_AUTO = 1
 _FLASH_MODE_ON = 2
 _FLASH_MODE_TORCH = 3
-
-# Kernel LED sysfs nodes that expose the rear-camera torch (continuous
-# light) on Halium / Hybris phones. Copied from FuriLabs' camera
-# flashlightcontroller.cpp — every node that actually exists on the
-# device is written to, so we don't have to detect the per-phone
-# convention (Pixel uses one path, Volla another, etc.). Writing "1"
-# turns the LED on, "0" turns it off; missing paths are skipped
-# silently.
-_TORCH_SYSFS_PATHS: tuple[str, ...] = (
-    "/sys/class/leds/torch-light/brightness",
-    "/sys/class/leds/led:flash_torch/brightness",
-    "/sys/class/leds/flashlight/brightness",
-    "/sys/class/leds/torch-light0/brightness",
-    "/sys/class/leds/torch-light1/brightness",
-    "/sys/class/leds/led:torch_0/brightness",
-    "/sys/class/leds/led:torch_1/brightness",
-    "/sys/devices/platform/soc/soc:i2c@1/i2c-23/23-0059/s2mpb02-led/leds/torch-sec1/brightness",
-    "/sys/class/leds/led:switch/brightness",
-    "/sys/class/leds/led:switch_0/brightness",
-    "/sys/devices/virtual/camera/flash/rear_flash",
-)
-
-
-def _set_torch_sysfs(on: bool) -> None:
-    """Toggle the rear-camera torch via every known kernel LED node.
-    No-op (silent) if none of the paths exist or all writes fail —
-    that's the desktop case + the "no torch hardware" case rolled
-    into one."""
-    value = "1" if on else "0"
-    for path in _TORCH_SYSFS_PATHS:
-        try:
-            with open(path, "w") as fh:
-                fh.write(value)
-        except (OSError, PermissionError):
-            # Path doesn't exist, or no write permission. Both are
-            # expected on devices without that specific LED node.
-            continue
 
 # Video-record JPEG quality mapped from the user's bitrate preset. We
 # can't pass bitrate to jpegenc directly (it's a quality element, not
@@ -697,6 +661,7 @@ class CameraWindow(Adw.Window):
         self._update_flash_icon()
         self._flash_button.connect("toggled", self._on_flash_toggled)
         self._update_flash_tooltip()
+        self._torch_warning_shown = False
         top_right.append(self._flash_button)
 
         self._res_button = Gtk.MenuButton()
@@ -2796,10 +2761,13 @@ class CameraWindow(Adw.Window):
         # Video torch — direct sysfs write to the kernel LED node.
         if self._capture_mode == "video":
             want_on = self._flash_enabled
-            _set_torch_sysfs(want_on)
+            ok = set_torch_sysfs(want_on)
+            if want_on and not ok and not self._torch_warning_shown:
+                self._torch_warning_shown = True
+                self._show_toast(self._("Video light unavailable"))
         else:
             # Ensure the torch is off when not in video mode.
-            _set_torch_sysfs(False)
+            set_torch_sysfs(False)
 
     def _apply_mode_visibility(self) -> None:
         """Hide options-bar buttons that don't apply to the current
@@ -3727,11 +3695,6 @@ class CameraWindow(Adw.Window):
 
     def _start_video_recording(self) -> None:
         device = self._current_device() or {}
-        if not _is_halium_device(device):
-            self._show_toast(self._(
-                "Video recording: only supported on Halium devices for now"
-            ))
-            return
         if self._recording or self._busy_capture:
             # _recording is set inside _video_pipeline_build (~100 ms
             # idle-deferred from here); _busy_capture catches the
@@ -3749,9 +3712,143 @@ class CameraWindow(Adw.Window):
         cam_id = device.get("droidcam_id", 0)
         self._freeze_preview_frame()
         self._show_capture_spinner(True)
-        _dlog(f"[yaga.camera] video-record: stopping preview for cam {cam_id}")
+        _dlog(f"[yaga.camera] video-record: stopping preview for {device.get('name', cam_id)}")
         self._stop_pipeline()
-        GLib.idle_add(self._video_pipeline_build, cam_id)
+        if _is_halium_device(device):
+            GLib.idle_add(self._video_pipeline_build, cam_id)
+        else:
+            GLib.idle_add(self._video_pipeline_build_generic, device)
+
+    def _video_pipeline_build_generic(self, device: dict[str, Any]) -> bool:
+        gst = self._Gst
+
+        pipeline = gst.Pipeline.new("yaga-video-record-generic")
+        src = self._make_source_element(device)
+        if src is None:
+            return self._video_recording_failed("camera source unavailable")
+
+        path = self._build_video_path()
+        self._video_path = path
+        kbps = max(2000, min(16000, int(self._video_bitrate_kbps)))
+        jpeg_q = _VIDEO_BITRATE_TO_QUALITY.get(kbps, 85)
+
+        capsfilter = None
+        jpegdec = None
+        if self._selected_resolution is not None:
+            sel_w, sel_h = self._selected_resolution
+            kind = self._selected_format_kind(device)
+            capsfilter = gst.ElementFactory.make("capsfilter", "resfilter")
+            if capsfilter is None:
+                return self._video_recording_failed("capsfilter unavailable")
+            if kind == "jpeg":
+                capsfilter.set_property(
+                    "caps", gst.Caps.from_string(
+                        f"image/jpeg,width={sel_w},height={sel_h}"
+                    )
+                )
+                if gst.ElementFactory.find("jpegdec") is not None:
+                    jpegdec = gst.ElementFactory.make("jpegdec", "jpegdec")
+                if jpegdec is None:
+                    return self._video_recording_failed("jpegdec unavailable")
+            else:
+                capsfilter.set_property(
+                    "caps", gst.Caps.from_string(
+                        f"video/x-raw,width={sel_w},height={sel_h}"
+                    )
+                )
+
+        up_convert = gst.ElementFactory.make("videoconvert", "up_convert")
+        tee = gst.ElementFactory.make("tee", "t")
+        prev_queue = gst.ElementFactory.make("queue", "prev_queue")
+        prev_convert = gst.ElementFactory.make("videoconvert", "prev_convert")
+        prev_sink = gst.ElementFactory.make("gtk4paintablesink", "preview")
+        rec_queue = gst.ElementFactory.make("queue", "rec_queue")
+        rec_convert = gst.ElementFactory.make("videoconvert", "rec_convert")
+        jpegenc = gst.ElementFactory.make("jpegenc", "rec_jpegenc")
+        mkvmux = gst.ElementFactory.make("matroskamux", "mux")
+        filesink = gst.ElementFactory.make("filesink", "filesink")
+        if None in (
+            up_convert, tee, prev_queue, prev_convert, prev_sink,
+            rec_queue, rec_convert, jpegenc, mkvmux, filesink,
+        ):
+            return self._video_recording_failed(
+                "video-record elements unavailable "
+                "(need gtk4paintablesink + jpegenc + matroskamux + filesink)"
+            )
+
+        for el in (src, capsfilter, jpegdec, up_convert, tee,
+                   prev_queue, prev_convert, prev_sink,
+                   rec_queue, rec_convert, jpegenc, mkvmux, filesink):
+            if el is not None:
+                pipeline.add(el)
+
+        first = capsfilter or jpegdec or up_convert
+        src_pad = self._source_output_pad(src)
+        sink_pad = first.get_static_pad("sink")
+        if src_pad is None or sink_pad is None:
+            return self._video_recording_failed("source link pads unavailable")
+        if src_pad.link(sink_pad) != gst.PadLinkReturn.OK:
+            return self._video_recording_failed("source -> record pipeline link failed")
+
+        chain = [el for el in (capsfilter, jpegdec, up_convert, tee) if el is not None]
+        for a, b in zip(chain, chain[1:]):
+            if not a.link(b):
+                return self._video_recording_failed("record pipeline link failed")
+
+        try:
+            prev_sink.set_property("sync", False)
+            jpegenc.set_property("quality", jpeg_q)
+        except Exception:
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
+        prev_queue.set_property("leaky", 2)
+        prev_queue.set_property("max-size-buffers", 2)
+        rec_queue.set_property("leaky", 2)
+        rec_queue.set_property("max-size-buffers", 4)
+        filesink.set_property("location", str(path))
+        filesink.set_property("sync", False)
+        filesink.set_property("async", False)
+
+        if not tee.link(prev_queue):
+            return self._video_recording_failed("tee -> prev_queue link failed")
+        prev_queue.link(prev_convert)
+        prev_convert.link(prev_sink)
+        if not tee.link(rec_queue):
+            return self._video_recording_failed("tee -> rec_queue link failed")
+        rec_queue.link(rec_convert)
+        rec_convert.link(jpegenc)
+        jpegenc.link(mkvmux)
+        mkvmux.link(filesink)
+
+        self._video_pipeline = pipeline
+        self._video_src = src
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_video_pipeline_error)
+        bus.connect("message::eos", self._on_video_pipeline_eos)
+        self._video_bus = bus
+
+        try:
+            paintable = prev_sink.get_property("paintable")
+            if paintable is not None:
+                self._picture.set_paintable(paintable)
+        except Exception:
+            LOGGER.debug("camera cleanup/op failed", exc_info=True)
+
+        result = pipeline.set_state(gst.State.PLAYING)
+        if result == gst.StateChangeReturn.FAILURE:
+            return self._video_recording_failed("could not start video pipeline")
+        _dlog(f"[yaga.camera] video-record: generic MJPEG-in-Matroska, "
+              f"jpeg quality={jpeg_q}, file={path}")
+
+        self._recording = True
+        self._show_capture_spinner(False)
+        self._busy_capture = False
+        self._shutter.set_sensitive(True)
+        self._update_shutter_icon()
+        self._start_record_blink()
+        self._apply_flash_to_pipeline()
+        self._show_toast(self._("Recording…"))
+        return False
 
     def _video_pipeline_build(self, cam_id: int) -> bool:
         gst = self._Gst
@@ -4306,7 +4403,7 @@ class CameraWindow(Adw.Window):
         # Force the torch off — if the user closed the window mid-
         # recording with the light on, the kernel LED would keep
         # burning until the next reboot.
-        _set_torch_sysfs(False)
+        set_torch_sysfs(False)
         # Tear down ALL pipelines: the main preview AND any transient
         # capture/record pipeline that might still be running. Without
         # the latter, closing the window mid-recording leaves a stray
