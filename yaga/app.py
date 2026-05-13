@@ -2546,10 +2546,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         cell_size = max(32, scroller_width // columns)
         # Only set height: the homogeneous Box distributes width automatically,
         # so min/max-width here would create a measurement feedback loop.
+        # (GTK4 CSS has no max-height for generic widgets, so we rely on
+        # the tile's lack of vexpand to keep it at min-height.)
         self._tile_css.load_from_data(
             f""".gallery-tile {{
                 min-height: {cell_size}px;
-                max-height: {cell_size}px;
             }}""".encode()
         )
 

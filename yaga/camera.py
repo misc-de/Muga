@@ -757,6 +757,11 @@ class CameraWindow(Adw.Window):
         self._device_orientation: str = ORIENT_NORMAL
         self._applied_layout: str | None = None
         self._layout_landscape: bool | None = None
+        # List of widgets whose glyph/text needs to rotate with device
+        # orientation. Initialised up front because the countdown label
+        # and the options-bar icon buttons (all _Rotatable*) register
+        # themselves into it as they're built.
+        self._rotatable_icons: list = []
         # Settings object (yaga.config.Settings) for persisting camera
         # picks (quality, image size, bitrate) across sessions. None
         # means transient — settings won't be saved but defaults apply.
@@ -970,7 +975,8 @@ class CameraWindow(Adw.Window):
         # walk all of them in _apply_layout_for. The Gtk.Label-based
         # buttons (timer, resolution) are intentionally not rotated;
         # rotating Pango text inside a narrow pill clips badly.
-        self._rotatable_icons: list[_RotatableIcon] = []
+        # (self._rotatable_icons was initialised earlier so the
+        # countdown label can register before this point.)
 
         def _icon(name: str) -> _RotatableIcon:
             img = _RotatableIcon()
