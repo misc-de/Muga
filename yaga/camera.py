@@ -91,6 +91,14 @@ _CSS = b"""
     color: #fff;
     transition: none;
 }
+/* MenuButton wraps its content in an internal <button> child which
+ * Adwaita sizes differently from a plain Button or ToggleButton - we
+ * have to force it back to the same dimensions so the icon doesn't
+ * shrink relative to the rest of the row. */
+.camera-iconbtn > button {
+    min-width: 56px;
+    min-height: 56px;
+}
 .camera-iconbtn > image,
 .camera-iconbtn > button > image { -gtk-icon-size: 26px; }
 /* Feedback via opacity / icon-color only so the row stays uniform. */
@@ -131,6 +139,22 @@ _CSS = b"""
 .shutter-button:active > image { color: #c0322a; }
 .shutter-button:disabled > image { color: #6a6a6a; }
 .shutter-button.recording > image { color: #c0322a; }
+.camera-record-dot {
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 999px;
+    background-color: #e8443b;
+    box-shadow: 0 0 12px rgba(232, 68, 59, 0.7);
+}
+.camera-swipe-hint {
+    color: rgba(255, 255, 255, 0.95);
+    background-color: rgba(0, 0, 0, 0.55);
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 14px;
+    font-weight: 600;
+    text-shadow: 0 0 8px rgba(0, 0, 0, 0.7);
+}
 .camera-timer-text {
     font-weight: 800;
     font-size: 22px;
@@ -969,6 +993,40 @@ class CameraWindow(Adw.Window):
         self._rotatable_icons.append(capture_label)
         overlay.add_overlay(self._capture_spinner_box)
 
+        # Recording indicator: red dot that blinks in the user's
+        # top-right corner whenever a video recording is in progress.
+        # Position adjusts per orientation via _apply_layout_for.
+        self._record_dot = Gtk.Box()
+        self._record_dot.add_css_class("camera-record-dot")
+        self._record_dot.set_visible(False)
+        self._record_dot.set_can_target(False)
+        self._record_dot.set_halign(Gtk.Align.END)
+        self._record_dot.set_valign(Gtk.Align.START)
+        self._record_dot.set_margin_top(28)
+        self._record_dot.set_margin_end(28)
+        overlay.add_overlay(self._record_dot)
+        self._record_dot_blink_id: int | None = None
+
+        # Swipe-hint: a small "<- swipe ->" pill that pulses twice when
+        # the camera opens, teaching the user that horizontal swipe on
+        # the shutter switches photo <-> video. Hides for good after
+        # the two pulse cycles.
+        self._swipe_hint = _RotatableLabel()
+        self._swipe_hint.set_label(self._("←  swipe  →"))
+        self._swipe_hint.add_css_class("camera-swipe-hint")
+        self._swipe_hint.set_halign(Gtk.Align.CENTER)
+        self._swipe_hint.set_valign(Gtk.Align.END)
+        self._swipe_hint.set_margin_bottom(180)
+        self._swipe_hint.set_visible(False)
+        self._swipe_hint.set_can_target(False)
+        self._swipe_hint.set_opacity(0.0)
+        overlay.add_overlay(self._swipe_hint)
+        self._rotatable_icons.append(self._swipe_hint)
+        self._swipe_hint_cycles_left: int = 2
+        self._swipe_hint_phase: float = 0.0
+        self._swipe_hint_direction: int = 1
+        self._swipe_hint_pulse_id: int | None = None
+
         # Escape closes the window. There's no on-screen close button —
         # on phones the system swipe-from-bottom is used; on desktops the
         # Escape key. (window-close shortcut intentionally omitted from
@@ -1220,6 +1278,10 @@ class CameraWindow(Adw.Window):
         self._picture.add_controller(scroll)
 
         self.connect("close-request", self._on_close)
+        # Trigger the swipe-hint pulse once the window is actually
+        # mapped (visible on screen). Doing this before "map" would
+        # animate against an off-screen widget.
+        self.connect("map", lambda _w: self._start_swipe_hint())
 
         if not self._devices:
             self._shutter.set_sensitive(False)
@@ -2344,6 +2406,11 @@ class CameraWindow(Adw.Window):
             self._settings_button.set_popover(self._build_settings_popover())
         except Exception:
             LOGGER.debug("settings popover rebuild failed", exc_info=True)
+        # Recording dot follows the orientation too.
+        try:
+            self._position_record_dot()
+        except Exception:
+            LOGGER.debug("record-dot reposition failed", exc_info=True)
 
         neutral = (self._handedness == "neutral")
         right = (self._handedness == "right")
@@ -2825,22 +2892,23 @@ class CameraWindow(Adw.Window):
 
         box.append(Gtk.Separator(orientation=inner_orient))
 
-        # Geotagging toggle. Boolean on/off — reflects the user-intent
-        # flag (self._geo_enabled) regardless of whether GeoClue is
-        # actually available on the system. If GeoClue is missing or
-        # refuses, captures just won't get GPS embedded (silently).
+        # Geotagging: real boolean via Gtk.Switch. Reflects the
+        # user-intent flag (self._geo_enabled) regardless of whether
+        # GeoClue is actually available on the system — captures just
+        # silently lack GPS if it isn't.
         gps_sec = Gtk.Box(orientation=section_orient, spacing=6)
         gps_header = _rotated_text(self._("Geotagging"))
         gps_header.set_xalign(0)
         gps_header.add_css_class("heading")
         gps_sec.append(gps_header)
-        self._geo_button = Gtk.ToggleButton()
-        self._geo_button.set_child(_rotated_text(
-            self._("On") if self._geo_enabled else self._("Off")
-        ))
-        self._geo_button.set_active(self._geo_enabled)
-        self._geo_button.connect("toggled", self._on_geo_toggled)
-        gps_sec.append(self._geo_button)
+        self._geo_switch = Gtk.Switch()
+        self._geo_switch.set_active(self._geo_enabled)
+        self._geo_switch.set_halign(Gtk.Align.START)
+        self._geo_switch.set_valign(Gtk.Align.CENTER)
+        self._geo_switch.connect("state-set", self._on_geo_switch_state_set)
+        gps_sec.append(self._geo_switch)
+        # Kept for legacy _on_geo_error which used to set_active.
+        self._geo_button = None
         box.append(gps_sec)
 
         popover.set_child(box)
@@ -2991,6 +3059,27 @@ class CameraWindow(Adw.Window):
         )
         if not ok:
             self._geo = None
+
+    def _on_geo_switch_state_set(self, _sw: Gtk.Switch, state: bool) -> bool:
+        # Gtk.Switch fires "state-set" with the requested new state.
+        # Return False so the Switch accepts the state change visually.
+        self._geo_enabled = bool(state)
+        if self._settings is not None:
+            try:
+                self._settings.camera_geo_enabled = self._geo_enabled
+                self._settings.save()
+            except Exception:
+                LOGGER.debug("geo_enabled persist failed", exc_info=True)
+        if self._geo_enabled:
+            self._try_start_geo_silent()
+        else:
+            if self._geo is not None:
+                try:
+                    self._geo.stop()
+                except Exception:
+                    pass
+                self._geo = None
+        return False
 
     def _on_geo_toggled(self, btn: Gtk.ToggleButton) -> None:
         # Boolean on/off. Persists the user-intent flag and tries to
@@ -3366,6 +3455,92 @@ class CameraWindow(Adw.Window):
             self._capture_spinner.start()
         else:
             self._capture_spinner.stop()
+
+    def _start_swipe_hint(self) -> None:
+        if self._swipe_hint_pulse_id is not None:
+            return  # already running
+        self._swipe_hint_cycles_left = 2
+        self._swipe_hint_phase = 0.0
+        self._swipe_hint_direction = 1
+        self._swipe_hint.set_visible(True)
+        self._swipe_hint.set_opacity(0.0)
+        self._swipe_hint_pulse_id = GLib.timeout_add(40, self._swipe_hint_tick)
+
+    def _swipe_hint_tick(self) -> bool:
+        # Fade in to 1.0, fade back to 0.0, count one full cycle. After
+        # 2 cycles hide the widget permanently.
+        self._swipe_hint_phase += 0.035 * self._swipe_hint_direction
+        if self._swipe_hint_phase >= 1.0:
+            self._swipe_hint_phase = 1.0
+            self._swipe_hint_direction = -1
+        elif self._swipe_hint_phase <= 0.0:
+            self._swipe_hint_phase = 0.0
+            self._swipe_hint_direction = 1
+            self._swipe_hint_cycles_left -= 1
+            if self._swipe_hint_cycles_left <= 0:
+                self._swipe_hint.set_visible(False)
+                self._swipe_hint_pulse_id = None
+                return False
+        self._swipe_hint.set_opacity(self._swipe_hint_phase)
+        return True
+
+    def _start_record_blink(self) -> None:
+        self._position_record_dot()
+        self._record_dot.set_visible(True)
+        self._record_dot.set_opacity(1.0)
+        if self._record_dot_blink_id is None:
+            self._record_dot_blink_id = GLib.timeout_add(
+                650, self._toggle_record_dot,
+            )
+
+    def _toggle_record_dot(self) -> bool:
+        opaque = self._record_dot.get_opacity() > 0.5
+        self._record_dot.set_opacity(0.0 if opaque else 1.0)
+        return True  # keep ticking
+
+    def _stop_record_blink(self) -> None:
+        if self._record_dot_blink_id is not None:
+            try:
+                GLib.source_remove(self._record_dot_blink_id)
+            except Exception:
+                pass
+            self._record_dot_blink_id = None
+        self._record_dot.set_visible(False)
+        self._record_dot.set_opacity(1.0)
+
+    def _position_record_dot(self) -> None:
+        """Place the recording indicator in the user's top-right
+        corner. The compositor doesn't rotate the surface, so user-
+        top-right maps to a different widget corner per orientation.
+        """
+        orient = self._device_orientation
+        # (halign, valign) for each orientation that visually lands in
+        # the user's top-right corner.
+        mapping = {
+            ORIENT_NORMAL:    (Gtk.Align.END,   Gtk.Align.START),
+            ORIENT_BOTTOM_UP: (Gtk.Align.START, Gtk.Align.END),
+            ORIENT_LEFT_UP:   (Gtk.Align.START, Gtk.Align.START),
+            ORIENT_RIGHT_UP:  (Gtk.Align.END,   Gtk.Align.END),
+        }
+        halign, valign = mapping.get(
+            orient, (Gtk.Align.END, Gtk.Align.START)
+        )
+        self._record_dot.set_halign(halign)
+        self._record_dot.set_valign(valign)
+        # Reset all margins, set 28 px on the two edges the dot lives
+        # near (depending on orientation).
+        self._record_dot.set_margin_top(0)
+        self._record_dot.set_margin_bottom(0)
+        self._record_dot.set_margin_start(0)
+        self._record_dot.set_margin_end(0)
+        if halign == Gtk.Align.END:
+            self._record_dot.set_margin_end(28)
+        else:
+            self._record_dot.set_margin_start(28)
+        if valign == Gtk.Align.START:
+            self._record_dot.set_margin_top(28)
+        else:
+            self._record_dot.set_margin_bottom(28)
 
     def _capture_via_image_pipeline(self) -> None:
         """Stop the preview pipeline, build a droidcamsrc mode=1 ->
@@ -3843,6 +4018,7 @@ class CameraWindow(Adw.Window):
         self._busy_capture = False
         self._shutter.set_sensitive(True)
         self._update_shutter_icon()
+        self._start_record_blink()
         self._show_toast(self._("Recording…"))
         return False
 
@@ -3888,6 +4064,7 @@ class CameraWindow(Adw.Window):
         path = self._video_path
         self._video_teardown()
         self._recording = False
+        self._stop_record_blink()
         self._show_capture_spinner(False)
         self._shutter.set_sensitive(True)
         self._update_shutter_icon()
@@ -3911,6 +4088,7 @@ class CameraWindow(Adw.Window):
         )
         self._video_teardown()
         self._recording = False
+        self._stop_record_blink()
         self._show_capture_spinner(False)
         self._busy_capture = False
         self._shutter.set_sensitive(True)
