@@ -2022,7 +2022,19 @@ class CameraWindow(Adw.Window):
 
         kw = dict(neutral=neutral, right=right, third=third,
                   user_vertical=user_vertical)
-        if orientation == ORIENT_NORMAL:
+        if neutral:
+            # Neutral handedness: keep the portrait layout (icons row
+            # across the top, shutter centred at the bottom) regardless
+            # of device orientation. The landscape-specific corner
+            # placements only apply to handed (right/left) mode where
+            # they reach naturally under the user's thumb. Glyphs still
+            # rotate via _ICON_ROTATION_DEG so they remain upright in
+            # the user's view; only the on-screen positioning is held
+            # constant. flip_180 still applies for BOTTOM_UP so an
+            # upside-down portrait swaps icons and shutter.
+            flip_180 = (orientation == ORIENT_BOTTOM_UP)
+            self._layout_portrait(flip_180=flip_180, **kw)
+        elif orientation == ORIENT_NORMAL:
             self._layout_portrait(flip_180=False, **kw)
         elif orientation == ORIENT_BOTTOM_UP:
             self._layout_portrait(flip_180=True, **kw)
