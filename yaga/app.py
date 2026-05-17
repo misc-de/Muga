@@ -585,21 +585,6 @@ class GalleryWindow(Adw.ApplicationWindow):
             self.toolbar.set_content(content)
         self._rebuild_categories()
 
-        # Mobile breakpoint: at narrow widths the titlebar Refresh icon
-        # disappears (pull-to-refresh handles it on touch), keeping the
-        # header from looking cramped next to the back arrow on phones.
-        breakpoint = Adw.Breakpoint.new(
-            Adw.BreakpointCondition.parse("max-width: 600px"),
-        )
-        breakpoint.add_setter(self.refresh_button, "visible", False)
-        # Clear any pre-existing breakpoints on rebuilds (nav-layout swap
-        # recreates the window, but apply_settings rebuilds in place).
-        try:
-            self.add_breakpoint(breakpoint)
-        except Exception:
-            # Older libadwaita doesn't expose breakpoints — silently fall
-            # back to "icon always visible". Better than crashing the UI.
-            pass
 
     # ------------------------------------------------------------------
     # Sort popover
@@ -1845,12 +1830,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.back_button.set_visible(self.current_folder is not None)
         self.new_folder_button.set_visible(True)
         self.search_button.set_visible(True)
-        # Refresh is desktop-only — on mobile, pull-to-refresh
-        # replaces it. Honour the same 600px mobile-breakpoint rule
-        # the constructor sets up; unconditional set_visible(True)
-        # would override the Adw breakpoint after a select→delete
-        # cycle and bring the icon back on phones.
-        self.refresh_button.set_visible(not self._is_mobile_width())
+        self.refresh_button.set_visible(True)
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)
         self.camera_button.set_visible(True)
