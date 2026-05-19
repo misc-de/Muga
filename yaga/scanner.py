@@ -41,6 +41,7 @@ class MediaScanner:
                 # its rows alone. Truly-removed folders can be cleaned up via
                 # the Settings → Folders UI.
                 self.missing_root[category] = str(root)
+                print(f"[scan] {category}: Ordner {root} nicht gefunden, übersprungen")
                 continue
             self.missing_root.pop(category, None)
             scanned_categories.append(category)
@@ -61,6 +62,10 @@ class MediaScanner:
                 except ValueError:
                     continue
 
+            cat_start = time.time()
+            print(f"[scan] {category}: durchsuche {root} …")
+            file_count = 0
+            thumb_new = 0
             for path in root.rglob("*"):
                 # Skip symlinks to prevent infinite loops and unexpected behavior
                 if path.is_symlink():
@@ -76,7 +81,7 @@ class MediaScanner:
                         for sp in skip_prefixes
                     ):
                         continue
-                
+
                 try:
                     path.stat()
                 except (OSError, ValueError):
@@ -84,16 +89,30 @@ class MediaScanner:
                     # removed while scanning, broken filesystem entry, etc.).
                     LOGGER.debug("Skipping path that cannot be stat'd: %s", path)
                     continue
-                
+
                 media_type = media_type_for(path)
                 if not media_type:
                     continue
+                file_count += 1
                 folder = self._relative_folder(root, path.parent)
+                need_thumb = not self.thumbnailer.thumb_path_for(path).exists()
                 thumb = self.thumbnailer.ensure_thumbnail(path, media_type)
+                if need_thumb and thumb:
+                    thumb_new += 1
                 self.database.upsert_media(path=path, category=category, media_type=media_type, folder=folder, thumb_path=thumb)
-        
+            print(
+                f"[scan] {category}: {file_count} Dateien"
+                f", {thumb_new} neue Thumbnails"
+                f" ({time.time() - cat_start:.1f}s)"
+            )
+
+        db_start = time.time()
         self.database.prune_missing(started, scanned_categories)
         self.database.commit()
+        print(
+            f"[scan] Datenbank bereinigt & gespeichert ({time.time() - db_start:.1f}s)"
+            f" — Gesamtzeit: {time.time() - started:.1f}s"
+        )
 
     def _scan_nextcloud(self, client, photos_path: str, thumbnail_only: bool = True) -> None:
         from .nextcloud import nc_path
@@ -146,6 +165,7 @@ class MediaScanner:
         from .nextcloud import nc_path
         started = time.time()
         LOGGER.info("Nextcloud structure scan started for %r", photos_path)
+        print(f"[scan] Nextcloud: lade Dateiliste von {photos_path} …")
         try:
             files = client.list_files(photos_path)
         except FileNotFoundError:
@@ -158,7 +178,9 @@ class MediaScanner:
             return
         except Exception as e:
             LOGGER.exception("Nextcloud structure scan failed: %s", e)
+            print(f"[scan] Nextcloud: Fehler beim Scannen: {e}")
             return
+        print(f"[scan] Nextcloud: {len(files)} Dateien empfangen, schreibe in DB …")
         self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"
         upserted = 0
@@ -197,6 +219,11 @@ class MediaScanner:
         LOGGER.info(
             "Nextcloud structure scan indexed %s file(s), pruned %d stale, in %.2fs",
             upserted, removed, time.time() - started,
+        )
+        print(
+            f"[scan] Nextcloud: {upserted} Einträge indexiert"
+            f", {removed} veraltete entfernt"
+            f" ({time.time() - started:.1f}s)"
         )
 
     def load_nc_folder_thumbs(self, client, folder: str, on_thumb_loaded) -> None:
