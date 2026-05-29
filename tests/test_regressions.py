@@ -16,6 +16,7 @@ import pkgutil
 from pathlib import Path
 
 import yaga
+from yaga.i18n import TRANSLATIONS
 
 _PKG_ROOT = Path(yaga.__file__).parent
 
@@ -69,3 +70,24 @@ def test_no_duplicate_dict_keys_in_package() -> None:
             rel = path.relative_to(_PKG_ROOT.parent)
             offenders.append(f"{rel}:{lineno}: duplicate key {key!r}")
     assert not offenders, "duplicate dict keys found:\n" + "\n".join(offenders)
+
+
+def test_translation_tables_have_matching_keys() -> None:
+    """Every non-English table must define exactly the same keys as "en".
+
+    A missing key leaks the English source string into a localised UI; a stray
+    key is dead weight (and often a sign a real translation was lost during an
+    edit). Keeping the tables symmetric also catches accidental key drops like
+    the one that could have happened while de-duplicating the editor block."""
+    en_keys = set(TRANSLATIONS["en"])
+    problems: list[str] = []
+    for lang, table in TRANSLATIONS.items():
+        if lang == "en":
+            continue
+        missing = en_keys - set(table)
+        extra = set(table) - en_keys
+        if missing:
+            problems.append(f"{lang!r} missing {len(missing)}: {sorted(missing)}")
+        if extra:
+            problems.append(f"{lang!r} has {len(extra)} unknown: {sorted(extra)}")
+    assert not problems, "translation tables out of sync:\n" + "\n".join(problems)
