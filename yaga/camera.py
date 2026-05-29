@@ -4317,14 +4317,17 @@ class CameraWindow(Adw.Window):
         alt = location.get("alt", 0.0) or 0.0
 
         def to_dms(decimal: float) -> tuple:
-            d = int(decimal)
-            m_full = (decimal - d) * 60
-            m = int(m_full)
-            s = (m_full - m) * 60
+            # Round in integer ten-thousandths of an arcsecond so a value that
+            # rounds up to exactly 60" (or 60') carries into the next minute /
+            # degree instead of being written as an out-of-range 60 — EXIF GPS
+            # requires 0 <= minutes, seconds < 60.
+            total = int(round(decimal * 3600 * 10000))
+            d, rem = divmod(total, 3600 * 10000)
+            m, rem = divmod(rem, 60 * 10000)
             return (
                 (d, 1),
                 (m, 1),
-                (int(round(s * 10000)), 10000),
+                (rem, 10000),
             )
 
         gps_ifd[0x0000] = b"\x02\x02\x00\x00"        # GPSVersionID 2.2.0.0
