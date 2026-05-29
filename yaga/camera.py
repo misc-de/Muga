@@ -440,6 +440,11 @@ class CameraWindow(Adw.Window):
         self._devices: list[dict[str, Any]] = _enumerate_devices(self._Gst)
         self._device_index = 0
         self._busy_capture = False
+        # Set once the window starts tearing down. GStreamer streaming-thread
+        # callbacks (preview/capture sample) and idle_add-deferred pipeline
+        # rebuilds can still fire after close; they must bail rather than touch
+        # destroyed widgets or build a fresh pipeline that re-grabs the camera.
+        self._closing = False
         self._toast_timer: int | None = None
         self._timer_choices = (0, 3, 10)
         self._timer_idx = 0
@@ -1066,6 +1071,8 @@ class CameraWindow(Adw.Window):
         return source.get_static_pad("src")
 
     def _start_pipeline(self) -> bool:
+        if self._closing:
+            return False
         device = self._current_device()
         if device is None:
             return False
@@ -1391,6 +1398,8 @@ class CameraWindow(Adw.Window):
         not worth the complexity of zero-copy buffer-pool tricks.
         """
         gst = self._Gst
+        if self._closing:
+            return gst.FlowReturn.OK
         try:
             sample = sink.emit("pull-sample")
         except Exception:
@@ -3185,13 +3194,17 @@ class CameraWindow(Adw.Window):
 
     def _finish_capture(self, sample: Any) -> bool:
         self._close_valve_and_disconnect()
-        if sample is None:
-            _dlog("[yaga.camera] capture: finish with no sample")
-            self._show_toast(self._("No frame available"))
-        else:
+        # Persist the captured frame even mid-close so a shot in flight when
+        # the window closes isn't lost; skip the widget updates afterwards.
+        if sample is not None:
             _dlog("[yaga.camera] capture: writing sample")
             self._write_sample(sample)
         self._busy_capture = False
+        if self._closing:
+            return False
+        if sample is None:
+            _dlog("[yaga.camera] capture: finish with no sample")
+            self._show_toast(self._("No frame available"))
         self._shutter.set_sensitive(True)
         return False
 
@@ -3572,6 +3585,14 @@ class CameraWindow(Adw.Window):
             GLib.source_remove(self._image_timeout_id)
             self._image_timeout_id = None
         self._image_teardown()
+        # Mid-close: still persist the captured frame so the shot isn't lost,
+        # but skip the preview rebuild and widget updates that would touch the
+        # destroyed window.
+        if self._closing:
+            if sample is not None:
+                self._write_sample(sample)
+            self._busy_capture = False
+            return False
         # Kick the preview-restart idle FIRST so the heavy pipeline
         # rebuild (mode=2, HAL reconfigure, gtk4paintablesink wiring)
         # can run in parallel with the JPEG write + EXIF below. Both
@@ -3602,6 +3623,9 @@ class CameraWindow(Adw.Window):
     def _image_capture_failed(self, reason: str) -> bool:
         _dlog(f"[yaga.camera] image-capture: {reason}")
         self._image_teardown()
+        if self._closing:
+            self._busy_capture = False
+            return False
         # Restore the 720p preview cap on the failure path too — the
         # vfsrc+jpegenc fallback may have swapped it for full-res; if
         # the swap stayed in effect, the next preview pipeline would
@@ -4400,6 +4424,10 @@ class CameraWindow(Adw.Window):
             self._try_start_geo_silent()
 
     def _on_close(self, _win: Any) -> bool:
+        # Flag teardown first so any streaming-thread sample callback or
+        # idle_add-deferred pipeline rebuild that fires during/after cleanup
+        # bails out instead of touching destroyed widgets / re-opening the HAL.
+        self._closing = True
         # Force the torch off — if the user closed the window mid-
         # recording with the light on, the kernel LED would keep
         # burning until the next reboot.
