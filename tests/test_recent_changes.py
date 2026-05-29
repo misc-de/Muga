@@ -419,6 +419,60 @@ def test_cancel_nc_thumb_queue_is_a_noop_when_empty() -> None:
     assert not fake._nc_thumb_event.is_set()
 
 
+def test_local_thumb_worker_persists_and_enqueues_update() -> None:
+    """On-demand local thumb: decode → write to DB → enqueue tile update, and
+    always clear the pending marker so the path can be retried later."""
+    from yaga.app import GalleryWindow
+    db_writes: list = []
+    enqueued: list = []
+    fake = SimpleNamespace(
+        _local_thumb_lock=threading.Lock(),
+        _local_thumb_pending={"/p/x.jpg"},
+        thumbnailer=SimpleNamespace(
+            ensure_thumbnail=lambda path, mt: f"thumb://{Path(path).name}"
+        ),
+        database=SimpleNamespace(set_thumb=lambda p, t, c: db_writes.append((p, t, c))),
+        _enqueue_thumb_update=lambda p, t: enqueued.append((p, t)),
+    )
+    GalleryWindow._local_thumb_worker(fake, "/p/x.jpg", "image", "camera")
+    assert db_writes == [("/p/x.jpg", "thumb://x.jpg", "camera")]
+    assert enqueued == [("/p/x.jpg", "thumb://x.jpg")]
+    assert fake._local_thumb_pending == set()
+
+
+def test_local_thumb_worker_clears_pending_when_generation_fails() -> None:
+    from yaga.app import GalleryWindow
+    db_writes: list = []
+    enqueued: list = []
+    fake = SimpleNamespace(
+        _local_thumb_lock=threading.Lock(),
+        _local_thumb_pending={"/p/y.jpg"},
+        thumbnailer=SimpleNamespace(ensure_thumbnail=lambda path, mt: None),
+        database=SimpleNamespace(set_thumb=lambda p, t, c: db_writes.append(1)),
+        _enqueue_thumb_update=lambda p, t: enqueued.append(1),
+    )
+    GalleryWindow._local_thumb_worker(fake, "/p/y.jpg", "image", "camera")
+    assert db_writes == [] and enqueued == []
+    assert fake._local_thumb_pending == set()
+
+
+def test_request_local_thumbnail_dedups_in_flight_paths() -> None:
+    """A tile rebinding repeatedly while its thumb is still decoding must not
+    queue the same decode twice."""
+    from yaga.app import GalleryWindow
+    submits: list = []
+    fake = SimpleNamespace(
+        _local_thumb_lock=threading.Lock(),
+        _local_thumb_pending=set(),
+        _local_thumb_pool=SimpleNamespace(submit=lambda *a, **k: submits.append(a)),
+        _local_thumb_worker=lambda *a: None,
+    )
+    GalleryWindow.request_local_thumbnail(fake, "/p/z.jpg", "image", "camera")
+    GalleryWindow.request_local_thumbnail(fake, "/p/z.jpg", "image", "camera")
+    assert len(submits) == 1
+    assert "/p/z.jpg" in fake._local_thumb_pending
+
+
 # ---------------------------------------------------------------------------
 # 5.  Share dialog response: filters NC paths, correct xdg-email argv
 # ---------------------------------------------------------------------------

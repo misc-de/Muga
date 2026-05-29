@@ -10,6 +10,7 @@ import sys
 import threading
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -162,6 +163,14 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._pending_thumb_updates: dict[str, str] = {}
         self._pending_thumb_lock = threading.Lock()
         self._pending_thumb_idle = 0
+        # On-demand LOCAL thumbnail loader: when a local tile binds without a
+        # cached thumb (scanner hasn't reached it, or generation failed), we
+        # decode it on this small pool instead of loading the full-resolution
+        # file on the UI thread — the latter janks scrolling. Mirrors the NC
+        # on-demand path; idempotent per path via the pending set.
+        self._local_thumb_pending: set[str] = set()
+        self._local_thumb_lock = threading.Lock()
+        self._local_thumb_pool: ThreadPoolExecutor | None = None
 
         # Pagination for large galleries
         self._page_size: int = 200  # Items per page
@@ -1624,6 +1633,43 @@ class GalleryWindow(Adw.ApplicationWindow):
                 shutil.rmtree(_NC_CACHE, ignore_errors=True)
             except Exception:
                 LOGGER.exception("Failed to clear Nextcloud file cache")
+
+    # ── On-demand local thumbnail loader ──────────────────────────────
+    def request_local_thumbnail(self, item_path: str, media_type: str, category: str) -> None:
+        """Generate a missing thumbnail for a local item off the UI thread.
+
+        Called from tile-bind when the item has no cached thumb: decoding the
+        full-resolution file via Gtk.Picture.set_filename() on the main loop
+        stalls scrolling, so we hand the decode to a small pool and update the
+        tile when the thumb lands. Idempotent per path; safe to call repeatedly
+        as the same tile rebinds during scrolling."""
+        with self._local_thumb_lock:
+            if item_path in self._local_thumb_pending:
+                return
+            self._local_thumb_pending.add(item_path)
+            if self._local_thumb_pool is None:
+                # Two workers hide decode latency while scrolling without
+                # competing hard with the scanner's own thumbnail pool.
+                self._local_thumb_pool = ThreadPoolExecutor(
+                    max_workers=2, thread_name_prefix="local-thumb",
+                )
+            pool = self._local_thumb_pool
+        pool.submit(self._local_thumb_worker, item_path, media_type, category)
+
+    def _local_thumb_worker(self, item_path: str, media_type: str, category: str) -> None:
+        try:
+            thumb = self.thumbnailer.ensure_thumbnail(Path(item_path), media_type)
+            if thumb:
+                try:
+                    self.database.set_thumb(item_path, thumb, category)
+                except Exception:
+                    LOGGER.debug("local thumb DB write failed for %s", item_path, exc_info=True)
+                self._enqueue_thumb_update(item_path, thumb)
+        except Exception:
+            LOGGER.debug("local thumb generation failed for %s", item_path, exc_info=True)
+        finally:
+            with self._local_thumb_lock:
+                self._local_thumb_pending.discard(item_path)
 
     # ── On-demand Nextcloud thumbnail loader ──────────────────────────
     def request_nc_thumbnail(self, item_path: str) -> None:

@@ -852,7 +852,20 @@ class GalleryGrid(Gtk.Overlay):
             if requester is not None:
                 requester(item.path)
         else:
-            single_pic.set_filename(item.path)
+            # Local item without a cached thumb (scanner hasn't reached it, or
+            # generation failed). Show a placeholder and decode in the
+            # background — set_filename() here would decode the full-resolution
+            # file on the UI thread and stall scrolling (and can't render a
+            # video file as an image at all).
+            single_pic.set_paintable(
+                icon_theme.lookup_icon(
+                    "image-x-generic-symbolic", None, 96, 1,
+                    Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
+                )
+            )
+            local_requester = getattr(self.owner, "request_local_thumbnail", None)
+            if local_requester is not None:
+                local_requester(item.path, item.media_type, item.category)
         badge.set_visible(item.is_video and not self.owner._selection_mode)
         folder_label.set_visible(False)
         if self.owner._selection_mode:
