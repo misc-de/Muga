@@ -824,7 +824,7 @@ class GalleryGrid(Gtk.Overlay):
                             Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
                         )
                     )
-            label = row.folder_path.rsplit("/", 1)[-1] if row.folder_path != "/" else "/"
+            label = row.folder_path.rsplit("/", 1)[-1] if row.folder_path and row.folder_path != "/" else "/"
             folder_label.set_label(label)
             folder_label.set_halign(Gtk.Align.FILL)
             folder_label.set_valign(Gtk.Align.END)

@@ -5,6 +5,7 @@ import platform
 import sys
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gi
 
@@ -15,6 +16,10 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from .camera_torch import TORCH_SYSFS_PATHS
 from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
+
+if TYPE_CHECKING:
+    from .app import GalleryWindow
+
 
 class SettingsWindow(Adw.PreferencesWindow):
     def __init__(self, parent: GalleryWindow, initial_page: str | None = None) -> None:
@@ -669,7 +674,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._nc_set_status(self._("Disconnected"), ok=False)
 
     def _nc_scan_qr(self, _btn: Gtk.Button) -> None:
-        from .qr import WebcamQRScanner, scan_supported, QRScanError
+        from .qr import WebcamQRScanner, scan_supported
 
         dialog = Adw.Dialog()
         dialog.set_title(self._("Scan QR code"))

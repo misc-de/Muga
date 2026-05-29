@@ -288,18 +288,9 @@ def camera_supported() -> bool:
 # under the original underscore-prefixed names so the existing call
 # sites in CameraWindow don't need updating.
 from .camera_devices import (
-    droidcamsrc_available as _droidcamsrc_available,
-    droidcam_camera_count as _droidcam_camera_count,
-    enumerate_droidcam_devices as _enumerate_droidcam_devices,
-    is_ir_name as _is_ir_name,
-    classify_location as _classify_location,
-    device_props as _device_props,
-    device_path as _device_path,
-    is_pipewire_device as _is_pipewire_device,
     enumerate_devices as _enumerate_devices,
     modes_from_caps as _modes_from_caps,
     resolutions_from_caps as _resolutions_from_caps,
-    device_kinds as _device_kinds,
 )
 
 
@@ -312,7 +303,6 @@ from .camera_widgets import (
     MirroredPicture,
     RotatableIcon as _RotatableIcon,
     RotatableLabel as _RotatableLabel,
-    RotatableSwitch as _RotatableSwitch,
 )
 
 
@@ -1472,7 +1462,6 @@ class CameraWindow(Adw.Window):
     def _interpret_v4l2_error(self, message: str, debug: str) -> str | None:
         combined = (message + " " + debug).lower()
         device = self._current_device()
-        name = device.get("name") if device else None
         path = device.get("path") if device else ""
         suffix = f" ({path})" if path else ""
         if "inappropriate ioctl" in combined or "enotty" in combined:

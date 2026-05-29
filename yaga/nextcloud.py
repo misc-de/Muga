@@ -197,7 +197,7 @@ class NextcloudClient:
             )
             resp = conn.getresponse()
             if resp.status == 401:
-                raise PermissionError(f"Authentication failed (HTTP 401) – check app password")
+                raise PermissionError("Authentication failed (HTTP 401) – check app password")
             if resp.status == 404:
                 raise FileNotFoundError(f"Folder not found: {remote_folder!r} (HTTP 404)")
             if resp.status not in (207,):

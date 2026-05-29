@@ -3,14 +3,9 @@ Integration tests for Nextcloud workflows.
 Tests: Open NC folder → Load thumbnails → Edit image → Save
 """
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
 import tempfile
 
-import yaga.config as config
 from yaga.database import Database
-from yaga.scanner import MediaScanner
-from yaga.nextcloud import NextcloudClient
-from yaga.models import MediaItem
 
 
 class MockNextcloudClient:

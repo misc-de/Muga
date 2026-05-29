@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import math
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import gi
 
@@ -18,6 +18,9 @@ from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem
 from .nextcloud import is_nc_path
+
+if TYPE_CHECKING:
+    from .app import GalleryWindow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,7 +49,6 @@ def _extract_exif(path: str) -> dict[str, str]:
     if not _PIL_OK or PILImage is None:
         return exif_info
     try:
-        from PIL.Image import Exif
         img = PILImage.open(path)
         exif_data = img.getexif()
         if not exif_data:
@@ -1136,7 +1138,7 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _upload_to_nextcloud(self, local_edited_path: str) -> None:
         """Upload edited image back to Nextcloud."""
-        from .nextcloud import NextcloudClient, dav_path_from_nc, NC_PATH_PREFIX
+        from .nextcloud import NextcloudClient, dav_path_from_nc
         
         if self._editor is None:
             return

@@ -429,7 +429,7 @@ class Database:
         "juni": 6, "june": 6, "jun": 6,
         "juli": 7, "july": 7, "jul": 7,
         "august": 8, "aug": 8,
-        "september": 9, "september": 9, "sep": 9, "sept": 9,
+        "september": 9, "sep": 9, "sept": 9,
         "oktober": 10, "october": 10, "oct": 10, "okt": 10,
         "november": 11, "nov": 11,
         "dezember": 12, "december": 12, "dec": 12, "dez": 12,

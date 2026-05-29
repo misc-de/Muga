@@ -316,7 +316,6 @@ def test_update_item_thumb_mutates_in_place_and_rebinds() -> None:
     swaps the MediaRow's frozen MediaItem with one carrying the new
     thumb_path and re-binds only the affected list_item. Verify both
     the mutation and the targeted re-bind."""
-    import dataclasses
     from yaga.gallery_grid import GalleryGrid
     from yaga.models import MediaItem
 

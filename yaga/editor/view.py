@@ -18,7 +18,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("PangoCairo", "1.0")
 
-from gi.repository import Gdk, GLib, Gtk, Pango, PangoCairo
+from gi.repository import Gdk, GLib, Gtk, Pango
 
 from ..models import MediaItem
 from ._pil import ImageDraw, ImageEnhance, ImageFilter, PILImage
