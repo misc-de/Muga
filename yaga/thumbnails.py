@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import subprocess
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,6 +14,28 @@ from .models import MediaItem
 
 LOGGER = logging.getLogger(__name__)
 _VIDEO_THUMB_TIMEOUT_SEC = 20
+
+
+def _tmp_sibling(target: Path) -> Path:
+    """A per-process, per-thread temp name beside *target*. Distinct idents keep
+    two threads that race to thumbnail the same file (scanner pool vs the UI's
+    on-demand loader) from writing the same temp."""
+    return target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+
+
+def _save_atomic(target: Path, write) -> None:
+    """Run *write(tmp)* then atomically move tmp into place, so a concurrent or
+    crashing writer can never leave a half-written thumbnail at *target*."""
+    tmp = _tmp_sibling(target)
+    try:
+        write(tmp)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 # Sync the decompression-bomb cap with editor/_pil.py at import time so the
 # scanner thumbnail path is also protected — a hostile NC server could
@@ -96,7 +120,7 @@ class Thumbnailer:
                 # JPEG cannot store alpha — flatten anything non-RGB (RGBA, P, LA, ...)
                 if img.mode != "RGB":
                     img = img.convert("RGB")
-                img.save(str(target), "JPEG", quality=85)
+                _save_atomic(target, lambda t: img.save(str(t), "JPEG", quality=85))
                 return str(target)
         except PILImage.DecompressionBombError:
             # Refuse oversized images explicitly — a debug-level log buries
@@ -119,7 +143,7 @@ class Thumbnailer:
             if pixbuf:
                 # Apply embedded EXIF orientation if present.
                 pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
-                pixbuf.savev(str(target), "jpeg", ["quality"], ["85"])
+                _save_atomic(target, lambda t: pixbuf.savev(str(t), "jpeg", ["quality"], ["85"]))
                 return str(target)
         except Exception:
             pass
@@ -133,7 +157,7 @@ class Thumbnailer:
                 from PIL import Image as PILImage
                 with PILImage.fromarray(rgb) as img:
                     img.thumbnail((320, 320), PILImage.LANCZOS)
-                    img.save(str(target), "JPEG", quality=85)
+                    _save_atomic(target, lambda t: img.save(str(t), "JPEG", quality=85))
                 return str(target)
             except Exception:
                 pass
@@ -141,10 +165,14 @@ class Thumbnailer:
         return None
 
     def _video_thumbnail(self, path: Path, target: Path) -> str | None:
+        # Encode to a private temp then atomically publish, so a concurrent
+        # generator (scanner pool vs the UI's on-demand loader) or a killed
+        # ffmpeg never leaves a truncated frame at *target*.
+        tmp = _tmp_sibling(target)
         if shutil.which("ffmpegthumbnailer"):
-            cmd = ["ffmpegthumbnailer", "-i", str(path), "-o", str(target), "-s", "320", "-q", "8"]
+            cmd = ["ffmpegthumbnailer", "-i", str(path), "-o", str(tmp), "-s", "320", "-q", "8"]
         elif shutil.which("ffmpeg"):
-            cmd = ["ffmpeg", "-y", "-i", str(path), "-ss", "00:00:01", "-frames:v", "1", "-vf", "scale=320:-1", str(target)]
+            cmd = ["ffmpeg", "-y", "-i", str(path), "-ss", "00:00:01", "-frames:v", "1", "-vf", "scale=320:-1", str(tmp)]
         else:
             return None
         try:
@@ -157,11 +185,16 @@ class Thumbnailer:
             )
         except subprocess.TimeoutExpired:
             LOGGER.warning("Video thumbnailer timed out for %s", path)
-            try:
-                target.unlink(missing_ok=True)
-            except OSError:
-                pass
+            tmp.unlink(missing_ok=True)
             return None
         except (OSError, subprocess.CalledProcessError):
+            tmp.unlink(missing_ok=True)
             return None
-        return str(target) if target.exists() else None
+        if not tmp.exists():
+            return None
+        try:
+            os.replace(tmp, target)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            return None
+        return str(target)
