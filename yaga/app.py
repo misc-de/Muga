@@ -1103,21 +1103,35 @@ class GalleryWindow(Adw.ApplicationWindow):
         if had_query:
             self._render()
 
-    def _render_flat(self, sort_mode: str) -> None:
-        include_nc = self._should_merge_nc()
-        media_filter = self.settings.media_filter_for(self.category)
+    def _load_first_page(
+        self, sort_mode: str, folder: str | None, *,
+        include_nc: bool, media_filter: str | None,
+    ) -> list[MediaItem]:
+        """Fetch the first page for (category, folder, sort_mode) and reset the
+        pagination bookkeeping (_total_count / current_items / _current_offset /
+        _has_more_items). Returns the page so callers can append the items in
+        whatever layout (flat / date-grouped) they need."""
         self._total_count = self.database.count_media(
-            self.category, self.current_folder, include_nc=include_nc,
+            self.category, folder, include_nc=include_nc,
             media_filter=media_filter,
         )
         page = self.database.list_media_paginated(
-            self.category, sort_mode, self.current_folder,
+            self.category, sort_mode, folder,
             self._page_size, 0, include_nc=include_nc,
             media_filter=media_filter,
         )
         self.current_items = list(page)
         self._current_offset = len(page)
         self._has_more_items = self._current_offset < self._total_count
+        return page
+
+    def _render_flat(self, sort_mode: str) -> None:
+        include_nc = self._should_merge_nc()
+        media_filter = self.settings.media_filter_for(self.category)
+        page = self._load_first_page(
+            sort_mode, self.current_folder,
+            include_nc=include_nc, media_filter=media_filter,
+        )
         for item in page:
             self.gallery_grid.append_media(item)
         self._set_status("")
@@ -1135,18 +1149,10 @@ class GalleryWindow(Adw.ApplicationWindow):
         # NC items are merged in only at the root view of Pictures (NC has its
         # own folder layout that doesn't map onto local Pictures subfolders).
         include_nc = self._should_merge_nc() and self.current_folder in (None, "/")
-        self._total_count = self.database.count_media(
-            self.category, direct_folder, include_nc=include_nc,
-            media_filter=media_filter,
+        page = self._load_first_page(
+            sort_mode, direct_folder,
+            include_nc=include_nc, media_filter=media_filter,
         )
-        page = self.database.list_media_paginated(
-            self.category, sort_mode, direct_folder,
-            self._page_size, 0, include_nc=include_nc,
-            media_filter=media_filter,
-        )
-        self.current_items = list(page)
-        self._current_offset = len(page)
-        self._has_more_items = self._current_offset < self._total_count
         for item in page:
             self.gallery_grid.append_media(item)
         total = len(folders) + len(self.current_items)
@@ -1157,18 +1163,10 @@ class GalleryWindow(Adw.ApplicationWindow):
         order = "oldest" if ascending else "newest"
         include_nc = self._should_merge_nc()
         media_filter = self.settings.media_filter_for(self.category)
-        self._total_count = self.database.count_media(
-            self.category, self.current_folder, include_nc=include_nc,
-            media_filter=media_filter,
+        page = self._load_first_page(
+            order, self.current_folder,
+            include_nc=include_nc, media_filter=media_filter,
         )
-        page = self.database.list_media_paginated(
-            self.category, order, self.current_folder,
-            self._page_size, 0, include_nc=include_nc,
-            media_filter=media_filter,
-        )
-        self.current_items = list(page)
-        self._current_offset = len(page)
-        self._has_more_items = self._current_offset < self._total_count
         self._date_last_key = None
         for item in page:
             self._append_date_grouped(item)
