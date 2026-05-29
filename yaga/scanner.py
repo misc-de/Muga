@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .database import Database
@@ -9,6 +11,12 @@ from .models import media_type_for
 from .thumbnails import Thumbnailer
 
 LOGGER = logging.getLogger(__name__)
+
+# Files processed per thumbnail batch. Big enough to amortise pool startup over
+# real decode work, small enough to bound memory and keep the UI updating.
+_THUMB_CHUNK = 64
+# Cap pool width so a phone with many cores doesn't thrash on RAM/IO.
+_THUMB_WORKERS = min(os.cpu_count() or 4, 8)
 
 
 class MediaScanner:
@@ -66,6 +74,11 @@ class MediaScanner:
             LOGGER.info("%s: durchsuche %s …", category, root)
             file_count = 0
             thumb_new = 0
+            # Decoding thumbnails is the dominant cost of a first scan and is
+            # independent per file, so we generate them a chunk at a time on a
+            # thread pool. DB writes stay on this thread; chunking bounds memory
+            # and keeps results landing progressively for the UI.
+            chunk: list[tuple[Path, str, str, bool]] = []
             for path in root.rglob("*"):
                 # Skip symlinks to prevent infinite loops and unexpected behavior
                 if path.is_symlink():
@@ -96,10 +109,11 @@ class MediaScanner:
                 file_count += 1
                 folder = self._relative_folder(root, path.parent)
                 need_thumb = not self.thumbnailer.thumb_path_for(path).exists()
-                thumb = self.thumbnailer.ensure_thumbnail(path, media_type)
-                if need_thumb and thumb:
-                    thumb_new += 1
-                self.database.upsert_media(path=path, category=category, media_type=media_type, folder=folder, thumb_path=thumb)
+                chunk.append((path, media_type, folder, need_thumb))
+                if len(chunk) >= _THUMB_CHUNK:
+                    thumb_new += self._flush_thumb_chunk(chunk, category)
+                    chunk = []
+            thumb_new += self._flush_thumb_chunk(chunk, category)
             LOGGER.info(
                 "%s: %d Dateien, %d neue Thumbnails (%.1fs)",
                 category, file_count, thumb_new, time.time() - cat_start,
@@ -149,6 +163,43 @@ class MediaScanner:
             rel = rel[len(photos_prefix):]
         parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
         return parent if parent else "/"
+
+    def _flush_thumb_chunk(
+        self, chunk: list[tuple[Path, str, str, bool]], category: str,
+    ) -> int:
+        """Generate thumbnails for *chunk*, then upsert each row. Returns the
+        number of newly-created thumbnails.
+
+        Thumbnail decode runs on a thread pool, but only when at least two
+        files in the chunk actually need a new thumbnail — on a re-scan
+        ``ensure_thumbnail`` just returns the cached path, so a serial pass is
+        cheaper than spinning up workers. The DB writes always stay on this
+        (the scanner) thread, preserving the existing single-writer model and
+        the rglob discovery order."""
+        if not chunk:
+            return 0
+        new_needed = sum(1 for _p, _t, _f, need in chunk if need)
+        if new_needed >= 2:
+            workers = min(new_needed, _THUMB_WORKERS)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                thumbs = list(pool.map(
+                    lambda row: self.thumbnailer.ensure_thumbnail(row[0], row[1]),
+                    chunk,
+                ))
+        else:
+            thumbs = [
+                self.thumbnailer.ensure_thumbnail(path, media_type)
+                for path, media_type, _folder, _need in chunk
+            ]
+        thumb_new = 0
+        for (path, media_type, folder, need_thumb), thumb in zip(chunk, thumbs):
+            if need_thumb and thumb:
+                thumb_new += 1
+            self.database.upsert_media(
+                path=path, category=category, media_type=media_type,
+                folder=folder, thumb_path=thumb,
+            )
+        return thumb_new
 
     def _relative_folder(self, root: Path, folder: Path) -> str:
         try:

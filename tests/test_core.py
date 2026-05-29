@@ -135,6 +135,29 @@ def test_scanner_indexes_media_recursively_and_ignores_non_media(tmp_path: Path)
     assert "notes.txt" not in {item.name for item in images + videos}
 
 
+def test_scanner_indexes_all_files_across_thumbnail_chunks(tmp_path: Path) -> None:
+    """A scan larger than one thumbnail chunk (and thus the parallel-decode
+    path) must still index every file exactly once with its thumbnail. Guards
+    the chunked/threaded thumbnailing added for first-scan performance."""
+    from yaga.scanner import _THUMB_CHUNK
+
+    db = Database(tmp_path / "test.sqlite3")
+    root = tmp_path / "Pictures"
+    root.mkdir()
+    n = _THUMB_CHUNK * 2 + 5  # spans multiple chunks plus a partial final one
+    for i in range(n):
+        (root / f"img_{i:04d}.jpg").write_bytes(b"image")
+
+    MediaScanner(db, FakeThumbnailer()).scan([("screenshots", "Screenshots", str(root))])
+
+    items = db.list_media("screenshots", "name")
+    assert len(items) == n
+    # Every file indexed once, each with the thumbnail the (fake) thumbnailer
+    # returned — i.e. nothing dropped or duplicated across chunk boundaries.
+    assert len({item.path for item in items}) == n
+    assert all(item.thumb_path == f"thumb://image/{item.name}" for item in items)
+
+
 def test_scanner_can_use_database_from_background_thread(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.sqlite3")
     root = tmp_path / "Pictures"
