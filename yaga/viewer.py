@@ -268,6 +268,12 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.stack.add_controller(self.click_gesture)
         self._set_view_gestures_enabled(True)
         self.connect("close-request", self._on_close_request)
+        # Set once the window is torn down. Background workers (NC download,
+        # rotation, edit-save) finish on their own thread and bounce results
+        # back via GLib.idle_add; if the user closed the viewer meanwhile, the
+        # callbacks must not touch the now-defunct widget tree.
+        self._closing = False
+        self.connect("destroy", self._on_destroy)
         # Track viewer orientation so the date overlay can move out of the
         # image's way on landscape screens.
         self._date_landscape: bool | None = None
@@ -407,6 +413,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         GLib.idle_add(lambda: (self._prompt_nc_reconnect(item), GLib.SOURCE_REMOVE)[1])
 
     def _prompt_nc_reconnect(self, item: MediaItem) -> None:
+        if self._closing:
+            return
         dialog = Adw.AlertDialog(
             heading=self.parent_window._("Nextcloud connection disabled"),
             body=self.parent_window._(
@@ -505,6 +513,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         GLib.idle_add(self._nc_show_loaded, item, local)
 
     def _nc_show_loaded(self, item, local_path: str | None) -> None:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         child = self.stack.get_first_child()
         while child:
             next_child = child.get_next_sibling()
@@ -613,6 +623,8 @@ class ViewerWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._show_rotated_pixbuf, None)
 
     def _show_rotated_pixbuf(self, pixbuf) -> None:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         child = self.stack.get_first_child()
         while child:
             nxt = child.get_next_sibling()
@@ -709,6 +721,9 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _set_chrome_visible(self, visible: bool) -> None:
         self._chrome_visible = visible
         self._apply_chrome_visibility()
+
+    def _on_destroy(self, _window) -> None:
+        self._closing = True
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -1109,6 +1124,8 @@ class ViewerWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._save_edit_done, False)
 
     def _save_edit_done(self, success: bool) -> None:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         self.save_edit_button.set_sensitive(True)
         self.cancel_edit_button.set_sensitive(True)
         if not success:

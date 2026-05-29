@@ -41,7 +41,7 @@ class MediaScanner:
                 # its rows alone. Truly-removed folders can be cleaned up via
                 # the Settings → Folders UI.
                 self.missing_root[category] = str(root)
-                print(f"[scan] {category}: Ordner {root} nicht gefunden, übersprungen")
+                LOGGER.info("%s: Ordner %s nicht gefunden, übersprungen", category, root)
                 continue
             self.missing_root.pop(category, None)
             scanned_categories.append(category)
@@ -63,7 +63,7 @@ class MediaScanner:
                     continue
 
             cat_start = time.time()
-            print(f"[scan] {category}: durchsuche {root} …")
+            LOGGER.info("%s: durchsuche %s …", category, root)
             file_count = 0
             thumb_new = 0
             for path in root.rglob("*"):
@@ -100,18 +100,17 @@ class MediaScanner:
                 if need_thumb and thumb:
                     thumb_new += 1
                 self.database.upsert_media(path=path, category=category, media_type=media_type, folder=folder, thumb_path=thumb)
-            print(
-                f"[scan] {category}: {file_count} Dateien"
-                f", {thumb_new} neue Thumbnails"
-                f" ({time.time() - cat_start:.1f}s)"
+            LOGGER.info(
+                "%s: %d Dateien, %d neue Thumbnails (%.1fs)",
+                category, file_count, thumb_new, time.time() - cat_start,
             )
 
         db_start = time.time()
         self.database.prune_missing(started, scanned_categories)
         self.database.commit()
-        print(
-            f"[scan] Datenbank bereinigt & gespeichert ({time.time() - db_start:.1f}s)"
-            f" — Gesamtzeit: {time.time() - started:.1f}s"
+        LOGGER.info(
+            "Datenbank bereinigt & gespeichert (%.1fs) — Gesamtzeit: %.1fs",
+            time.time() - db_start, time.time() - started,
         )
 
     def _scan_nextcloud(self, client, photos_path: str, thumbnail_only: bool = True) -> None:
@@ -165,7 +164,6 @@ class MediaScanner:
         from .nextcloud import nc_path
         started = time.time()
         LOGGER.info("Nextcloud structure scan started for %r", photos_path)
-        print(f"[scan] Nextcloud: lade Dateiliste von {photos_path} …")
         try:
             files = client.list_files(photos_path)
         except FileNotFoundError:
@@ -178,9 +176,8 @@ class MediaScanner:
             return
         except Exception as e:
             LOGGER.exception("Nextcloud structure scan failed: %s", e)
-            print(f"[scan] Nextcloud: Fehler beim Scannen: {e}")
             return
-        print(f"[scan] Nextcloud: {len(files)} Dateien empfangen, schreibe in DB …")
+        LOGGER.info("Nextcloud: %d Dateien empfangen, schreibe in DB …", len(files))
         self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"
         upserted = 0
@@ -219,11 +216,6 @@ class MediaScanner:
         LOGGER.info(
             "Nextcloud structure scan indexed %s file(s), pruned %d stale, in %.2fs",
             upserted, removed, time.time() - started,
-        )
-        print(
-            f"[scan] Nextcloud: {upserted} Einträge indexiert"
-            f", {removed} veraltete entfernt"
-            f" ({time.time() - started:.1f}s)"
         )
 
     def load_nc_folder_thumbs(self, client, folder: str, on_thumb_loaded) -> None:

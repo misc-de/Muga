@@ -240,8 +240,11 @@ class NextcloudClient:
                 size = 0
             try:
                 mtime = email.utils.parsedate_to_datetime(mtime_text).timestamp()
-            except Exception:
-                mtime = time.time()
+            except (TypeError, ValueError, AttributeError):
+                # Unparseable date: fall back to epoch (stable) rather than
+                # time.time() — otherwise the entry jumps to "today" in the
+                # date-sorted view on every rescan.
+                mtime = 0.0
             name = href.rstrip("/").rsplit("/", 1)[-1]
             results.append({"dav_path": href, "size": size, "mtime": mtime, "name": name})
         return results

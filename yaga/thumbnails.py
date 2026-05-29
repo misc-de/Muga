@@ -82,19 +82,22 @@ class Thumbnailer:
         # Try PIL/Pillow first (supports most standard formats)
         try:
             from PIL import Image as PILImage, ImageOps
-            img = PILImage.open(str(path))
-            # Apply EXIF orientation so portrait photos from phones aren't sideways.
-            try:
-                img = ImageOps.exif_transpose(img)
-            except Exception:
-                pass
-            # Resize to thumbnail size
-            img.thumbnail((320, 320), PILImage.LANCZOS)
-            # JPEG cannot store alpha — flatten anything non-RGB (RGBA, P, LA, ...)
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            img.save(str(target), "JPEG", quality=85)
-            return str(target)
+            # Context manager closes the source file descriptor promptly — the
+            # scanner runs this across thousands of files per sweep, so we don't
+            # want to lean on GC timing to release handles.
+            with PILImage.open(str(path)) as img:
+                # Apply EXIF orientation so portrait photos from phones aren't sideways.
+                try:
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass
+                # Resize to thumbnail size
+                img.thumbnail((320, 320), PILImage.LANCZOS)
+                # JPEG cannot store alpha — flatten anything non-RGB (RGBA, P, LA, ...)
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                img.save(str(target), "JPEG", quality=85)
+                return str(target)
         except PILImage.DecompressionBombError:
             # Refuse oversized images explicitly — a debug-level log buries
             # this in noise, but the user (or admin) wants to know that a
@@ -125,12 +128,12 @@ class Thumbnailer:
         if path.suffix.lower() in {".raw", ".dng", ".cr2", ".nef", ".arw", ".raf", ".rw2", ".orf", ".x3f", ".dcr", ".crw"}:
             try:
                 import rawpy
-                raw = rawpy.imread(str(path))
-                rgb = raw.postprocess()
+                with rawpy.imread(str(path)) as raw:
+                    rgb = raw.postprocess()
                 from PIL import Image as PILImage
-                img = PILImage.fromarray(rgb)
-                img.thumbnail((320, 320), PILImage.LANCZOS)
-                img.save(str(target), "JPEG", quality=85)
+                with PILImage.fromarray(rgb) as img:
+                    img.thumbnail((320, 320), PILImage.LANCZOS)
+                    img.save(str(target), "JPEG", quality=85)
                 return str(target)
             except Exception:
                 pass

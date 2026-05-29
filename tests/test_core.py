@@ -12,6 +12,12 @@ from yaga.thumbnails import Thumbnailer
 
 
 class FakeThumbnailer:
+    def thumb_path_for(self, path: Path) -> Path:
+        # Real Thumbnailer returns a path under the cache dir; the scanner only
+        # calls .exists() on it to decide whether a thumb is new. Point at a
+        # location that never exists so every scanned file counts as new.
+        return Path("/nonexistent/yaga-test-thumbs") / f"{path.name}.jpg"
+
     def ensure_thumbnail(self, path: Path, media_type: str) -> str:
         return f"thumb://{media_type}/{path.name}"
 

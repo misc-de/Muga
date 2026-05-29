@@ -22,6 +22,12 @@ class SettingsWindow(Adw.PreferencesWindow):
         self.set_search_enabled(False)
         self.parent_window = parent
         self.settings = Settings(**parent.settings.__dict__)
+        # Set once the window is torn down. The NC connect-test and cache-size
+        # probes run on daemon threads and bounce results back via
+        # GLib.idle_add; if the user closed Settings meanwhile, those callbacks
+        # must not touch the now-defunct widget tree.
+        self._closing = False
+        self.connect("destroy", lambda _w: setattr(self, "_closing", True))
         self._build()
         if initial_page:
             # Switch to the named page (e.g. after a nav-position change
@@ -615,6 +621,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _nc_connect_done(self, ok: bool, error: str) -> None:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         self._nc_connect_btn.set_sensitive(True)
         if ok:
             self.settings.nextcloud_enabled = True
@@ -717,6 +725,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         return params
 
     def _nc_qr_success(self, dialog: Adw.Dialog, text: str) -> None:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         dialog.close()
         parsed = self._parse_nc_login_url(text)
         if parsed:
@@ -731,6 +741,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             self._nc_set_status(self._("QR code scanned successfully ✓"), ok=True)
 
     def _nc_qr_error(self, message: str) -> None:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         self._nc_set_status(f"{self._('QR code scan error')}: {message}", ok=False)
 
     def _nc_thumb_only_changed(self, row: Adw.SwitchRow, _param) -> None:
@@ -1105,10 +1117,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _refresh_cache_size_display_once(self) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         self._refresh_cache_size_display()
         return GLib.SOURCE_REMOVE
 
     def _set_cache_size_text(self, size_bytes: int) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         if size_bytes < 1024 * 1024:
             text = f"{size_bytes / 1024:.0f} KB"
         elif size_bytes < 1024 * 1024 * 1024:
@@ -1128,10 +1144,12 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _folder_response(self, chooser: Gtk.FileChooserNative, response: int, attr: str, row: Adw.ActionRow) -> None:
         if response == Gtk.ResponseType.ACCEPT:
-            path = chooser.get_file().get_path()
-            setattr(self.settings, attr, path)
-            row.set_subtitle(path)
-            self.parent_window.apply_settings(self.settings)
+            file = chooser.get_file()
+            if file is not None:
+                path = file.get_path() or ""
+                setattr(self.settings, attr, path)
+                row.set_subtitle(path)
+                self.parent_window.apply_settings(self.settings)
         chooser.destroy()
 
     def _add_location(self, _button: Gtk.Button) -> None:

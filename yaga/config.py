@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+LOGGER = logging.getLogger(__name__)
 
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "yaga"
@@ -304,7 +307,7 @@ class Settings:
             if ok:
                 return True
         except Exception:
-            pass
+            LOGGER.debug("Keyring store failed, falling back to file", exc_info=True)
         # Fallback: plain file with restricted permissions.
         # mkdir(mode=…) only applies on first create; for pre-existing 0755
         # dirs we follow up with an explicit chmod so the secret's parent
@@ -378,7 +381,7 @@ class Settings:
             if result:
                 return result
         except Exception:
-            pass
+            LOGGER.debug("Keyring lookup failed, falling back to file", exc_info=True)
         # Fallback: file
         try:
             return self._CRED_FILE.read_text(encoding="utf-8").strip()
@@ -400,7 +403,7 @@ class Settings:
                 None,
             )
         except Exception:
-            pass
+            LOGGER.debug("Keyring clear failed", exc_info=True)
         try:
             self._CRED_FILE.unlink(missing_ok=True)
         except OSError:

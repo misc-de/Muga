@@ -826,8 +826,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         import time as _time
         _thread_start = _time.time()
         only_current = scope == "current"
-        scope_label = f"Kategorie „{self.category}"" if only_current else "alle Kategorien"
-        print(f"[scan] Start: {scope_label}")
+        scope_label = f"Kategorie „{self.category}“" if only_current else "alle Kategorien"
+        LOGGER.info("Scan-Start: %s", scope_label)
         # Touch NC for full scans, when NC is the active category, or when the
         # current Pictures view is configured to fold in Nextcloud entries —
         # but ONLY if the user has actively allowed NC for this session
@@ -843,7 +843,6 @@ class GalleryWindow(Adw.ApplicationWindow):
                 pwd = self.settings.load_app_password()
                 if pwd:
                     from .nextcloud import NextcloudClient
-                    print(f"[scan] Nextcloud: verbinde mit {self.settings.nextcloud_url} …")
                     nc_client = NextcloudClient(
                         self.settings.nextcloud_url,
                         self.settings.nextcloud_user,
@@ -852,10 +851,9 @@ class GalleryWindow(Adw.ApplicationWindow):
                     LOGGER.info("Nextcloud client created for %s", self.settings.nextcloud_url)
                 else:
                     LOGGER.info("No Nextcloud app password available; skipping scan")
-                    print("[scan] Nextcloud: kein App-Passwort hinterlegt, übersprungen")
                     GLib.idle_add(self._set_nc_broken, True)
             elif need_nc:
-                print("[scan] Nextcloud: keine URL/Benutzer konfiguriert, übersprungen")
+                LOGGER.info("Nextcloud: keine URL/Benutzer konfiguriert, übersprungen")
 
             # Phase 1: local categories
             if only_current:
@@ -899,14 +897,13 @@ class GalleryWindow(Adw.ApplicationWindow):
                 # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
             LOGGER.exception("Media scan failed: %s", e)
-            print(f"[scan] Fehler: {e}")
             GLib.idle_add(self._set_nc_broken, True)
         finally:
             nc_client = None
             GLib.idle_add(self._set_nc_syncing, False)
             GLib.idle_add(self.refresh, False)
             GLib.idle_add(lambda: self.refresh_button.set_sensitive(True))
-            print(f"[scan] Abgeschlossen in {_time.time() - _thread_start:.1f}s")
+            LOGGER.info("Scan abgeschlossen in %.1fs", _time.time() - _thread_start)
             # Trim cache after every scan: thumbnail generation may have grown
             # the disk footprint past the user's configured budget.
             self.evict_cache_async()

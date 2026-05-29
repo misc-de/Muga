@@ -39,9 +39,14 @@ class EditorView(Gtk.Box):
         self.set_vexpand(True)
         self._translate = translate or (lambda text: text)
         self._item = item
-        self._original = PILImage.open(item.path)
-        if self._original.mode not in ("RGB", "RGBA"):
-            self._original = self._original.convert("RGB")
+        # Decode into an in-memory baseline and let the source file close
+        # immediately — _original is only the pristine reset reference, so we
+        # don't need to keep the file descriptor open for the editor session.
+        with PILImage.open(item.path) as src:
+            if src.mode not in ("RGB", "RGBA"):
+                self._original = src.convert("RGB")
+            else:
+                self._original = src.copy()
         self._working = self._original.copy()
 
         self._filter_mode = "none"
@@ -1373,13 +1378,15 @@ class EditorView(Gtk.Box):
         
         original_dav_path = dav_path_from_nc(self._item.path)
         
-        # Replace file extension if needed (e.g., HEIC → JPG)
+        # Replace file extension if needed (e.g., HEIC → JPG): splitext()[0] is
+        # the path without its extension, onto which we graft the edited file's
+        # suffix (the editor always writes JPEG).
         import os
-        original_ext = os.path.splitext(original_dav_path)[0]
+        original_path_stem = os.path.splitext(original_dav_path)[0]
         edited_path = Path(local_edited_path)
-        
+
         # Construct the upload path with the same name as original
-        upload_dav_path = original_ext + edited_path.suffix
+        upload_dav_path = original_path_stem + edited_path.suffix
         
         try:
             return nextcloud_client.upload_file(local_edited_path, upload_dav_path)
