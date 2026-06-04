@@ -2080,3 +2080,37 @@ def test_apply_settings_coalesces_repeated_calls() -> None:
     clear_idx   = rebuild_body.index("self._settings_rebuild_pending = False")
     build_idx   = rebuild_body.index("self._build_ui()")
     assert clear_idx < build_idx
+
+
+# ── Editor: EXIF preservation on save ────────────────────────────────────
+# Regression: save_as_new() used to drop the exif= argument, so every edited
+# photo lost camera model / GPS / capture date, and the editor opened photos
+# un-transposed. _exif_for_save() must keep the source tags while resetting
+# Orientation to 1 (the editor bakes orientation into pixels at load time).
+
+
+def test_editor_exif_for_save_resets_orientation_keeps_tags() -> None:
+    from PIL import Image
+
+    from yaga.editor.view import EditorView
+
+    exif = Image.Exif()
+    exif[0x0112] = 6                      # Orientation: rotate 90°
+    exif[0x0110] = "TestPhone X1"         # Model
+    exif[0x0132] = "2026:06:04 12:00:00"  # DateTime
+    fake = SimpleNamespace(_exif_bytes=exif.tobytes())
+
+    out = EditorView._exif_for_save(fake)
+    assert out is not None
+    restored = Image.Exif()
+    restored.load(out)
+    assert restored[0x0112] == 1                       # orientation normalised
+    assert restored[0x0110] == "TestPhone X1"          # camera model kept
+    assert restored[0x0132] == "2026:06:04 12:00:00"   # capture date kept
+
+
+def test_editor_exif_for_save_none_without_source_exif() -> None:
+    from yaga.editor.view import EditorView
+
+    assert EditorView._exif_for_save(SimpleNamespace(_exif_bytes=None)) is None
+    assert EditorView._exif_for_save(SimpleNamespace(_exif_bytes=b"")) is None

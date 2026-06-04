@@ -1087,6 +1087,8 @@ class ViewerWindow(Adw.ApplicationWindow):
             self._editor.redo()
 
     def _exit_edit_mode(self, _button=None) -> None:
+        if self._editor is not None:
+            self._editor.cleanup()
         self._editor = None
         self._set_view_gestures_enabled(True)
         self.header.set_show_end_title_buttons(False)

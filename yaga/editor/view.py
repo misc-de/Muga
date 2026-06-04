@@ -21,7 +21,7 @@ gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 from ..models import MediaItem
-from ._pil import ImageDraw, ImageEnhance, ImageFilter, PILImage
+from ._pil import ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat, PILImage
 from .filters import _FILTER_DEFS
 from .frames import _FRAME_THEMES, _frame_pil
 from .stickers import _STICKER_GROUPS, _emoji_to_pil, _get_emoji_pil, _pil_to_texture
@@ -43,10 +43,17 @@ class EditorView(Gtk.Box):
         # immediately — _original is only the pristine reset reference, so we
         # don't need to keep the file descriptor open for the editor session.
         with PILImage.open(item.path) as src:
-            if src.mode not in ("RGB", "RGBA"):
-                self._original = src.convert("RGB")
+            # Bake the EXIF orientation into the pixels so the editor shows the
+            # photo the same way up as the viewer and thumbnailer (which both
+            # call exif_transpose). The source EXIF is stashed so save_as_new
+            # can write it back; its Orientation tag is reset to 1 there, since
+            # the pixels are now upright.
+            transposed = ImageOps.exif_transpose(src)
+            self._exif_bytes = transposed.info.get("exif")
+            if transposed.mode not in ("RGB", "RGBA"):
+                self._original = transposed.convert("RGB")
             else:
-                self._original = src.copy()
+                self._original = transposed.copy()
         self._working = self._original.copy()
 
         self._filter_mode = "none"
@@ -224,7 +231,7 @@ class EditorView(Gtk.Box):
         # between landscape and portrait shape.
         self._is_landscape: bool | None = None
         self._apply_orientation(False)
-        self.add_tick_callback(self._on_orientation_tick)
+        self._tick_cb_id: int | None = self.add_tick_callback(self._on_orientation_tick)
 
     # ── Responsive orientation ──
 
@@ -1027,12 +1034,9 @@ class EditorView(Gtk.Box):
             # Convert to RGB if needed
             if region.mode != "RGB":
                 region = region.convert("RGB")
-            # Get average color
-            import numpy as np
-            arr = np.array(region, dtype=np.float32)
-            avg = np.mean(arr, axis=(0, 1))
-            r, g, b = avg / 255.0
-            return (r, g, b, 0.35)  # Use slight transparency
+            # Average colour per channel (pure-PIL, avoids a numpy dependency).
+            r, g, b = ImageStat.Stat(region).mean[:3]
+            return (r / 255.0, g / 255.0, b / 255.0, 0.35)  # slight transparency
         except Exception:
             return (0.5, 0.5, 0.5, 0.3)
 
@@ -1129,7 +1133,8 @@ class EditorView(Gtk.Box):
             scale = min(width / iw, height / ih)
             ox = (width - iw * scale) / 2
             oy = (height - ih * scale) / 2
-            active = self._stickers[self._active_sticker or len(self._stickers) - 1]
+            idx = self._active_sticker if self._active_sticker is not None else len(self._stickers) - 1
+            active = self._stickers[idx]
             rel = active["rel"]
             size = active["size"]
             scx = ox + rel[0] * iw * scale
@@ -1215,6 +1220,22 @@ class EditorView(Gtk.Box):
             if frame:
                 result = PILImage.alpha_composite(result.convert("RGBA"), frame).convert("RGB")
         return result
+
+    def cleanup(self) -> None:
+        """Stop the tick callback and any pending GLib timeouts.
+
+        Called when the host discards the editor, so a detached widget never
+        fires _do_update against a removed preview and the editor's full-res
+        image copies aren't pinned alive until the next timeout would fire."""
+        if self._tick_cb_id is not None:
+            self.remove_tick_callback(self._tick_cb_id)
+            self._tick_cb_id = None
+        if self._update_id is not None:
+            GLib.source_remove(self._update_id)
+            self._update_id = None
+        if self._slider_drag_end_id is not None:
+            GLib.source_remove(self._slider_drag_end_id)
+            self._slider_drag_end_id = None
 
     def _schedule_update(self) -> None:
         if self._update_id is not None:
@@ -1343,6 +1364,25 @@ class EditorView(Gtk.Box):
     # Save
     # ------------------------------------------------------------------
 
+    def _exif_for_save(self) -> bytes | None:
+        """Return the source EXIF with Orientation normalised to 1.
+
+        Orientation was baked into the pixels at load time (exif_transpose), so
+        the saved file must advertise Orientation=1 to avoid a double rotation
+        in viewers. All other tags (camera model, GPS, capture date) are
+        preserved."""
+        data = getattr(self, "_exif_bytes", None)
+        if not data:
+            return None
+        try:
+            exif = PILImage.Exif()
+            exif.load(data)
+            exif[0x0112] = 1  # Orientation: normal
+            return exif.tobytes()
+        except Exception:
+            LOGGER.debug("Could not rewrite EXIF for save", exc_info=True)
+            return None
+
     def save_as_new(self) -> str:
         """Save edited image to local filesystem."""
         result = self._apply_edits(self._working)
@@ -1356,13 +1396,16 @@ class EditorView(Gtk.Box):
             if not dest.exists():
                 break
             i += 1
+        # Carry the original metadata over to the edited copy.
+        exif = self._exif_for_save()
+        save_kwargs = {"exif": exif} if exif is not None else {}
         if ext in (".jpg", ".jpeg"):
-            result.convert("RGB").save(str(dest), "JPEG", quality=95)
+            result.convert("RGB").save(str(dest), "JPEG", quality=95, **save_kwargs)
         elif ext == ".png":
-            result.save(str(dest), "PNG")
+            result.save(str(dest), "PNG", **save_kwargs)
         else:
             dest = orig.parent / f"{orig.stem}_edit_{i}.jpg"
-            result.convert("RGB").save(str(dest), "JPEG", quality=95)
+            result.convert("RGB").save(str(dest), "JPEG", quality=95, **save_kwargs)
         return str(dest)
 
     def upload_to_nextcloud(self, local_edited_path: str, nextcloud_client) -> bool:

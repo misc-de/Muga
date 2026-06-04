@@ -14,6 +14,7 @@ try:
         ImageEnhance,
         ImageFilter,
         ImageOps,
+        ImageStat,
     )
     # Hard cap on accepted pixel count. Pillow only emits a *warning* by
     # default (≈89 MP) and continues to allocate; a malicious file from a
@@ -25,5 +26,5 @@ try:
     PILImage.MAX_IMAGE_PIXELS = 200_000_000
     _PIL_OK = True
 except ImportError:
-    PILImage = ImageEnhance = ImageFilter = ImageOps = ImageDraw = None  # type: ignore[assignment]
+    PILImage = ImageEnhance = ImageFilter = ImageOps = ImageDraw = ImageStat = None  # type: ignore[assignment]
     _PIL_OK = False
