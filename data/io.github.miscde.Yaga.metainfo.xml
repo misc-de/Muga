@@ -32,6 +32,13 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.2.0" date="2026-06-04">
+      <description>
+        <p>Performance: off-thread thumbnail and image decoding, smoother
+        scrolling and swiping, faster re-scans (unchanged files are skipped),
+        EXIF search via the full-text index, and lighter settings/sync work.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-05-14" />
   </releases>
 </component>
