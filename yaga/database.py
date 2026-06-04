@@ -182,7 +182,17 @@ class Database:
         self._has_fts = False
         try:
             self.conn.execute(_FTS_CREATE_SQL)
-            if version < 3:
+            # Whether the index is populated and its sync triggers are
+            # installed cannot be inferred from user_version alone: if FTS5 was
+            # unavailable on an earlier open, user_version advanced past 3 via
+            # later migrations while the index was never built. Probe the
+            # triggers directly so a later FTS-capable open self-heals instead
+            # of silently returning zero matches forever.
+            have_triggers = self.conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
+                "AND name IN ('media_ai', 'media_ad', 'media_au')"
+            ).fetchone()[0] == 3
+            if not have_triggers:
                 # SQLite-recommended way to (re)populate an external-
                 # content FTS5 index from scratch. An equivalent
                 # `INSERT … SELECT … WHERE id NOT IN (SELECT rowid
@@ -195,7 +205,8 @@ class Database:
                 # initial-population path and idempotent on its own.
                 self.conn.execute("INSERT INTO media_fts(media_fts) VALUES('rebuild')")
                 self.conn.executescript(_FTS_TRIGGERS_SQL)
-                self.conn.execute("PRAGMA user_version = 3")
+                if version < 3:
+                    self.conn.execute("PRAGMA user_version = 3")
                 self.conn.commit()
             self._has_fts = True
         except sqlite3.OperationalError as exc:
