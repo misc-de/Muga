@@ -2114,3 +2114,43 @@ def test_editor_exif_for_save_none_without_source_exif() -> None:
 
     assert EditorView._exif_for_save(SimpleNamespace(_exif_bytes=None)) is None
     assert EditorView._exif_for_save(SimpleNamespace(_exif_bytes=b"")) is None
+
+
+# ── GalleryWindow: teardown guard ────────────────────────────────────────
+# Regression: replacing the window on a nav-position change destroys it while
+# scan / thumbnail / bulk-op worker threads may still bounce results back via
+# GLib.idle_add. Those handlers must check _closing and bail BEFORE touching
+# any widget, or they crash against a finalized tree. The fakes below carry
+# ONLY _closing — no refresh_button, gallery_grid, spinner, etc. — so a
+# missing or misplaced guard surfaces as an AttributeError here.
+
+
+def test_gallery_idle_callbacks_bail_when_closing() -> None:
+    from gi.repository import GLib
+
+    from yaga.app import GalleryWindow
+
+    fake = SimpleNamespace(_closing=True)
+    assert GalleryWindow.refresh(fake, scan=True) is None
+    assert GalleryWindow._set_nc_syncing(fake, True) is None
+    assert GalleryWindow._set_nc_broken(fake, True) is None
+    assert GalleryWindow._flush_thumb_updates(fake) == GLib.SOURCE_REMOVE
+    assert GalleryWindow._maybe_fill_viewport(fake) == GLib.SOURCE_REMOVE
+    assert GalleryWindow._on_nc_folder_created(fake, "x", True) == GLib.SOURCE_REMOVE
+    assert GalleryWindow._on_sel_delete_done(fake, 0, []) == GLib.SOURCE_REMOVE
+    assert GalleryWindow._on_sel_move_done(fake, 0, []) == GLib.SOURCE_REMOVE
+    assert GalleryWindow._reenable_refresh_button(fake) == GLib.SOURCE_REMOVE
+
+
+def test_reenable_refresh_button_touches_button_when_live() -> None:
+    from gi.repository import GLib
+
+    from yaga.app import GalleryWindow
+
+    touched = SimpleNamespace(value=None)
+    fake = SimpleNamespace(
+        _closing=False,
+        refresh_button=SimpleNamespace(set_sensitive=lambda v: setattr(touched, "value", v)),
+    )
+    assert GalleryWindow._reenable_refresh_button(fake) == GLib.SOURCE_REMOVE
+    assert touched.value is True

@@ -137,6 +137,12 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.category_buttons: dict[str, Gtk.ToggleButton] = {}
         self._selection_mode: bool = False
         self._selected_paths: set[str] = set()
+        # Set when this window is being torn down (e.g. replaced on a
+        # nav-position change). Background scan / thumbnail / bulk-op workers
+        # bounce their results back via GLib.idle_add and can fire after
+        # destroy(); the bounce-back handlers check this flag and bail so they
+        # never touch a finalized widget tree.
+        self._closing: bool = False
         # While a bulk delete/move worker is in flight: re-entry guard so
         # double-clicks on the toolbar buttons don't kick off a second pass.
         self._sel_busy: bool = False
@@ -820,6 +826,8 @@ class GalleryWindow(Adw.ApplicationWindow):
 
     def refresh(self, scan: bool = False, scope: str | None = None) -> None:
         """scope=None scans all local + NC; scope="current" scans only the active category."""
+        if self._closing:
+            return
         if scan:
             self._render()
             self.refresh_button.set_sensitive(False)
@@ -911,13 +919,15 @@ class GalleryWindow(Adw.ApplicationWindow):
             nc_client = None
             GLib.idle_add(self._set_nc_syncing, False)
             GLib.idle_add(self.refresh, False)
-            GLib.idle_add(lambda: self.refresh_button.set_sensitive(True))
+            GLib.idle_add(self._reenable_refresh_button)
             LOGGER.info("Scan abgeschlossen in %.1fs", _time.time() - _thread_start)
             # Trim cache after every scan: thumbnail generation may have grown
             # the disk footprint past the user's configured budget.
             self.evict_cache_async()
 
     def _set_nc_syncing(self, active: bool) -> None:
+        if self._closing:
+            return
         if self._nc_spinner is not None:
             self._nc_spinner.set_visible(active)
             if active:
@@ -926,8 +936,15 @@ class GalleryWindow(Adw.ApplicationWindow):
                 self._nc_spinner.stop()
 
     def _set_nc_broken(self, active: bool) -> None:
+        if self._closing:
+            return
         if self._nc_broken_img is not None:
             self._nc_broken_img.set_visible(active)
+
+    def _reenable_refresh_button(self) -> bool:
+        if not self._closing:
+            self.refresh_button.set_sensitive(True)
+        return GLib.SOURCE_REMOVE
 
     def _update_item_thumb(self, path: str, thumb_path: str) -> None:
         updated = self.gallery_grid.update_item_thumb(path, thumb_path)
@@ -956,6 +973,8 @@ class GalleryWindow(Adw.ApplicationWindow):
                 )
 
     def _flush_thumb_updates(self) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         with self._pending_thumb_lock:
             updates = self._pending_thumb_updates
             self._pending_thumb_updates = {}
@@ -1242,6 +1261,8 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _maybe_fill_viewport(self) -> bool:
         """If the freshly rendered first page didn't fill the visible area, keep
         loading more pages so the user actually has something to scroll."""
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         if not self._has_more_items or self._lazy_loading_in_flight:
             return GLib.SOURCE_REMOVE
         vadj = self.gallery_grid.get_vadjustment()
@@ -1519,6 +1540,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_nc_folder_created(self, name: str, ok: bool) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         if not ok:
             self._show_error_dialog(
                 self._("Could not create folder"),
@@ -1957,6 +1980,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         threading.Thread(target=_worker, daemon=True, name="sel-delete").start()
 
     def _on_sel_delete_done(self, total: int, errors: list[tuple[str, Exception]]) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         self._set_sel_busy(False, "")
         self._exit_selection_mode()
         # Re-render so the deleted tiles disappear from the grid. No
@@ -2032,6 +2057,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         threading.Thread(target=_worker, daemon=True, name="sel-move").start()
 
     def _on_sel_move_done(self, total: int, errors: list[tuple[str, Exception]]) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
         self._set_sel_busy(False, "")
         self._exit_selection_mode()
         succeeded = total - len(errors)
@@ -2561,6 +2588,10 @@ class GalleryWindow(Adw.ApplicationWindow):
             self._build_ui()
             self.refresh(scan=True)
             return
+        # From here on this window is being replaced. Flip the guard before we
+        # spin up the replacement so any in-flight worker callback that lands
+        # during the swap bails instead of mutating our dying widget tree.
+        self._closing = True
         new_window = GalleryWindow(app)
         new_window.present()
         # Explicitly tear down our tracked settings dialog before destroying
