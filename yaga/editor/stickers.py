@@ -66,10 +66,17 @@ def _make_sparkle(size: int = 96) -> "PILImage.Image":
 
 
 def _pil_to_texture(img: "PILImage.Image") -> Gdk.Texture:
-    rgba = img.convert("RGBA")
+    # An RGB image (the live preview is RGB) goes straight to a 3-byte memory
+    # texture — no RGBA expansion, which on every slider tick was an extra
+    # full-image allocation + copy. Only alpha-bearing images (emoji/frame
+    # stickers) need the 4-byte path.
+    if img.mode == "RGB":
+        w, h = img.size
+        gbytes = GLib.Bytes.new(img.tobytes())
+        return Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.R8G8B8, gbytes, w * 3)
+    rgba = img if img.mode == "RGBA" else img.convert("RGBA")
     w, h = rgba.size
-    raw = rgba.tobytes()
-    gbytes = GLib.Bytes.new(raw)
+    gbytes = GLib.Bytes.new(rgba.tobytes())
     return Gdk.MemoryTexture.new(w, h, Gdk.MemoryFormat.R8G8B8A8, gbytes, w * 4)
 
 

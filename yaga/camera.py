@@ -792,9 +792,13 @@ class CameraWindow(Adw.Window):
         self._apply_layout_for(ORIENT_NORMAL)
 
         self._orientation = OrientationClient()
+        # Frame-clock tick id for the no-sensor fallback, so it can be paused
+        # while the window is hidden and torn down on close instead of running
+        # ~60 Hz for the window's whole life (CPU/battery on a phone).
+        self._orient_tick_id: int | None = None
         if not self._orientation.start(self._on_orientation_changed):
             self._orientation = None
-            self.add_tick_callback(self._on_orientation_tick)
+            self._orient_tick_id = self.add_tick_callback(self._on_orientation_tick)
 
         # Toast for status / errors.
         self._toast = Gtk.Label(label="")
@@ -1349,7 +1353,7 @@ class CameraWindow(Adw.Window):
                 # is only released once the transition has actually
                 # finished, and a subsequent start would otherwise race
                 # against the same descriptor.
-                self._pipeline.get_state(2 * self._Gst.SECOND)
+                self._pipeline.get_state(self._Gst.SECOND // 2)  # 500ms cap: HAL release is normally ms; don't freeze the UI for 2s
             except Exception:
                 LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._pipeline = None
@@ -1366,6 +1370,13 @@ class CameraWindow(Adw.Window):
         self._source_frame_count += 1
         if self._source_frame_count <= 3:
             _dlog(f"[yaga.camera] source buffer #{self._source_frame_count}")
+        if self._source_frame_count >= 3:
+            # Diagnostic window done — detach the probe instead of paying a
+            # C→Python hop (plus GIL) on every single frame for the rest of
+            # the pipeline's life. Clear the id so _stop_pipeline doesn't try
+            # to remove an already-removed probe.
+            self._source_probe_id = None
+            return gst.PadProbeReturn.REMOVE
         return gst.PadProbeReturn.OK
 
     def _on_sink_buffer(self, _pad: Any, _info: Any) -> Any:
@@ -1375,6 +1386,9 @@ class CameraWindow(Adw.Window):
         if self._sink_frame_count <= 3:
             _dlog(f"[yaga.camera] sink buffer #{self._sink_frame_count} "
                 f"(source so far: {self._source_frame_count})")
+        if self._sink_frame_count >= 3:
+            self._sink_probe_id = None
+            return gst.PadProbeReturn.REMOVE
         return gst.PadProbeReturn.OK
 
     def _on_preview_sample(self, sink: Any) -> Any:
@@ -3643,7 +3657,7 @@ class CameraWindow(Adw.Window):
         if self._image_pipeline is not None:
             try:
                 self._image_pipeline.set_state(self._Gst.State.NULL)
-                self._image_pipeline.get_state(2 * self._Gst.SECOND)
+                self._image_pipeline.get_state(self._Gst.SECOND // 2)  # 500ms cap: HAL release is normally ms; don't freeze the UI for 2s
             except Exception:
                 LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._image_pipeline = None
@@ -4099,7 +4113,7 @@ class CameraWindow(Adw.Window):
         if self._video_pipeline is not None:
             try:
                 self._video_pipeline.set_state(self._Gst.State.NULL)
-                self._video_pipeline.get_state(2 * self._Gst.SECOND)
+                self._video_pipeline.get_state(self._Gst.SECOND // 2)  # 500ms cap: HAL release is normally ms; don't freeze the UI for 2s
             except Exception:
                 LOGGER.debug("camera cleanup/op failed", exc_info=True)
             self._video_pipeline = None
@@ -4387,6 +4401,10 @@ class CameraWindow(Adw.Window):
                 self._orientation.stop()
             except Exception:
                 LOGGER.debug("orientation stop on unmap failed", exc_info=True)
+        # No-sensor fallback: stop the ~60 Hz orientation tick while hidden.
+        if self._orient_tick_id is not None:
+            self.remove_tick_callback(self._orient_tick_id)
+            self._orient_tick_id = None
         # GeoClue: stop the location subscription. Resume on map only
         # when the user-intent flag is still set.
         if self._geo is not None:
@@ -4412,6 +4430,9 @@ class CameraWindow(Adw.Window):
                 self._orientation.start(on_change=self._on_orientation_changed)
             except Exception:
                 LOGGER.debug("orientation restart on map failed", exc_info=True)
+        elif self._orient_tick_id is None:
+            # No-sensor fallback: resume the orientation tick we paused on unmap.
+            self._orient_tick_id = self.add_tick_callback(self._on_orientation_tick)
         if self._geo_enabled and self._geo is None:
             self._try_start_geo_silent()
 
@@ -4437,6 +4458,13 @@ class CameraWindow(Adw.Window):
             self._video_teardown()
         except Exception:
             LOGGER.debug("video-pipeline teardown failed", exc_info=True)
+        # Frame-clock orientation tick (separate API from GLib sources below).
+        if self._orient_tick_id is not None:
+            try:
+                self.remove_tick_callback(self._orient_tick_id)
+            except Exception:
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
+            self._orient_tick_id = None
         # GLib sources.
         for src_attr in (
             "_toast_timer", "_countdown_source",

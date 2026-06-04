@@ -104,7 +104,9 @@ class GeoClient:
                 ("TimeThreshold", GLib.Variant("u", 1)),
             ):
                 try:
-                    self._set_property(prop, variant)
+                    # Optional tuning props — a short timeout so a slow/old bus
+                    # can't stall the UI thread for the full 5 s on each.
+                    self._set_property(prop, variant, timeout_ms=1000)
                 except Exception:
                     # Older GeoClue versions don't expose these; fine.
                     pass
@@ -127,8 +129,10 @@ class GeoClient:
                     pass
                 self._signal_id = None
             try:
+                # Teardown — we ignore the result, so don't let a wedged bus
+                # block window-hide for 2 s; a short timeout is plenty.
                 self._client_proxy.call_sync(
-                    "Stop", None, Gio.DBusCallFlags.NONE, 2000, None
+                    "Stop", None, Gio.DBusCallFlags.NONE, 500, None
                 )
             except Exception:
                 pass
@@ -156,7 +160,7 @@ class GeoClient:
 
     # ------------------------------------------------------------------
 
-    def _set_property(self, name: str, value: GLib.Variant) -> None:
+    def _set_property(self, name: str, value: GLib.Variant, timeout_ms: int = 5000) -> None:
         connection = self._client_proxy.get_connection()
         connection.call_sync(
             GEOCLUE_BUS,
@@ -166,7 +170,7 @@ class GeoClient:
             GLib.Variant("(ssv)", (GEOCLUE_CLIENT_IFACE, name, value)),
             None,
             Gio.DBusCallFlags.NONE,
-            5000,
+            timeout_ms,
             None,
         )
 

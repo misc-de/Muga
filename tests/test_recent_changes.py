@@ -22,6 +22,7 @@ so methods are tested as unbound functions called with a SimpleNamespace
 
 from __future__ import annotations
 
+import collections
 import os
 import stat
 import threading
@@ -73,7 +74,7 @@ def test_photo_mode_keeps_sysfs_torch_off() -> None:
 
 def _thumb_cache_self():
     return SimpleNamespace(
-        _exists_cache={},
+        _exists_cache=collections.OrderedDict(),
         _EXISTS_TTL=5.0,
         _EXISTS_CACHE_MAX=8,
     )
@@ -311,11 +312,27 @@ def test_update_tile_for_path_rebinds_only_matching_item() -> None:
     assert rebound == [li_b]
 
 
+def _update_thumb_self(item_index, bound_list_items, rebound):
+    """SimpleNamespace self for update_item_thumb: O(1) index lookup +
+    cache invalidation + targeted re-bind via update_tile_for_path."""
+    from yaga.gallery_grid import GalleryGrid
+    fake = SimpleNamespace(
+        _item_index=item_index,
+        _exists_cache=collections.OrderedDict({"/old/thumb.jpg": (0.0, True)}),
+        _failed_textures=set(),
+        _texture_cache=collections.OrderedDict(),
+        _bound_list_items=bound_list_items,
+        _apply_binding=lambda li: rebound.append(li),
+    )
+    fake.update_tile_for_path = lambda p: GalleryGrid.update_tile_for_path(fake, p)
+    fake._invalidate_thumb_caches = lambda tp: GalleryGrid._invalidate_thumb_caches(fake, tp)
+    return fake
+
+
 def test_update_item_thumb_mutates_in_place_and_rebinds() -> None:
-    """update_item_thumb used to splice the full GalleryRow; now it
-    swaps the MediaRow's frozen MediaItem with one carrying the new
-    thumb_path and re-binds only the affected list_item. Verify both
-    the mutation and the targeted re-bind."""
+    """update_item_thumb used to splice the full GalleryRow; now an O(1)
+    _item_index lookup swaps the MediaRow's frozen MediaItem for one carrying
+    the new thumb_path and re-binds only the affected list_item."""
     from yaga.gallery_grid import GalleryGrid
     from yaga.models import MediaItem
 
@@ -326,26 +343,13 @@ def test_update_item_thumb_mutates_in_place_and_rebinds() -> None:
             mtime=0.0, size=0, thumb_path=thumb,
         )
 
-    tile = SimpleNamespace(
-        is_folder=False,
-        media_item=make_item("/a.jpg"),
-    )
-    other_tile = SimpleNamespace(
-        is_folder=False,
-        media_item=make_item("/b.jpg"),
-    )
+    tile = SimpleNamespace(is_folder=False, media_item=make_item("/a.jpg"))
+    other_tile = SimpleNamespace(is_folder=False, media_item=make_item("/b.jpg"))
     gallery_row = SimpleNamespace(is_header=False, tiles=[tile, other_tile])
     list_item = SimpleNamespace(get_item=lambda: gallery_row)
 
-    # Empty row_store stand-in — the bound branch should hit before
-    # we fall back to the model walk.
     rebound: list = []
-    fake = SimpleNamespace(
-        _exists_cache={"/old/thumb.jpg": (0.0, True)},
-        _bound_list_items=[list_item],
-        _apply_binding=lambda li: rebound.append(li),
-        row_store=SimpleNamespace(get_n_items=lambda: 0, get_item=lambda _i: None),
-    )
+    fake = _update_thumb_self({"/a.jpg": tile, "/b.jpg": other_tile}, [list_item], rebound)
 
     assert GalleryGrid.update_item_thumb(fake, "/a.jpg", "/new/thumb.jpg") is True
     # Frozen MediaItem replaced in place; the other tile is untouched.
@@ -355,9 +359,10 @@ def test_update_item_thumb_mutates_in_place_and_rebinds() -> None:
     assert rebound == [list_item]
 
 
-def test_update_item_thumb_falls_back_to_row_store_walk() -> None:
-    """When the path isn't in the bound viewport, mutate via the
-    row_store so a later scroll-in picks up the new thumb."""
+def test_update_item_thumb_mutates_when_scrolled_out_of_view() -> None:
+    """When the path isn't in the bound viewport, the index still finds and
+    mutates the MediaRow so a later scroll-in picks up the new thumb — with
+    no re-bind (nothing visible)."""
     from yaga.gallery_grid import GalleryGrid
     from yaga.models import MediaItem
 
@@ -366,21 +371,20 @@ def test_update_item_thumb_falls_back_to_row_store_walk() -> None:
         folder="/", name="scrolled-out.jpg", mtime=0.0, size=0, thumb_path=None,
     )
     tile = SimpleNamespace(is_folder=False, media_item=item)
-    row = SimpleNamespace(is_header=False, tiles=[tile])
 
-    fake = SimpleNamespace(
-        _exists_cache={},
-        _bound_list_items=[],
-        _apply_binding=MagicMock(),
-        row_store=SimpleNamespace(
-            get_n_items=lambda: 1,
-            get_item=lambda i: row if i == 0 else None,
-        ),
-    )
+    rebound: list = []
+    fake = _update_thumb_self({"/scrolled-out.jpg": tile}, [], rebound)
 
     assert GalleryGrid.update_item_thumb(fake, "/scrolled-out.jpg", "/t.jpg") is True
     assert tile.media_item.thumb_path == "/t.jpg"
-    fake._apply_binding.assert_not_called()  # nothing visible to re-bind
+    assert rebound == []  # nothing visible to re-bind
+
+
+def test_update_item_thumb_returns_false_for_unknown_path() -> None:
+    """A thumb arrival for a path not in the current view is a no-op."""
+    from yaga.gallery_grid import GalleryGrid
+    fake = _update_thumb_self({}, [], [])
+    assert GalleryGrid.update_item_thumb(fake, "/gone.jpg", "/t.jpg") is False
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +451,7 @@ def test_local_thumb_worker_clears_pending_when_generation_fails() -> None:
     fake = SimpleNamespace(
         _local_thumb_lock=threading.Lock(),
         _local_thumb_pending={"/p/y.jpg"},
+        _local_thumb_failed=set(),
         thumbnailer=SimpleNamespace(ensure_thumbnail=lambda path, mt: None),
         database=SimpleNamespace(set_thumb=lambda p, t, c: db_writes.append(1)),
         _enqueue_thumb_update=lambda p, t: enqueued.append(1),
@@ -454,6 +459,8 @@ def test_local_thumb_worker_clears_pending_when_generation_fails() -> None:
     GalleryWindow._local_thumb_worker(fake, "/p/y.jpg", "image", "camera")
     assert db_writes == [] and enqueued == []
     assert fake._local_thumb_pending == set()
+    # A failed generation is remembered so rebinds don't re-queue it forever.
+    assert fake._local_thumb_failed == {"/p/y.jpg"}
 
 
 def test_request_local_thumbnail_dedups_in_flight_paths() -> None:
@@ -464,6 +471,7 @@ def test_request_local_thumbnail_dedups_in_flight_paths() -> None:
     fake = SimpleNamespace(
         _local_thumb_lock=threading.Lock(),
         _local_thumb_pending=set(),
+        _local_thumb_failed=set(),
         _local_thumb_pool=SimpleNamespace(submit=lambda *a, **k: submits.append(a)),
         _local_thumb_worker=lambda *a: None,
     )
@@ -471,6 +479,63 @@ def test_request_local_thumbnail_dedups_in_flight_paths() -> None:
     GalleryWindow.request_local_thumbnail(fake, "/p/z.jpg", "image", "camera")
     assert len(submits) == 1
     assert "/p/z.jpg" in fake._local_thumb_pending
+
+
+def test_request_local_thumbnail_skips_known_failures() -> None:
+    """A path whose generation already failed must not be re-queued on every
+    subsequent rebind."""
+    from yaga.app import GalleryWindow
+    submits: list = []
+    fake = SimpleNamespace(
+        _local_thumb_lock=threading.Lock(),
+        _local_thumb_pending=set(),
+        _local_thumb_failed={"/p/bad.jpg"},
+        _local_thumb_pool=SimpleNamespace(submit=lambda *a, **k: submits.append(a)),
+        _local_thumb_worker=lambda *a: None,
+    )
+    GalleryWindow.request_local_thumbnail(fake, "/p/bad.jpg", "image", "camera")
+    assert submits == []
+
+
+def test_scan_signature_ignores_display_only_settings() -> None:
+    """Changing theme / columns / language / sort / cache must NOT trigger a
+    rescan — those are pure display, and rescanning the library on each was
+    the dominant settings-interaction latency."""
+    from yaga.app import GalleryWindow
+    from yaga.config import Settings
+    a = Settings()
+    b = Settings(**a.__dict__)
+    b.grid_columns = a.grid_columns + 2
+    b.theme = "dark"
+    b.language = "de"
+    b.sort_mode = "oldest"
+    b.cache_max_mb = 500
+    b.handedness = "left"
+    assert GalleryWindow._scan_signature(a) == GalleryWindow._scan_signature(b)
+
+
+def test_scan_signature_changes_on_folder_or_nc_change() -> None:
+    """A real change to the indexed file set (a folder root, or the Nextcloud
+    connection) must change the signature so the scan does run."""
+    from yaga.app import GalleryWindow
+    from yaga.config import Settings
+    a = Settings()
+    folder = Settings(**a.__dict__)
+    folder.photos_dir = "/somewhere/else"
+    assert GalleryWindow._scan_signature(a) != GalleryWindow._scan_signature(folder)
+    nc = Settings(**a.__dict__)
+    nc.nextcloud_enabled = not a.nextcloud_enabled
+    assert GalleryWindow._scan_signature(a) != GalleryWindow._scan_signature(nc)
+
+
+def test_translator_caches_active_language_and_invalidates_on_change() -> None:
+    """gettext is called hundreds of times per UI build; active_language is
+    cached. The cache must still flip when `language` is reassigned."""
+    from yaga.i18n import Translator
+    t = Translator("de")
+    assert t.gettext("Settings") == "Einstellungen"
+    t.language = "en"
+    assert t.gettext("Settings") == "Settings"
 
 
 # ---------------------------------------------------------------------------
@@ -1151,17 +1216,43 @@ def test_search_clause_english_month_name_filter(tmp_path: Path) -> None:
 
 
 def test_search_clause_short_query_skips_exif_like(tmp_path: Path) -> None:
-    """exif_data LIKE is a full-table scan on a JSON blob — guarded by
-    len(q) >= 3. A 2-char query must NOT include the exif clause."""
+    """A 1-2 char query is below the trigram floor, so it takes the LIKE
+    fallback over `name` only — never the (full-table) exif_data scan."""
     db = _bare_db(tmp_path)
     _where, _args = db._build_search_clause("ab")
     assert "exif_data" not in _where
 
 
-def test_search_clause_long_query_includes_exif_like(tmp_path: Path) -> None:
+def test_search_clause_long_query_searches_exif(tmp_path: Path) -> None:
+    """A >=3 char query searches EXIF text. With the FTS index that's a
+    single MATCH over name+exif_data (no blob LIKE scan); without FTS it
+    falls back to the exif_data LIKE."""
     db = _bare_db(tmp_path)
     where, _args = db._build_search_clause("canon")
-    assert "exif_data" in where
+    if getattr(db, "_has_fts", False):
+        assert "media_fts MATCH" in where
+        assert "exif_data" not in where  # folded into the FTS probe
+    else:
+        assert "exif_data" in where
+
+
+def test_search_finds_item_by_exif_via_fts(tmp_path: Path) -> None:
+    """End-to-end: EXIF text stored after the fact is searchable through
+    the FTS index, exercising the AFTER UPDATE OF exif_data trigger."""
+    from yaga.database import Database
+    db = Database(tmp_path / "fts.sqlite3")
+    if not getattr(db, "_has_fts", False):
+        pytest.skip("FTS5/trigram unavailable")
+    folder = tmp_path / "p"
+    folder.mkdir()
+    f = folder / "IMG_5.jpg"
+    f.write_bytes(b"x")
+    db.upsert_media(path=f, category="screenshots", media_type="image",
+                    folder="p", thumb_path=None)
+    db.set_exif_data(str(f), '{"Make": "Canon", "Model": "EOS R6"}', "screenshots")
+    db.commit()
+    hits = db.search_media("screenshots", "canon", folder="p")
+    assert any(h.name == "IMG_5.jpg" for h in hits)
 
 
 # ---------------------------------------------------------------------------
@@ -1291,6 +1382,58 @@ def test_migration_v3_idempotent_does_not_duplicate(tmp_path: Path) -> None:
     db2 = Database(tmp_path / "v3.sqlite3")
     post = db2.conn.execute("SELECT COUNT(*) FROM media_fts").fetchone()[0]
     assert post == pre
+
+
+def test_migration_v5_to_v6_widens_fts_to_exif(tmp_path: Path) -> None:
+    """A DB built with the old single-column (name-only) FTS index must be
+    migrated to the two-column (name+exif_data) index so EXIF search starts
+    working, without losing existing name search."""
+    import sqlite3
+    db_path = tmp_path / "v5.sqlite3"
+    raw = sqlite3.connect(db_path)
+    raw.executescript(
+        """
+        CREATE TABLE media (
+            id INTEGER PRIMARY KEY, path TEXT NOT NULL, category TEXT NOT NULL,
+            media_type TEXT NOT NULL, folder TEXT NOT NULL, name TEXT NOT NULL,
+            mtime REAL NOT NULL, size INTEGER NOT NULL, thumb_path TEXT,
+            seen_at REAL NOT NULL, exif_data TEXT DEFAULT NULL,
+            UNIQUE(path, category)
+        );
+        CREATE VIRTUAL TABLE media_fts USING fts5(
+            name, content='media', content_rowid='id', tokenize='trigram');
+        CREATE TRIGGER media_ai AFTER INSERT ON media BEGIN
+            INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
+        END;
+        CREATE TRIGGER media_ad AFTER DELETE ON media BEGIN
+            INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
+        END;
+        CREATE TRIGGER media_au AFTER UPDATE ON media BEGIN
+            INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
+            INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
+        END;
+        PRAGMA user_version = 5;
+        """
+    )
+    raw.execute(
+        "INSERT INTO media (path, category, media_type, folder, name, mtime, size, seen_at, exif_data) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("/p/Trip.jpg", "screenshots", "image", "p", "Trip.jpg", 0.0, 0, 0.0,
+         '{"Make": "Nikon"}'),
+    )
+    raw.execute("INSERT INTO media_fts(rowid, name) VALUES (1, 'Trip.jpg')")
+    raw.commit()
+    raw.close()
+
+    from yaga.database import Database
+    db = Database(db_path)
+    if not getattr(db, "_has_fts", False):
+        pytest.skip("FTS5/trigram unavailable")
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] >= 6
+    # Name search still works …
+    assert any(h.name == "Trip.jpg" for h in db.search_media("screenshots", "rip"))
+    # … and EXIF (back-filled into the widened index by the rebuild) now does too.
+    assert any(h.name == "Trip.jpg" for h in db.search_media("screenshots", "nikon"))
 
 
 # ---------------------------------------------------------------------------

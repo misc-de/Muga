@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -105,6 +107,21 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._rotation: int = 0
         self._current_display_path: str | None = None
         self._current_is_video: bool = False
+
+        # Off-thread image decoding. new_from_file() on a 48 MP photo blocks the
+        # UI thread for hundreds of ms on every swipe; we decode (downscaled,
+        # EXIF-oriented) on a small pool and apply the result via idle_add.
+        # _show_token tags each show_item() so a decode that lands after the
+        # user has already navigated away is discarded. A tiny LRU keeps the
+        # current image and its two neighbours decoded, so back-and-forth
+        # swiping is instant; neighbours are prefetched after each show.
+        self._image_cache: collections.OrderedDict[str, GdkPixbuf.Pixbuf] = collections.OrderedDict()
+        self._IMAGE_CACHE_MAX = 3
+        # Cap the long edge so a huge source doesn't pin hundreds of MB per
+        # cached image; still far above screen resolution for crisp zoom.
+        self._DECODE_MAX_DIM = 4096
+        self._decode_pool: ThreadPoolExecutor | None = None
+        self._show_token = 0
         # Chrome (header + date pill + filename pill) visibility persists
         # across swipe-to-next so the user's tap-to-hide choice carries
         # over to the next image instead of reverting on every show_item().
@@ -306,6 +323,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_revealer.set_margin_start(0)
 
     def show_item(self) -> None:
+        # Bump the token so any in-flight decode for the previous item is
+        # discarded when it lands instead of painting over the new one.
+        self._show_token += 1
         self._set_view_gestures_enabled(True)
         child = self.stack.get_first_child()
         while child:
@@ -550,15 +570,81 @@ class ViewerWindow(Adw.ApplicationWindow):
             self._revert_einmalig_session()
 
     def _show_local_image(self, path: str) -> None:
-        # Honor the EXIF Orientation tag so portrait phone shots aren't sideways.
-        # GdkPixbuf.apply_embedded_orientation does this in one call. If the loader
-        # can't handle the format (rare), fall back to the lazy filename-based path.
-        picture: Gtk.Picture
+        cached = self._image_cache.get(path)
+        if cached is not None:
+            self._image_cache.move_to_end(path)
+            self._mount_picture(cached, path)
+            self._preload_neighbours()
+            return
+        # Cache miss: decode off the UI thread so a big photo doesn't freeze the
+        # swipe. Show a spinner meanwhile; the decode result is applied (if the
+        # user is still on this item) by _on_image_decoded.
+        token = self._show_token
+        spinner = Gtk.Spinner()
+        spinner.start()
+        spinner.set_size_request(32, 32)
+        box = Gtk.Box()
+        box.set_hexpand(True)
+        box.set_vexpand(True)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_valign(Gtk.Align.CENTER)
+        box.append(spinner)
+        self.stack.add_child(box)
+        self._ensure_decode_pool().submit(self._decode_image_worker, path, token)
+        self._preload_neighbours()
+
+    def _ensure_decode_pool(self) -> ThreadPoolExecutor:
+        if self._decode_pool is None:
+            self._decode_pool = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="yaga-viewer-decode",
+            )
+        return self._decode_pool
+
+    def _decode_display_pixbuf(self, path: str) -> "GdkPixbuf.Pixbuf | None":
+        """Decode *path* to an EXIF-oriented pixbuf, downscaled so its long
+        edge never exceeds _DECODE_MAX_DIM. Runs on a worker thread."""
         try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
-            pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
-            picture = Gtk.Picture.new_for_pixbuf(pixbuf)
+            info = GdkPixbuf.Pixbuf.get_file_info(path)
+            w, h = (info[1], info[2]) if info else (0, 0)
+            cap = self._DECODE_MAX_DIM
+            if w and h and max(w, h) > cap:
+                # Scale down at decode time — never up (small images stay native).
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, cap, cap, True)
+            else:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
+            return pixbuf.apply_embedded_orientation() or pixbuf
         except Exception:
+            LOGGER.debug("image decode failed for %s", path, exc_info=True)
+            return None
+
+    def _decode_image_worker(self, path: str, token: int) -> None:
+        pixbuf = self._decode_display_pixbuf(path)
+        GLib.idle_add(self._on_image_decoded, path, token, pixbuf)
+
+    def _on_image_decoded(self, path: str, token: int, pixbuf) -> bool:
+        if pixbuf is not None:
+            self._image_cache[path] = pixbuf
+            self._image_cache.move_to_end(path)
+            while len(self._image_cache) > self._IMAGE_CACHE_MAX:
+                self._image_cache.popitem(last=False)
+        # Only paint if the viewer is still showing this very item.
+        if self._closing or token != self._show_token:
+            return GLib.SOURCE_REMOVE
+        # Clear the spinner placeholder, then mount the image (or a lazy
+        # filename fallback if the decode failed).
+        child = self.stack.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self.stack.remove(child)
+            child = nxt
+        self._mount_picture(pixbuf, path)
+        return GLib.SOURCE_REMOVE
+
+    def _mount_picture(self, pixbuf, path: str) -> None:
+        if pixbuf is not None:
+            picture = Gtk.Picture.new_for_pixbuf(pixbuf)
+        else:
+            # Decode failed — fall back to GTK's lazy filename loader.
             picture = Gtk.Picture.new_for_filename(path)
         picture.set_content_fit(Gtk.ContentFit.CONTAIN)
         picture.set_can_shrink(True)
@@ -575,6 +661,36 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_view = picture
         self.zoom_scroller = scroller
         self.stack.add_child(scroller)
+
+    def _preload_neighbours(self) -> None:
+        """Warm the decode cache for the items on either side of the current
+        one so the next swipe hits the cache instead of decoding live."""
+        if not self.items:
+            return
+        n = len(self.items)
+        for direction in (1, -1):
+            neighbour = self.items[(self.index + direction) % n]
+            if neighbour.is_video or is_nc_path(neighbour.path):
+                continue
+            path = neighbour.path
+            if path in self._image_cache:
+                continue
+            self._ensure_decode_pool().submit(self._preload_worker, path)
+
+    def _preload_worker(self, path: str) -> None:
+        if path in self._image_cache:
+            return
+        pixbuf = self._decode_display_pixbuf(path)
+        if pixbuf is not None:
+            GLib.idle_add(self._cache_preloaded, path, pixbuf)
+
+    def _cache_preloaded(self, path: str, pixbuf) -> bool:
+        if not self._closing and path not in self._image_cache:
+            self._image_cache[path] = pixbuf
+            self._image_cache.move_to_end(path)
+            while len(self._image_cache) > self._IMAGE_CACHE_MAX:
+                self._image_cache.popitem(last=False)
+        return GLib.SOURCE_REMOVE
 
     def _rotate_by_step(self, steps: int) -> None:
         """Rotate the displayed image by *steps* * 90° (positive = clockwise)."""
@@ -726,6 +842,10 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _on_destroy(self, _window) -> None:
         self._closing = True
+        pool, self._decode_pool = self._decode_pool, None
+        if pool is not None:
+            pool.shutdown(wait=False)
+        self._image_cache.clear()
 
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
@@ -763,13 +883,28 @@ class ViewerWindow(Adw.ApplicationWindow):
         if response == "cancel":
             return
         if response == "save":
-            self._save_rotation()
+            path = self._current_display_path
+            rotation = self._rotation
+            self._rotation = 0
+            if path and rotation:
+                # Re-encoding a full-resolution photo blocks the UI for hundreds
+                # of ms — do it off-thread, then run the follow-up action (close
+                # / navigate) once the file is on disk. The cached display pixbuf
+                # is now stale, so drop it.
+                self._image_cache.pop(path, None)
+
+                def worker() -> None:
+                    self._save_rotation_to_disk(path, rotation)
+                    GLib.idle_add(lambda: (action(), GLib.SOURCE_REMOVE)[1])
+
+                threading.Thread(target=worker, daemon=True).start()
+                return
         self._rotation = 0
         action()
 
-    def _save_rotation(self) -> None:
-        path = self._current_display_path
-        if not path or self._rotation == 0:
+    @staticmethod
+    def _save_rotation_to_disk(path: str, rotation: int) -> None:
+        if not path or rotation == 0:
             return
         if _PIL_OK:
             try:
@@ -779,7 +914,7 @@ class ViewerWindow(Adw.ApplicationWindow):
                 # standalone-correct (no orientation tag needed), then layer the
                 # user's rotation on top.
                 img = ImageOps.exif_transpose(img)
-                img = img.rotate(-self._rotation, expand=True)
+                img = img.rotate(-rotation, expand=True)
                 ext = Path(path).suffix.lower()
                 if ext in (".jpg", ".jpeg"):
                     img.save(path, quality=95)
@@ -796,7 +931,7 @@ class ViewerWindow(Adw.ApplicationWindow):
                 180: GdkPixbuf.PixbufRotation.UPSIDEDOWN,
                 270: GdkPixbuf.PixbufRotation.COUNTERCLOCKWISE,
             }
-            rotated = pixbuf.rotate_simple(rot_map[self._rotation])
+            rotated = pixbuf.rotate_simple(rot_map[rotation])
             ext = Path(path).suffix.lower()
             fmt = "jpeg" if ext in (".jpg", ".jpeg") else "png"
             rotated.savev(path, fmt, [], [])

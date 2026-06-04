@@ -158,6 +158,76 @@ def test_scanner_indexes_all_files_across_thumbnail_chunks(tmp_path: Path) -> No
     assert all(item.thumb_path == f"thumb://image/{item.name}" for item in items)
 
 
+class RecordingThumbnailer:
+    """Thumbnailer whose thumbnails actually land on disk, so the scanner's
+    'unchanged + already thumbnailed → skip' path is exercised. Records every
+    ensure_thumbnail call so a test can assert what got (re)decoded."""
+
+    def __init__(self, thumb_dir: Path) -> None:
+        self.thumb_dir = thumb_dir
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        self.decoded: list[str] = []
+
+    def thumb_path_for(self, path: Path) -> Path:
+        import hashlib
+        digest = hashlib.sha256(str(path).encode()).hexdigest()
+        return self.thumb_dir / f"{digest}.jpg"
+
+    def ensure_thumbnail(self, path: Path, media_type: str) -> str:
+        target = self.thumb_path_for(path)
+        if not target.exists():
+            target.write_bytes(b"thumb")
+        self.decoded.append(str(path))
+        return str(target)
+
+
+def test_scanner_skips_unchanged_files_and_keeps_them(tmp_path: Path) -> None:
+    """A re-scan must not re-decode files whose mtime+size are unchanged, yet
+    must keep their rows (seen_at touched so prune_missing spares them)."""
+    db = Database(tmp_path / "test.sqlite3")
+    root = tmp_path / "Pictures"
+    root.mkdir()
+    img = root / "keep.jpg"
+    img.write_bytes(b"image-data")
+
+    thumber = RecordingThumbnailer(tmp_path / "thumbs")
+    scanner = MediaScanner(db, thumber)
+    scanner.scan([("screenshots", "Screenshots", str(root))])
+    assert thumber.decoded == [str(img)]  # decoded once on first sight
+
+    thumber.decoded.clear()
+    scanner.scan([("screenshots", "Screenshots", str(root))])
+    assert thumber.decoded == []  # unchanged → skipped, no re-decode
+    assert [i.name for i in db.list_media("screenshots")] == ["keep.jpg"]  # row survived
+
+
+def test_scanner_reindexes_and_reinvalidates_changed_file(tmp_path: Path) -> None:
+    """A file changed in place must have its stale (path-keyed) thumbnail
+    dropped and regenerated on the next scan."""
+    import os
+    db = Database(tmp_path / "test.sqlite3")
+    root = tmp_path / "Pictures"
+    root.mkdir()
+    img = root / "edit.jpg"
+    img.write_bytes(b"v1")
+
+    thumber = RecordingThumbnailer(tmp_path / "thumbs")
+    scanner = MediaScanner(db, thumber)
+    scanner.scan([("screenshots", "Screenshots", str(root))])
+    thumb_file = thumber.thumb_path_for(img)
+    thumb_file.write_bytes(b"OLD-THUMB")  # mark the cached thumbnail
+
+    # Change content + size and push mtime forward so the skip check fails.
+    img.write_bytes(b"v2-much-longer-content")
+    future = img.stat().st_mtime + 10
+    os.utime(img, (future, future))
+
+    thumber.decoded.clear()
+    scanner.scan([("screenshots", "Screenshots", str(root))])
+    assert thumber.decoded == [str(img)]  # changed → re-decoded
+    assert thumb_file.read_bytes() == b"thumb"  # stale thumbnail was replaced
+
+
 def test_scanner_can_use_database_from_background_thread(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.sqlite3")
     root = tmp_path / "Pictures"

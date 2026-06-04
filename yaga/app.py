@@ -175,6 +175,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         # file on the UI thread — the latter janks scrolling. Mirrors the NC
         # on-demand path; idempotent per path via the pending set.
         self._local_thumb_pending: set[str] = set()
+        # Paths whose thumbnail generation permanently failed (broken file,
+        # missing ffmpeg, …). Without this, every rebind of that tile while
+        # scrolling re-submits the same doomed decode. Cleared when the file's
+        # row is rescanned (a successful regen replaces the entry on its own).
+        self._local_thumb_failed: set[str] = set()
         self._local_thumb_lock = threading.Lock()
         self._local_thumb_pool: ThreadPoolExecutor | None = None
 
@@ -909,7 +914,9 @@ class GalleryWindow(Adw.ApplicationWindow):
                 GLib.idle_add(self._set_nc_syncing, True)
                 GLib.idle_add(self._set_nc_broken, False)
                 self.scanner.scan_nc_structure(nc_client, self.settings.nextcloud_photos_path)
-                GLib.idle_add(self.refresh, False)  # show folder structure immediately
+                # The structure is shown by the single refresh in the `finally`
+                # block, which runs immediately after this — no separate refresh
+                # here (it just rendered the same view twice back to back).
                 # No bulk thumbnail pre-fetch: tiles request their own thumbnail when
                 # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
@@ -1399,14 +1406,14 @@ class GalleryWindow(Adw.ApplicationWindow):
             rows_to_drop += 1
         if rows_to_drop <= 0 or items_dropped <= 0:
             return
-        # Splice is enough — Gtk.ListView's internal scroll anchor
-        # keeps the currently-visible row stable across model edits.
-        # We deliberately don't try to compute a vadj delta here: the
-        # upper bound only updates after the next allocation pass, so
-        # any synchronous adjustment would race with ListView's own
-        # repositioning and could compound into a worse jump than
-        # doing nothing.
-        store.splice(0, rows_to_drop, [])
+        # evict_front_rows splices the front AND prunes the grid's path/folder
+        # indexes for the dropped rows (so they don't pin evicted MediaRows).
+        # Gtk.ListView's internal scroll anchor keeps the currently-visible
+        # row stable across the model edit. We deliberately don't compute a
+        # vadj delta here: the upper bound only updates after the next
+        # allocation pass, so any synchronous adjustment would race with
+        # ListView's own repositioning and could compound into a worse jump.
+        self.gallery_grid.evict_front_rows(rows_to_drop)
         self.current_items = self.current_items[items_dropped:]
         self._window_start_offset += items_dropped
 
@@ -1667,7 +1674,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         tile when the thumb lands. Idempotent per path; safe to call repeatedly
         as the same tile rebinds during scrolling."""
         with self._local_thumb_lock:
-            if item_path in self._local_thumb_pending:
+            if item_path in self._local_thumb_pending or item_path in self._local_thumb_failed:
                 return
             self._local_thumb_pending.add(item_path)
             if self._local_thumb_pool is None:
@@ -1680,6 +1687,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         pool.submit(self._local_thumb_worker, item_path, media_type, category)
 
     def _local_thumb_worker(self, item_path: str, media_type: str, category: str) -> None:
+        failed = False
         try:
             thumb = self.thumbnailer.ensure_thumbnail(Path(item_path), media_type)
             if thumb:
@@ -1688,11 +1696,18 @@ class GalleryWindow(Adw.ApplicationWindow):
                 except Exception:
                     LOGGER.debug("local thumb DB write failed for %s", item_path, exc_info=True)
                 self._enqueue_thumb_update(item_path, thumb)
+            else:
+                # Decoder ran but produced nothing (unsupported/corrupt file) —
+                # remember it so rebinds don't keep re-queuing a doomed decode.
+                failed = True
         except Exception:
+            failed = True
             LOGGER.debug("local thumb generation failed for %s", item_path, exc_info=True)
         finally:
             with self._local_thumb_lock:
                 self._local_thumb_pending.discard(item_path)
+                if failed:
+                    self._local_thumb_failed.add(item_path)
 
     # ── On-demand Nextcloud thumbnail loader ──────────────────────────
     def request_nc_thumbnail(self, item_path: str) -> None:
@@ -1762,6 +1777,24 @@ class GalleryWindow(Adw.ApplicationWindow):
                 self._nc_thumb_pending.clear()
                 self._nc_thumb_queue.clear()
             return
+        # Batch the WAL commits. The UI updates immediately from
+        # _enqueue_thumb_update (in-memory), so the DB write is pure
+        # persistence — committing after *every* thumbnail (× 4 workers) was a
+        # storm of fsyncs and lock churn during a folder sync. Commit every N
+        # thumbs or once a second, and flush whatever's pending before idling.
+        uncommitted = 0
+        last_commit = time.monotonic()
+
+        def flush_commit() -> None:
+            nonlocal uncommitted, last_commit
+            if uncommitted:
+                try:
+                    self.database.commit()
+                except Exception:
+                    LOGGER.debug("NC thumb commit failed", exc_info=True)
+                uncommitted = 0
+                last_commit = time.monotonic()
+
         try:
             while True:
                 with self._nc_thumb_lock:
@@ -1774,6 +1807,7 @@ class GalleryWindow(Adw.ApplicationWindow):
                         path = None
                         self._nc_thumb_event.clear()
                 if path is None:
+                    flush_commit()  # persist the batch before we go idle
                     # Wait briefly for new work; exit if queue stays empty so we
                     # don't keep idle threads alive forever.
                     if not self._nc_thumb_event.wait(timeout=15.0):
@@ -1794,7 +1828,9 @@ class GalleryWindow(Adw.ApplicationWindow):
                 if thumb:
                     try:
                         self.database.set_thumb(path, thumb, "nextcloud")
-                        self.database.commit()
+                        uncommitted += 1
+                        if uncommitted >= 20 or time.monotonic() - last_commit >= 1.0:
+                            flush_commit()
                     except Exception:
                         LOGGER.debug("NC thumb DB write failed for %s", path, exc_info=True)
                     self._enqueue_thumb_update(path, thumb)
@@ -1802,6 +1838,8 @@ class GalleryWindow(Adw.ApplicationWindow):
             LOGGER.exception("NC thumb worker crashed")
             with self._nc_thumb_lock:
                 self._nc_thumb_active_workers = max(0, self._nc_thumb_active_workers - 1)
+        finally:
+            flush_commit()  # don't strand the last partial batch uncommitted
 
     def _open_folder(self, _button, folder: str) -> None:
         # Drop the previous folder's queued thumbnail fetches before we
@@ -2492,9 +2530,31 @@ class GalleryWindow(Adw.ApplicationWindow):
         dialog.set_default_response("close")
         dialog.present()
 
+    @staticmethod
+    def _scan_signature(s: Settings) -> tuple:
+        """The settings fields that change *which files get indexed* — folder
+        roots and the Nextcloud connection. A settings change that leaves this
+        untouched (theme, grid columns, language, sort, cache budget, …) needs
+        only a re-render, never a fresh disk + network scan."""
+        return (
+            s.photos_dir, s.pictures_dir, s.videos_dir, s.screenshots_dir,
+            tuple(s.extra_locations), tuple(s.extra_location_no_inherit),
+            s.nextcloud_url, s.nextcloud_user, s.nextcloud_photos_path,
+            s.nextcloud_enabled, s.nextcloud_thumbnail_only,
+            s.nextcloud_show_in_pictures,
+            getattr(s, "nextcloud_session_active", True),
+        )
+
     def apply_settings(self, settings: Settings) -> None:
         self._selection_mode = False
         self._selected_paths.clear()
+        # Decide BEFORE overwriting self.settings whether the change actually
+        # requires a rescan — most settings tweaks (theme, columns, language)
+        # don't, and rescanning the whole library + Nextcloud on every one of
+        # them was the dominant settings-interaction latency.
+        self._settings_needs_scan = (
+            self._scan_signature(self.settings) != self._scan_signature(settings)
+        )
         self.settings = settings
         self.settings.save()
         self.translator.language = settings.language
@@ -2561,8 +2621,10 @@ class GalleryWindow(Adw.ApplicationWindow):
             return GLib.SOURCE_REMOVE
         # Lighter changes (theme, grid columns, cache budget, NC flags …) just
         # rebuild the toolbar tree in place — no topology change, no deadlock.
+        # The disk/network scan only runs when the indexed file set actually
+        # changed; otherwise it's a pure re-render (picks up columns/sort/etc).
         self._build_ui()
-        self.refresh(scan=True)
+        self.refresh(scan=getattr(self, "_settings_needs_scan", True))
         return GLib.SOURCE_REMOVE
 
     def _recreate_window_for_layout_change(self) -> None:

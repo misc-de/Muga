@@ -83,9 +83,8 @@ class Thumbnailer:
         """
         if not items:
             return {}
-        
+
         # Default: use CPU count (good for video encoding)
-        import os
         if max_workers is None:
             max_workers = min(os.cpu_count() or 4, 8)  # Cap at 8 threads to avoid resource exhaustion
         

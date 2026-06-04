@@ -1,5 +1,5 @@
 import locale
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 TRANSLATIONS = {
@@ -522,12 +522,22 @@ def system_language() -> str:
 @dataclass
 class Translator:
     language: str = "system"
+    # Cache the resolved language so gettext() — called ~hundreds of times per
+    # UI build — doesn't re-run the locale.getlocale() lookup on every string.
+    # Recomputed only when `language` is reassigned (settings change).
+    _cached_lang: str | None = field(default=None, init=False, repr=False, compare=False)
+    _cached_active: str = field(default="en", init=False, repr=False, compare=False)
 
     @property
     def active_language(self) -> str:
-        if self.language == "system":
-            return system_language()
-        return self.language if self.language in TRANSLATIONS else "en"
+        lang = self.language
+        if lang != self._cached_lang:
+            if lang == "system":
+                self._cached_active = system_language()
+            else:
+                self._cached_active = lang if lang in TRANSLATIONS else "en"
+            self._cached_lang = lang
+        return self._cached_active
 
     def gettext(self, text: str) -> str:
         return TRANSLATIONS.get(self.active_language, TRANSLATIONS["en"]).get(text, text)

@@ -56,6 +56,20 @@ class EditorView(Gtk.Box):
                 self._original = transposed.copy()
         self._working = self._original.copy()
 
+        # Preview caches. _working only changes on crop/reset, and the chosen
+        # filter rarely; the brightness/contrast/colour sliders move
+        # constantly. So we cache the downscaled working image and the
+        # filtered-but-not-yet-adjusted preview, keyed by object identity, and
+        # only the cheap per-tick adjustments rerun on each slider step.
+        self._preview_base: "PILImage.Image | None" = None
+        self._preview_base_src: "PILImage.Image | None" = None
+        self._preview_base_dims: tuple[int, int] | None = None
+        self._filtered_base: "PILImage.Image | None" = None
+        self._filtered_base_mode: str | None = None
+        # Small square base shared by the filter/frame panel thumbnails so we
+        # don't center-crop the full-resolution image twice at editor open.
+        self._panel_base: "PILImage.Image | None" = None
+
         self._filter_mode = "none"
         self._brightness = 1.0
         self._contrast = 1.0
@@ -341,14 +355,27 @@ class EditorView(Gtk.Box):
 
     # ── Panel builders ──
 
+    def _square_panel_base(self, px: int) -> "PILImage.Image":
+        """A small square RGB thumbnail of the working image for panel previews.
+
+        Built once from a cheap downscale (never the full-resolution center
+        crop the filter and frame panels each used to do at editor open), then
+        resized to the requested edge for each caller."""
+        if self._panel_base is None:
+            big = self._working.copy()
+            big.thumbnail((256, 256), PILImage.BILINEAR)
+            bw, bh = big.size
+            side = min(bw, bh)
+            self._panel_base = big.crop(
+                ((bw - side) // 2, (bh - side) // 2,
+                 (bw + side) // 2, (bh + side) // 2)
+            ).convert("RGB")
+        return self._panel_base.resize((px, px), PILImage.BILINEAR)
+
     def _build_panel_filter(self) -> Gtk.Widget:
-        # Build a square 72-px center-crop thumbnail from the working image once
-        iw, ih = self._working.size
-        side = min(iw, ih)
-        base = self._working.crop(
-            ((iw - side) // 2, (ih - side) // 2,
-             (iw + side) // 2, (ih + side) // 2)
-        ).resize((72, 72), PILImage.BILINEAR).convert("RGB")
+        # Square thumbnail shared with the frame panel — cheap downscale, not a
+        # full-resolution center crop.
+        base = self._square_panel_base(72)
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
@@ -479,12 +506,7 @@ class EditorView(Gtk.Box):
         rahmen_row.set_margin_top(5);   rahmen_row.set_margin_bottom(5)
         self._frame_btns: dict[str, Gtk.ToggleButton] = {}
         self._frame_hids: dict[str, int] = {}
-        iw, ih = self._working.size
-        side = min(iw, ih)
-        thumb_base = self._working.crop(
-            ((iw - side) // 2, (ih - side) // 2,
-             (iw + side) // 2, (ih + side) // 2)
-        ).resize((64, 64), PILImage.BILINEAR).convert("RGB")
+        thumb_base = self._square_panel_base(64)
         # "Ohne Rahmen" button as first option
         none_tex = _pil_to_texture(thumb_base.copy())
         none_pic = Gtk.Picture()
@@ -792,6 +814,7 @@ class EditorView(Gtk.Box):
         if self._pending_crop:
             self._snapshot_state()  # Save state before crop
             self._working = self._working.crop(self._pending_crop)
+            self._panel_base = None  # working changed → rebuild panel thumbs from it
             self._pending_crop = None
             self._crop_start = self._crop_current = None
             self._crop_rect_disp = None
@@ -803,6 +826,7 @@ class EditorView(Gtk.Box):
     def _reset_working(self, _btn: Gtk.Button) -> None:
         self._snapshot_state()  # Save current state before full reset
         self._working = self._original.copy()
+        self._panel_base = None  # working changed → rebuild panel thumbs from it
         self._pending_crop = None
         self._crop_start = self._crop_current = None
         self._crop_rect_disp = None
@@ -1174,11 +1198,20 @@ class EditorView(Gtk.Box):
     # Image processing
     # ------------------------------------------------------------------
 
-    def _apply_edits(self, img: "PILImage.Image") -> "PILImage.Image":
-        result = img.convert("RGB")
+    def _apply_filter_only(self, img: "PILImage.Image") -> "PILImage.Image":
+        """Just the colour-filter stage of the pipeline (the slow part that
+        only depends on the filter choice, not the adjustment sliders)."""
+        result = img if img.mode == "RGB" else img.convert("RGB")
         fn = next((f for k, _l, f in _FILTER_DEFS if k == self._filter_mode and f), None)
-        if fn:
-            result = fn(result)
+        return fn(result) if callable(fn) else result
+
+    def _apply_edits(self, img: "PILImage.Image", apply_filter: bool = True) -> "PILImage.Image":
+        # Avoid a needless full-image copy when already RGB.
+        result = img if img.mode == "RGB" else img.convert("RGB")
+        if apply_filter:
+            fn = next((f for k, _l, f in _FILTER_DEFS if k == self._filter_mode and f), None)
+            if fn:
+                result = fn(result)
         result = ImageEnhance.Brightness(result).enhance(self._brightness)
         result = ImageEnhance.Contrast(result).enhance(self._contrast)
         if not (self._red == self._green == self._blue == 1.0):
@@ -1213,7 +1246,8 @@ class EditorView(Gtk.Box):
                 r = max(4, int(rel_r * min(iw2, ih2)))
                 obf_draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
             obf_mask = obf_mask.filter(ImageFilter.GaussianBlur(radius=6))
-            result = PILImage.composite(blurred.convert("RGB"), result.convert("RGB"), obf_mask)
+            # blurred and result are both already RGB here — no convert needed.
+            result = PILImage.composite(blurred, result, obf_mask)
         if self._frame_theme is not None:
             iw, ih = result.size
             frame = _frame_pil(iw, ih, self._frame_theme)
@@ -1246,10 +1280,30 @@ class EditorView(Gtk.Box):
         self._update_id = None
         pw = self._preview.get_width() or 800
         ph = self._preview.get_height() or 600
-        # Downscale working copy first so _apply_edits operates on a small image
-        thumb = self._working.copy()
-        thumb.thumbnail((pw * 2, ph * 2), PILImage.BILINEAR)
-        img = self._apply_edits(thumb)
+        # Target the *device* pixel size (logical size × scale factor) — the old
+        # hard-coded ×2 was a HiDPI guess that quadrupled the work on 1× screens.
+        scale = self._preview.get_scale_factor() or 1
+        tw, th = pw * scale, ph * scale
+        # The downscaled working image only changes on crop/reset and resize,
+        # not when a slider moves — cache it so each tick stops re-copying and
+        # re-thumbnailing the full-resolution working image.
+        if self._preview_base_src is not self._working or self._preview_base_dims != (tw, th):
+            base = self._working.copy()
+            base.thumbnail((tw, th), PILImage.BILINEAR)
+            self._preview_base = base
+            self._preview_base_src = self._working
+            self._preview_base_dims = (tw, th)
+            self._filtered_base = None
+        pbase = self._preview_base
+        if pbase is None:
+            return GLib.SOURCE_REMOVE
+        # The colour filter only depends on the base + filter choice, so cache
+        # its output and let the cheap brightness/contrast/colour stages rerun
+        # on top of it for every slider step.
+        if self._filtered_base is None or self._filtered_base_mode != self._filter_mode:
+            self._filtered_base = self._apply_filter_only(pbase)
+            self._filtered_base_mode = self._filter_mode
+        img = self._apply_edits(self._filtered_base, apply_filter=False)
         self._preview.set_paintable(_pil_to_texture(img))
         self._draw_area.queue_draw()
         return GLib.SOURCE_REMOVE
@@ -1275,9 +1329,15 @@ class EditorView(Gtk.Box):
                 LOGGER.debug("history-changed callback raised", exc_info=True)
 
     def _capture_state(self) -> dict:
-        """Snapshot every field that affects the rendered image."""
+        """Snapshot every field that affects the rendered image.
+
+        ``_working`` is shared by reference, not copied: nothing ever mutates a
+        working image in place — crop/reset/restore reassign ``self._working``
+        to a brand-new object — so a snapshot can safely hold the old one. This
+        turns a full-resolution image copy (tens of MB) per history step into a
+        pointer copy; distinct images are only retained across actual crops."""
         return {
-            "working": self._working.copy(),
+            "working": self._working,
             "filter_mode": self._filter_mode,
             "brightness": self._brightness,
             "contrast": self._contrast,

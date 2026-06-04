@@ -17,6 +17,16 @@ LOGGER = logging.getLogger(__name__)
 _THUMB_CHUNK = 64
 # Cap pool width so a phone with many cores doesn't thrash on RAM/IO.
 _THUMB_WORKERS = min(os.cpu_count() or 4, 8)
+# Commit roughly every this many thumbnail chunks during a long local scan.
+# Bounds WAL growth (a single end-of-scan commit lets it balloon on a 50k-file
+# first scan) and gives the main thread a clean read window between commits.
+_COMMIT_EVERY_CHUNKS = 16
+# How many unchanged files to accumulate before flushing a seen_at touch.
+_TOUCH_BATCH = 512
+# An mtime read back from SQLite (REAL) round-trips a Python float losslessly,
+# but allow a hair of slack so a sub-microsecond representation wobble never
+# forces a needless re-decode.
+_MTIME_EPS = 1e-6
 
 
 class MediaScanner:
@@ -74,49 +84,63 @@ class MediaScanner:
             LOGGER.info("%s: durchsuche %s …", category, root)
             file_count = 0
             thumb_new = 0
+            skipped = 0
+            # Snapshot of what's already indexed for this category: lets us
+            # skip files whose mtime+size are unchanged — no re-decode, no row
+            # rewrite, just a cheap seen_at touch so prune_missing spares them.
+            index = self.database.load_scan_index(category)
+            touch_batch: list[str] = []
             # Decoding thumbnails is the dominant cost of a first scan and is
             # independent per file, so we generate them a chunk at a time on a
             # thread pool. DB writes stay on this thread; chunking bounds memory
             # and keeps results landing progressively for the UI.
-            chunk: list[tuple[Path, str, str, bool]] = []
-            for path in root.rglob("*"):
-                # Skip symlinks to prevent infinite loops and unexpected behavior
-                if path.is_symlink():
-                    LOGGER.debug("Skipping symlink: %s", path)
-                    continue
-
-                if not path.is_file():
-                    continue
-
-                if skip_prefixes:
-                    if any(
-                        path == sp or sp in path.parents
-                        for sp in skip_prefixes
-                    ):
-                        continue
-
-                try:
-                    path.stat()
-                except (OSError, ValueError):
-                    # If we can't stat the file, skip it (permission denied,
-                    # removed while scanning, broken filesystem entry, etc.).
-                    LOGGER.debug("Skipping path that cannot be stat'd: %s", path)
-                    continue
-
+            chunk: list[tuple[Path, str, str, bool, os.stat_result]] = []
+            chunks_since_commit = 0
+            for path, st in self._iter_media_files(root, skip_prefixes):
                 media_type = media_type_for(path)
                 if not media_type:
                     continue
                 file_count += 1
+                prev = index.get(str(path))
+                thumb_file = self.thumbnailer.thumb_path_for(path)
+                thumb_exists = thumb_file.exists()
+                unchanged = (
+                    prev is not None
+                    and abs(prev[0] - st.st_mtime) <= _MTIME_EPS
+                    and prev[1] == st.st_size
+                )
+                if unchanged and thumb_exists:
+                    # Nothing to do but keep the row alive past prune_missing.
+                    skipped += 1
+                    touch_batch.append(str(path))
+                    if len(touch_batch) >= _TOUCH_BATCH:
+                        self.database.touch_seen(touch_batch, category)
+                        touch_batch = []
+                    continue
+                if prev is not None and not unchanged and thumb_exists:
+                    # File changed in place. thumb_path_for keys on the *path*,
+                    # so the cached thumbnail is now stale — drop it so the
+                    # decode below regenerates it instead of serving the old one.
+                    try:
+                        thumb_file.unlink()
+                    except OSError:
+                        pass
+                    thumb_exists = False
                 folder = self._relative_folder(root, path.parent)
-                need_thumb = not self.thumbnailer.thumb_path_for(path).exists()
-                chunk.append((path, media_type, folder, need_thumb))
+                chunk.append((path, media_type, folder, not thumb_exists, st))
                 if len(chunk) >= _THUMB_CHUNK:
                     thumb_new += self._flush_thumb_chunk(chunk, category)
                     chunk = []
+                    chunks_since_commit += 1
+                    if chunks_since_commit >= _COMMIT_EVERY_CHUNKS:
+                        self.database.commit()
+                        chunks_since_commit = 0
             thumb_new += self._flush_thumb_chunk(chunk, category)
+            if touch_batch:
+                self.database.touch_seen(touch_batch, category)
             LOGGER.info(
-                "%s: %d Dateien, %d neue Thumbnails (%.1fs)",
-                category, file_count, thumb_new, time.time() - cat_start,
+                "%s: %d Dateien (%d unverändert übersprungen), %d neue Thumbnails (%.1fs)",
+                category, file_count, skipped, thumb_new, time.time() - cat_start,
             )
 
         db_start = time.time()
@@ -164,8 +188,50 @@ class MediaScanner:
         parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
         return parent if parent else "/"
 
+    def _iter_media_files(self, root: Path, skip_prefixes: list[Path]):
+        """Yield ``(Path, os.stat_result)`` for every non-symlink file under
+        *root*, depth-first.
+
+        Uses ``os.scandir`` so each entry's type and stat come from a single
+        directory read: on Linux ``d_type`` answers is_symlink/is_dir/is_file
+        without a syscall, and ``entry.stat()`` is the one stat we then hand to
+        ``upsert_media`` so it doesn't stat the same file a second time.
+        ``Path.rglob`` plus the old per-file is_symlink/is_file/stat calls cost
+        three-to-four syscalls per file — a real tax on SD-card libraries."""
+        stack = [str(root)]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    entries = list(it)
+            except OSError:
+                continue
+            for entry in entries:
+                try:
+                    if entry.is_symlink():
+                        LOGGER.debug("Skipping symlink: %s", entry.path)
+                        continue
+                    if entry.is_dir():
+                        dpath = Path(entry.path)
+                        # Don't descend into a no-inherit subtree — it's scanned
+                        # under its own category elsewhere.
+                        if skip_prefixes and any(
+                            dpath == sp or sp in dpath.parents for sp in skip_prefixes
+                        ):
+                            continue
+                        stack.append(entry.path)
+                        continue
+                    if not entry.is_file():
+                        continue
+                    st = entry.stat()
+                except OSError:
+                    # Permission denied, vanished mid-scan, broken entry, …
+                    LOGGER.debug("Skipping path that cannot be stat'd: %s", entry.path)
+                    continue
+                yield Path(entry.path), st
+
     def _flush_thumb_chunk(
-        self, chunk: list[tuple[Path, str, str, bool]], category: str,
+        self, chunk: list[tuple[Path, str, str, bool, os.stat_result]], category: str,
     ) -> int:
         """Generate thumbnails for *chunk*, then upsert each row. Returns the
         number of newly-created thumbnails.
@@ -175,10 +241,11 @@ class MediaScanner:
         ``ensure_thumbnail`` just returns the cached path, so a serial pass is
         cheaper than spinning up workers. The DB writes always stay on this
         (the scanner) thread, preserving the existing single-writer model and
-        the rglob discovery order."""
+        discovery order. The stat captured during the walk is threaded through
+        to upsert_media so the row write doesn't re-stat the file."""
         if not chunk:
             return 0
-        new_needed = sum(1 for _p, _t, _f, need in chunk if need)
+        new_needed = sum(1 for row in chunk if row[3])
         if new_needed >= 2:
             workers = min(new_needed, _THUMB_WORKERS)
             with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -189,15 +256,15 @@ class MediaScanner:
         else:
             thumbs = [
                 self.thumbnailer.ensure_thumbnail(path, media_type)
-                for path, media_type, _folder, _need in chunk
+                for path, media_type, _folder, _need, _st in chunk
             ]
         thumb_new = 0
-        for (path, media_type, folder, need_thumb), thumb in zip(chunk, thumbs):
+        for (path, media_type, folder, need_thumb, st), thumb in zip(chunk, thumbs):
             if need_thumb and thumb:
                 thumb_new += 1
             self.database.upsert_media(
                 path=path, category=category, media_type=media_type,
-                folder=folder, thumb_path=thumb,
+                folder=folder, thumb_path=thumb, stat=st,
             )
         return thumb_new
 

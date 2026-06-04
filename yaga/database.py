@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -66,26 +67,30 @@ ALTER TABLE media ADD COLUMN exif_data TEXT DEFAULT NULL;
 PRAGMA user_version = 2;
 """
 
-# v3 introduces an FTS5 trigram index over `media.name`. Trigram preserves
-# the substring-match UX users expect ("ach" still finds "Bachstrasse"),
-# while turning a full-table LIKE scan into an index probe — the dominant
-# cost on libraries with >10k items, masked today by the search debounce.
-# Stored as an external-content shadow table; AFTER triggers keep it in
-# sync with media without code-side bookkeeping.
+# v3 introduced an FTS5 trigram index over `media.name`; v6 widened it to
+# also cover `media.exif_data` so an EXIF substring search is an index probe
+# instead of the full-table `LIKE '%q%'` scan over a JSON blob it used to be
+# (the dominant search cost on libraries with EXIF cached for many items).
+# Trigram preserves the substring-match UX users expect ("ach" still finds
+# "Bachstrasse"). Stored as an external-content shadow table; AFTER triggers
+# keep it in sync with media without code-side bookkeeping. The UPDATE
+# trigger fires only when an indexed column (name / exif_data) is assigned,
+# so the scanner's frequent seen_at/thumb_path/mtime touch-ups don't churn
+# the index.
 _FTS_CREATE_SQL = (
     "CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5("
-    "name, content='media', content_rowid='id', tokenize='trigram')"
+    "name, exif_data, content='media', content_rowid='id', tokenize='trigram')"
 )
 _FTS_TRIGGERS_SQL = """
 CREATE TRIGGER IF NOT EXISTS media_ai AFTER INSERT ON media BEGIN
-    INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
+    INSERT INTO media_fts(rowid, name, exif_data) VALUES (new.id, new.name, new.exif_data);
 END;
 CREATE TRIGGER IF NOT EXISTS media_ad AFTER DELETE ON media BEGIN
-    INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
+    INSERT INTO media_fts(media_fts, rowid, name, exif_data) VALUES('delete', old.id, old.name, old.exif_data);
 END;
-CREATE TRIGGER IF NOT EXISTS media_au AFTER UPDATE ON media BEGIN
-    INSERT INTO media_fts(media_fts, rowid, name) VALUES('delete', old.id, old.name);
-    INSERT INTO media_fts(rowid, name) VALUES (new.id, new.name);
+CREATE TRIGGER IF NOT EXISTS media_au AFTER UPDATE OF name, exif_data ON media BEGIN
+    INSERT INTO media_fts(media_fts, rowid, name, exif_data) VALUES('delete', old.id, old.name, old.exif_data);
+    INSERT INTO media_fts(rowid, name, exif_data) VALUES (new.id, new.name, new.exif_data);
 END;
 """
 
@@ -101,6 +106,12 @@ PRAGMA user_version = 5;
 
 
 class Database:
+    # Columns _row_to_item actually reads. Listing them explicitly keeps the
+    # big `exif_data` TEXT blob out of every list/search/lookup result set —
+    # it's never used to build a MediaItem and only fetched on demand via
+    # get_exif_data, so `SELECT *` was hauling it across the lock for nothing.
+    _ITEM_COLS = "id, path, category, media_type, folder, name, mtime, size, thumb_path"
+
     def __init__(self, path: Path = DB_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = path
@@ -131,6 +142,11 @@ class Database:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA temp_store=MEMORY")
+        # ~16 MB page cache (negative = KiB). The default ~2 MB forces the big
+        # ORDER BY mtime sorts (folder navigation, library-wide listings) to
+        # spill to disk; 16 MB keeps the working set resident on phone-sized
+        # libraries for a noticeable win on those queries.
+        conn.execute("PRAGMA cache_size=-16000")
         # 5 s busy timeout so concurrent writers wait at the SQLite layer
         # instead of raising OperationalError("database is locked").
         conn.execute("PRAGMA busy_timeout=5000")
@@ -175,8 +191,24 @@ class Database:
             except sqlite3.OperationalError:
                 # Column already exists
                 pass
-        # FTS5 trigram index for substring search on `name`. Behind a
-        # try/except because older SQLite builds (or builds compiled
+        # v6 widens the FTS index from (name) to (name, exif_data). A DB built
+        # before v6 has the old single-column shadow table + triggers; drop
+        # them so the setup block below rebuilds the two-column index from
+        # scratch. (Fresh DBs never enter here — they build the new schema
+        # directly.) Idempotent: gated on user_version, runs once.
+        if version < 6:
+            try:
+                self.conn.executescript(
+                    "DROP TRIGGER IF EXISTS media_ai;"
+                    "DROP TRIGGER IF EXISTS media_ad;"
+                    "DROP TRIGGER IF EXISTS media_au;"
+                    "DROP TABLE IF EXISTS media_fts;"
+                )
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
+        # FTS5 trigram index for substring search on `name` + `exif_data`.
+        # Behind a try/except because older SQLite builds (or builds compiled
         # without FTS5/trigram) would otherwise refuse to open the DB.
         # Search falls back to LIKE when the table isn't there.
         self._has_fts = False
@@ -232,9 +264,48 @@ class Database:
                 self.conn.commit()
             except sqlite3.OperationalError as exc:
                 LOGGER.warning("Could not create media performance indexes: %s", exc)
+        if version < 6:
+            # The two-column FTS index (built above, if available) is now in
+            # place; pin the schema version so the drop/rebuild above runs at
+            # most once. Done even when FTS is unavailable — the version only
+            # records that the migration step was reached.
+            self.conn.execute("PRAGMA user_version = 6")
+            self.conn.commit()
 
-    def upsert_media(self, *, path: Path, category: str, media_type: str, folder: str, thumb_path: str | None) -> None:
-        stat = path.stat()
+    def load_scan_index(self, category: str) -> dict[str, tuple[float, int]]:
+        """Return ``{path: (mtime, size)}`` for every row in *category*.
+
+        The scanner uses this to skip files whose mtime+size are unchanged
+        since the last sweep: an unchanged file needs neither a re-decode nor
+        a row rewrite (the latter would also pointlessly fire the FTS update
+        trigger). Keyed by path because that's the scanner's per-file lookup."""
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT path, mtime, size FROM media WHERE category = ?", (category,)
+            ).fetchall()
+        return {row["path"]: (row["mtime"], row["size"]) for row in rows}
+
+    def touch_seen(self, paths: list[str], category: str) -> None:
+        """Bump ``seen_at`` for *paths* without rewriting any indexed column.
+
+        Unchanged files still have to survive ``prune_missing`` (which deletes
+        rows with ``seen_at < scan_start``), but they don't need a full upsert.
+        This batched UPDATE touches only ``seen_at`` so the ``AFTER UPDATE OF
+        name, exif_data`` FTS trigger stays dormant — the whole point of the
+        scanner's skip path is to avoid that churn."""
+        if not paths:
+            return
+        now = time.time()
+        with self.lock:
+            self.conn.executemany(
+                "UPDATE media SET seen_at = ? WHERE path = ? AND category = ?",
+                [(now, p, category) for p in paths],
+            )
+
+    def upsert_media(self, *, path: Path, category: str, media_type: str, folder: str,
+                     thumb_path: str | None, stat: os.stat_result | None = None) -> None:
+        if stat is None:
+            stat = path.stat()
         with self.lock:
             self.conn.execute(
                 """
@@ -307,14 +378,14 @@ class Database:
             return 0
         placeholders = ",".join("?" for _category in categories)
         with self.lock:
+            # DELETE … RETURNING evaluates the (un-indexed) seen_at predicate
+            # once instead of twice — the old SELECT-then-DELETE ran it back to
+            # back. SQLite ≥ 3.35 (we require far newer) supports RETURNING.
             stale = self.conn.execute(
-                f"SELECT thumb_path FROM media WHERE seen_at < ? AND category IN ({placeholders})",
+                f"DELETE FROM media WHERE seen_at < ? AND category IN ({placeholders}) "
+                "RETURNING thumb_path",
                 [seen_since, *categories],
             ).fetchall()
-            self.conn.execute(
-                f"DELETE FROM media WHERE seen_at < ? AND category IN ({placeholders})",
-                [seen_since, *categories],
-            )
         for row in stale:
             thumb = row["thumb_path"]
             if thumb:
@@ -418,7 +489,9 @@ class Database:
         }.get(sort_mode, "mtime DESC")
         where, args = self._build_list_where(category, folder, include_nc, media_filter)
         with self.lock:
-            rows = self.conn.execute(f"SELECT * FROM media WHERE {where} ORDER BY {order}", args).fetchall()
+            rows = self.conn.execute(
+                f"SELECT {self._ITEM_COLS} FROM media WHERE {where} ORDER BY {order}", args
+            ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
     def count_media(self, category: str, folder: str | None = None, include_nc: bool = False,
@@ -458,12 +531,13 @@ class Database:
         clauses: list[str] = []
         args: list = []
         like = f"%{q}%"
-        # Filename. With the FTS5 trigram index this is an index probe
-        # instead of a full-table LIKE scan; fall back to LIKE when the
-        # index isn't there or the query is too short for trigram (it
-        # tokenises as 3-grams and silently returns no rows for 1-2 char
-        # queries — substring LIKE preserves the user's mental model in
-        # those edge cases).
+        # Filename + EXIF. With the FTS5 trigram index a single MATCH probes
+        # both the `name` and `exif_data` columns, so it replaces *both* the
+        # old full-table `name LIKE` scan and the even more expensive
+        # `exif_data LIKE '%q%'` blob scan. Fall back to LIKE when the index
+        # isn't there or the query is too short for trigram (it tokenises as
+        # 3-grams and silently returns no rows for 1-2 char queries —
+        # substring LIKE preserves the user's mental model in those edges).
         if getattr(self, "_has_fts", False) and len(q) >= 3:
             # Wrap in double quotes so FTS5 special syntax (`OR`, `NEAR`,
             # parentheses, …) inside a filename can't be reinterpreted as
@@ -477,11 +551,13 @@ class Database:
         else:
             clauses.append("name LIKE ? COLLATE NOCASE")
             args.append(like)
-        # EXIF blob — LIKE on a JSON text column is a full-table scan; only
-        # bother when the user has typed enough that a hit is realistic.
-        if len(q) >= 3:
-            clauses.append("exif_data LIKE ?")
-            args.append(like)
+            # No FTS index to lean on: keep EXIF searchable via a (full-scan)
+            # LIKE, but only once the query is long enough for a hit to be
+            # realistic. With FTS present this is unnecessary — the MATCH
+            # above already covers exif_data.
+            if len(q) >= 3:
+                clauses.append("exif_data LIKE ?")
+                args.append(like)
         # Year (4-digit number anywhere in the query).
         ym = re.search(r"(\d{4})[-/.](\d{1,2})", q)
         if ym:
@@ -545,7 +621,7 @@ class Database:
         search_where, search_args = self._build_search_clause(query)
         full_where = f"({base_where}) AND {search_where}"
         args.extend(search_args)
-        sql = f"SELECT * FROM media WHERE {full_where} ORDER BY {order}"
+        sql = f"SELECT {self._ITEM_COLS} FROM media WHERE {full_where} ORDER BY {order}"
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
             args.extend([int(limit), int(offset)])
@@ -571,7 +647,7 @@ class Database:
         args.extend([limit, offset])
         with self.lock:
             rows = self.conn.execute(
-                f"SELECT * FROM media WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?", args
+                f"SELECT {self._ITEM_COLS} FROM media WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?", args
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
@@ -579,10 +655,12 @@ class Database:
         with self.lock:
             if category is not None:
                 row = self.conn.execute(
-                    "SELECT * FROM media WHERE path = ? AND category = ?", (path, category)
+                    f"SELECT {self._ITEM_COLS} FROM media WHERE path = ? AND category = ?", (path, category)
                 ).fetchone()
             else:
-                row = self.conn.execute("SELECT * FROM media WHERE path = ?", (path,)).fetchone()
+                row = self.conn.execute(
+                    f"SELECT {self._ITEM_COLS} FROM media WHERE path = ?", (path,)
+                ).fetchone()
         return self._row_to_item(row) if row else None
 
     def folders(self, category: str) -> list[tuple[str, int, str | None]]:
@@ -599,57 +677,92 @@ class Database:
             ).fetchall()
         return [(row["folder"], row["count"], row["thumb"]) for row in rows]
 
+    @staticmethod
+    def _child_segment(folder: str, parent: str | None, parent_prefix: str) -> str | None:
+        """Map a stored *folder* to the direct child of *parent* it falls under
+        (e.g. parent ``Trips`` + folder ``Trips/Berlin/Mitte`` → ``Trips/Berlin``),
+        or ``None`` when *folder* isn't a descendant of *parent*."""
+        if folder == "/":
+            return None
+        if parent in (None, "/"):
+            remainder = folder
+        elif folder.startswith(parent_prefix):
+            remainder = folder[len(parent_prefix):]
+        else:
+            return None
+        # Empty remainders (stray trailing slashes) have no child segment.
+        if not remainder:
+            return None
+        child_name = remainder.split("/", 1)[0]
+        return child_name if parent in (None, "/") else f"{parent}/{child_name}"
+
     def child_folders(self, category: str, parent: str | None,
                       media_filter: str | None = None) -> list[tuple[str, int, list]]:
+        params: tuple[str, ...]
         if category == "videos":
-            sql = "SELECT folder, thumb_path FROM media WHERE media_type = 'video' ORDER BY mtime DESC"
-            params: tuple = ()
+            where, params = "media_type = 'video'", ()
         elif category == "pictures":
             # Overview aggregator — union across every local category.
+            base = "category NOT IN ('pictures', 'nextcloud')"
             if media_filter == "videos":
-                sql = "SELECT folder, thumb_path FROM media WHERE category NOT IN ('pictures', 'nextcloud') AND media_type = 'video' ORDER BY mtime DESC"
+                where = f"{base} AND media_type = 'video'"
             elif media_filter == "both":
-                sql = "SELECT folder, thumb_path FROM media WHERE category NOT IN ('pictures', 'nextcloud') ORDER BY mtime DESC"
+                where = base
             else:
-                sql = "SELECT folder, thumb_path FROM media WHERE category NOT IN ('pictures', 'nextcloud') AND media_type = 'image' ORDER BY mtime DESC"
+                where = f"{base} AND media_type = 'image'"
             params = ()
         elif media_filter == "videos":
-            sql = "SELECT folder, thumb_path FROM media WHERE category = ? AND media_type = 'video' ORDER BY mtime DESC"
-            params = (category,)
+            where, params = "category = ? AND media_type = 'video'", (category,)
         elif media_filter == "both":
-            sql = "SELECT folder, thumb_path FROM media WHERE category = ? ORDER BY mtime DESC"
-            params = (category,)
+            where, params = "category = ?", (category,)
         else:
-            sql = "SELECT folder, thumb_path FROM media WHERE category = ? AND media_type = 'image' ORDER BY mtime DESC"
-            params = (category,)
-        with self.lock:
-            rows = self.conn.execute(sql, params).fetchall()
-        children: dict[str, tuple[int, list]] = {}
+            where, params = "category = ? AND media_type = 'image'", (category,)
+
         parent_prefix = "" if parent in (None, "/") else f"{parent}/"
-        for row in rows:
-            folder = row["folder"]
-            if folder == "/":
-                continue
-            if parent in (None, "/"):
-                remainder = folder
-            elif folder.startswith(parent_prefix):
-                remainder = folder[len(parent_prefix):]
-            else:
-                continue
-            # Skip empty remainders (stray trailing slashes). The previous
-            # `"/" not in remainder and folder == parent` clause was dead
-            # after the startswith check — parent_prefix is parent + "/",
-            # so a remainder ever existing implies folder != parent.
-            if not remainder:
-                continue
-            child_name = remainder.split("/", 1)[0]
-            child_path = child_name if parent in (None, "/") else f"{parent}/{child_name}"
-            count, thumbs = children.get(child_path, (0, []))
-            t = row["thumb_path"]
-            if t and t not in thumbs and len(thumbs) < 4:
-                thumbs = thumbs + [t]
-            children[child_path] = (count + 1, thumbs)
-        return [(f, c, t) for f, (c, t) in sorted(children.items(), key=lambda x: x[0].lower())]
+        # Counts come from an aggregate GROUP BY — one row per folder instead
+        # of one Python object per *file*, which is what the old single-query
+        # form materialised across the whole category.
+        with self.lock:
+            count_rows = self.conn.execute(
+                f"SELECT folder, COUNT(*) AS n FROM media WHERE {where} GROUP BY folder", params
+            ).fetchall()
+        counts: dict[str, int] = {}
+        for row in count_rows:
+            child = self._child_segment(row["folder"], parent, parent_prefix)
+            if child is not None:
+                counts[child] = counts.get(child, 0) + row["n"]
+        if not counts:
+            return []
+
+        # Up to 4 preview thumbs per child, newest first. Only non-null thumbs
+        # matter, and we can stop the moment every child has its four — on a
+        # library where folders are well-populated that bails out long before
+        # scanning the whole category.
+        thumbs: dict[str, list] = {child: [] for child in counts}
+        satisfied = 0
+        with self.lock:
+            cur = self.conn.execute(
+                f"SELECT folder, thumb_path FROM media "
+                f"WHERE ({where}) AND thumb_path IS NOT NULL ORDER BY mtime DESC", params
+            )
+            for row in cur:
+                child = self._child_segment(row["folder"], parent, parent_prefix)
+                if child is None:
+                    continue
+                bucket = thumbs.get(child)
+                if bucket is None or len(bucket) >= 4:
+                    continue
+                t = row["thumb_path"]
+                if t not in bucket:
+                    bucket.append(t)
+                    if len(bucket) == 4:
+                        satisfied += 1
+                        if satisfied == len(counts):
+                            break
+        return [
+            (child, counts[child], thumbs[child])
+            for child in sorted(counts, key=str.lower)
+        ]
 
     def delete_path(self, path: str, category: str | None = None) -> None:
         with self.lock:

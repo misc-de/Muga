@@ -32,7 +32,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         # GLib.idle_add; if the user closed Settings meanwhile, those callbacks
         # must not touch the now-defunct widget tree.
         self._closing = False
-        self.connect("destroy", lambda _w: setattr(self, "_closing", True))
+        # Debounce id for the grid-columns SpinRow — see _columns_changed.
+        self._columns_debounce_id = 0
+        self.connect("destroy", self._on_destroy)
         self._build()
         if initial_page:
             # Switch to the named page (e.g. after a nav-position change
@@ -1089,9 +1091,26 @@ class SettingsWindow(Adw.PreferencesWindow):
         dialog.present(self)
         GLib.idle_add(lambda: (entry.grab_focus(), GLib.SOURCE_REMOVE)[1])
 
+    def _on_destroy(self, _w) -> None:
+        self._closing = True
+        if self._columns_debounce_id:
+            GLib.source_remove(self._columns_debounce_id)
+            self._columns_debounce_id = 0
+
     def _columns_changed(self, row: Adw.SpinRow, _param) -> None:
+        # notify::value fires on every step while the user holds the +/- button
+        # (or drags). Debounce so we persist (an fsync via Settings.save) and
+        # re-render once the value settles, not on every intermediate value.
         self.settings.grid_columns = int(row.get_value())
-        self.parent_window.apply_settings(self.settings)
+        if self._columns_debounce_id:
+            GLib.source_remove(self._columns_debounce_id)
+        self._columns_debounce_id = GLib.timeout_add(250, self._apply_columns_debounced)
+
+    def _apply_columns_debounced(self) -> bool:
+        self._columns_debounce_id = 0
+        if not self._closing:
+            self.parent_window.apply_settings(self.settings)
+        return GLib.SOURCE_REMOVE
 
     def _cache_max_mb_changed(self, row: Adw.SpinRow, _param) -> None:
         value = int(row.get_value())

@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import collections
 import dataclasses
+import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("GdkPixbuf", "2.0")
 
-from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk, Pango
+
+LOGGER = logging.getLogger(__name__)
 
 from .models import MediaItem
 from .nextcloud import is_nc_path
@@ -119,9 +125,39 @@ class GalleryGrid(Gtk.Overlay):
         # TTL — long enough to coalesce a single layout/scroll burst, short
         # enough that newly-arrived thumbs and evictions are picked up by
         # the next bind without explicit invalidation.
-        self._exists_cache: dict[str, tuple[float, bool]] = {}
+        self._exists_cache: collections.OrderedDict[str, tuple[float, bool]] = collections.OrderedDict()
         self._EXISTS_TTL = 5.0
         self._EXISTS_CACHE_MAX = 4096
+
+        # Decoded-thumbnail cache. Gtk.Picture.set_filename() decodes the JPEG
+        # synchronously on the UI thread on every bind — the dominant scroll
+        # latency. Instead we decode each thumbnail file to a Gdk.Texture once,
+        # off the main loop, into this LRU and hand the cached paintable to the
+        # picture on subsequent binds (zero I/O). Keyed by thumbnail path.
+        self._texture_cache: collections.OrderedDict[str, Gdk.Texture] = collections.OrderedDict()
+        self._TEXTURE_CACHE_MAX = 512
+        # Thumbnail paths whose decode is in flight → the Gtk.Pictures waiting
+        # for the result. Dedupes concurrent decodes of the same file and lets
+        # one decode fan out to every visible tile showing that thumbnail.
+        self._texture_waiters: dict[str, list[Gtk.Picture]] = {}
+        # Thumbnail paths whose decode failed (missing/corrupt) — don't retry
+        # them on every rebind. Cleared per-path when a fresh thumb arrives.
+        self._failed_textures: set[str] = set()
+        self._decode_pool: ThreadPoolExecutor | None = None
+        # Placeholder icons shown while a thumbnail decodes / when none exists.
+        # Looked up once (symbolic icons recolour for dark/light at draw time,
+        # so one paintable is correct in both themes) instead of per tile bind.
+        self._placeholder_generic: Gdk.Paintable | None = None
+        self._placeholder_folder: Gdk.Paintable | None = None
+
+        # O(1) thumbnail-update lookup: path → its MediaRow, folder → its
+        # MediaRow. Replaces the old O(n_rows × cols) store scan that ran on
+        # every thumb arrival (quadratic during a Nextcloud sync storm).
+        # Kept in step with the store by append_*/clear/evict_front_rows.
+        self._item_index: dict[str, MediaRow] = {}
+        self._folder_index: dict[str, MediaRow] = {}
+
+        self.connect("unrealize", self._on_unrealize)
 
         # Currently-bound list items, tracked so refresh_selection_state can
         # reach into the live widgets and re-run _bind_tile on each. Going
@@ -199,6 +235,8 @@ class GalleryGrid(Gtk.Overlay):
     def clear(self) -> None:
         self.row_store.remove_all()
         self._building_row = []
+        self._item_index.clear()
+        self._folder_index.clear()
         self.empty_label.set_visible(False)
 
     def finish(self) -> None:
@@ -206,14 +244,43 @@ class GalleryGrid(Gtk.Overlay):
         self._flush_tile_row()
 
     def append_folder(self, folder: str, count: int, thumbs: list[str]) -> None:
-        self._building_row.append(MediaRow.from_folder(folder, count, thumbs))
+        media_row = MediaRow.from_folder(folder, count, thumbs)
+        self._folder_index[folder] = media_row
+        self._building_row.append(media_row)
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
 
     def append_media(self, item: MediaItem) -> None:
-        self._building_row.append(MediaRow.from_media(item))
+        media_row = MediaRow.from_media(item)
+        self._item_index[item.path] = media_row
+        self._building_row.append(media_row)
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
+
+    def evict_front_rows(self, rows_to_drop: int) -> None:
+        """Remove the first *rows_to_drop* rows (sliding-window front
+        eviction) and drop their tiles from the path/folder indexes so the
+        index doesn't pin MediaRows that are no longer in the store. The
+        owner calls this instead of splicing row_store directly."""
+        rows_to_drop = min(rows_to_drop, self.row_store.get_n_items())
+        if rows_to_drop <= 0:
+            return
+        for pos in range(rows_to_drop):
+            row = self.row_store.get_item(pos)
+            if row is None or row.is_header:
+                continue
+            for tile in row.tiles:
+                if tile.is_folder:
+                    # Only forget it if the index still points at this exact
+                    # MediaRow — a later page may have re-added the folder.
+                    folder_path = tile.folder_path
+                    if folder_path is not None and self._folder_index.get(folder_path) is tile:
+                        self._folder_index.pop(folder_path, None)
+                    continue
+                media_item = tile.media_item
+                if media_item is not None and self._item_index.get(media_item.path) is tile:
+                    self._item_index.pop(media_item.path, None)
+        self.row_store.splice(0, rows_to_drop, [])
 
     def append_header(self, text: str, year: int | None = None, month: int | None = None) -> None:
         self._flush_tile_row()
@@ -226,53 +293,32 @@ class GalleryGrid(Gtk.Overlay):
     def get_vadjustment(self) -> Gtk.Adjustment:
         return self.scroller.get_vadjustment()
 
-    def update_item_thumb(self, path: str, thumb_path: str) -> bool:
-        # A fresh thumb just landed on disk — drop any stale "doesn't
-        # exist" cache entry so the next bind sees the file.
+    def _invalidate_thumb_caches(self, thumb_path: str) -> None:
+        """Forget every cached decision about *thumb_path* so the next bind
+        re-checks disk and re-decodes. Called when a fresh thumbnail arrives
+        (newly generated, or regenerated in place after the file changed)."""
         self._exists_cache.pop(thumb_path, None)
-        # Hot path: NC sync of a folder fans out as a thumb-arrival storm.
-        # The previous version spliced the entire GalleryRow on every
-        # arrival, which forced ListView to re-bind every tile in that
-        # row's widget — O(cols) work per arrival times N arrivals.
-        # Instead we mutate the MediaRow's frozen MediaItem in place
-        # (replacing it with a new instance — MediaRow is mutable) and
-        # only re-bind the affected list_item's widget. Because
-        # row_store and _bound_list_items reference the same MediaRow
-        # objects, the mutation is visible to a later re-bind too if the
-        # tile scrolls out and back.
-        for list_item in self._bound_list_items:
-            gallery_row = list_item.get_item()
-            if gallery_row is None or gallery_row.is_header:
-                continue
-            for tile in gallery_row.tiles:
-                if (
-                    not tile.is_folder
-                    and tile.media_item is not None
-                    and tile.media_item.path == path
-                ):
-                    tile.media_item = dataclasses.replace(
-                        tile.media_item, thumb_path=thumb_path,
-                    )
-                    self._apply_binding(list_item)
-                    return True
-        # Not currently bound but still in the model — mutate so the
-        # next bind picks up the new thumb_path.
-        n = self.row_store.get_n_items()
-        for pos in range(n):
-            gallery_row = self.row_store.get_item(pos)
-            if gallery_row.is_header:
-                continue
-            for tile in gallery_row.tiles:
-                if (
-                    not tile.is_folder
-                    and tile.media_item is not None
-                    and tile.media_item.path == path
-                ):
-                    tile.media_item = dataclasses.replace(
-                        tile.media_item, thumb_path=thumb_path,
-                    )
-                    return True
-        return False
+        self._failed_textures.discard(thumb_path)
+        # A regenerated thumb reuses the same path but has new content, so the
+        # decoded texture is stale — drop it and let the rebind re-decode.
+        self._texture_cache.pop(thumb_path, None)
+
+    def update_item_thumb(self, path: str, thumb_path: str) -> bool:
+        # Hot path: an NC sync of a folder fans out as a thumb-arrival storm.
+        # The old version scanned every bound widget and then the *whole* row
+        # store on each arrival — O(n_rows × cols) per thumb, quadratic over a
+        # sync. Now an O(1) index lookup finds the MediaRow, we mutate its
+        # frozen MediaItem in place (MediaRow itself is mutable), and re-bind
+        # only the affected tile if it happens to be on screen.
+        self._invalidate_thumb_caches(thumb_path)
+        media_row = self._item_index.get(path)
+        if media_row is None or media_row.is_folder or media_row.media_item is None:
+            return False
+        media_row.media_item = dataclasses.replace(media_row.media_item, thumb_path=thumb_path)
+        # Re-render only if currently visible; otherwise the next bind picks up
+        # the mutated thumb_path on its own.
+        self.update_tile_for_path(path)
+        return True
 
     def update_tile_for_path(self, path: str) -> bool:
         """Re-render the tile that holds *path*. Returns True if the path
@@ -301,16 +347,89 @@ class GalleryGrid(Gtk.Overlay):
         now = time.monotonic()
         cached = self._exists_cache.get(path)
         if cached is not None and now - cached[0] < self._EXISTS_TTL:
+            self._exists_cache.move_to_end(path)
             return cached[1]
         ok = Path(path).exists()
-        if len(self._exists_cache) >= self._EXISTS_CACHE_MAX:
-            # Crude bulk eviction — drop half the entries to avoid an O(n²)
-            # spiral on long scroll sessions. Keeps recency loosely via
-            # insertion order (Python 3.7+ dict ordering).
-            for k in list(self._exists_cache)[: self._EXISTS_CACHE_MAX // 2]:
-                self._exists_cache.pop(k, None)
         self._exists_cache[path] = (now, ok)
+        self._exists_cache.move_to_end(path)
+        # True LRU eviction: drop the least-recently-used entry once over cap,
+        # so hot paths that keep getting probed never get thrown out early.
+        while len(self._exists_cache) > self._EXISTS_CACHE_MAX:
+            self._exists_cache.popitem(last=False)
         return ok
+
+    # ------------------------------------------------------------------
+    # Off-thread thumbnail decoding (Gdk.Texture LRU cache)
+    # ------------------------------------------------------------------
+
+    def _ensure_decode_pool(self) -> ThreadPoolExecutor:
+        if self._decode_pool is None:
+            # Two workers hide decode latency during a fast scroll without
+            # competing hard with the scanner's own thumbnail pool.
+            self._decode_pool = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="yaga-thumb-decode",
+            )
+        return self._decode_pool
+
+    def _show_thumb(self, picture: Gtk.Picture, thumb_path: str,
+                    placeholder: Gdk.Paintable | None) -> None:
+        """Paint *thumb_path* into *picture* without ever decoding on the UI
+        thread. Cache hit → set the decoded texture immediately. Cache miss →
+        show *placeholder* now and decode off-thread; the result is applied
+        once it lands (and only if the picture still wants this path)."""
+        picture._thumb_path = thumb_path  # type: ignore[attr-defined]
+        texture = self._texture_cache.get(thumb_path)
+        if texture is not None:
+            self._texture_cache.move_to_end(thumb_path)
+            picture.set_paintable(texture)
+            return
+        picture.set_paintable(placeholder)
+        if thumb_path in self._failed_textures:
+            return
+        waiters = self._texture_waiters.get(thumb_path)
+        if waiters is not None:
+            waiters.append(picture)  # decode already in flight
+            return
+        self._texture_waiters[thumb_path] = [picture]
+        self._ensure_decode_pool().submit(self._decode_texture_worker, thumb_path)
+
+    def _decode_texture_worker(self, thumb_path: str) -> None:
+        texture: Gdk.Texture | None = None
+        try:
+            # The heavy part — reading + JPEG-decoding the (small) thumbnail —
+            # runs here, off the main loop. Pixbuf decode is thread-safe and a
+            # memory texture is display-independent, so wrapping it is too.
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(thumb_path)
+            texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+        except Exception:
+            LOGGER.debug("thumbnail decode failed for %s", thumb_path, exc_info=True)
+        GLib.idle_add(self._on_texture_decoded, thumb_path, texture,
+                      priority=GLib.PRIORITY_DEFAULT_IDLE)
+
+    def _on_texture_decoded(self, thumb_path: str, texture: Gdk.Texture | None) -> bool:
+        waiters = self._texture_waiters.pop(thumb_path, [])
+        if texture is None:
+            self._failed_textures.add(thumb_path)
+            return GLib.SOURCE_REMOVE
+        self._texture_cache[thumb_path] = texture
+        self._texture_cache.move_to_end(thumb_path)
+        while len(self._texture_cache) > self._TEXTURE_CACHE_MAX:
+            self._texture_cache.popitem(last=False)
+        for picture in waiters:
+            # The picture may have been recycled onto a different thumb while
+            # the decode was in flight — only paint the ones still on this one.
+            if getattr(picture, "_thumb_path", None) == thumb_path:
+                picture.set_paintable(texture)
+        return GLib.SOURCE_REMOVE
+
+    def _on_unrealize(self, _widget: Gtk.Widget) -> None:
+        """Tear down the decode pool when the grid goes away (e.g. the window
+        is recreated for a nav-position change) so its worker threads don't
+        linger. Lazily recreated if the grid is realised again."""
+        pool, self._decode_pool = self._decode_pool, None
+        if pool is not None:
+            pool.shutdown(wait=False)
+        self._texture_waiters.clear()
 
     def refresh_selection_state(self) -> None:
         """Re-render every currently-bound list item so checkbox visibility
@@ -324,20 +443,25 @@ class GalleryGrid(Gtk.Overlay):
             self._apply_binding(list_item)
 
     def update_folder_thumb(self, folder_path: str, thumb_path: str) -> bool:
-        self._exists_cache.pop(thumb_path, None)
-        n = self.row_store.get_n_items()
-        for pos in range(n):
-            gallery_row = self.row_store.get_item(pos)
-            if gallery_row.is_header:
+        # Same O(1) treatment as update_item_thumb: index lookup + in-place
+        # mutate instead of the old whole-store scan plus a row splice (which
+        # forced ListView to re-bind every tile in the row).
+        self._invalidate_thumb_caches(thumb_path)
+        media_row = self._folder_index.get(folder_path)
+        if media_row is None or not media_row.is_folder:
+            return False
+        media_row.folder_thumbs = [
+            thumb_path, *[t for t in media_row.folder_thumbs if t != thumb_path]
+        ][:4]
+        # Re-bind the row if it's on screen so the new preview shows at once.
+        for list_item in self._bound_list_items:
+            gallery_row = list_item.get_item()
+            if gallery_row is None or gallery_row.is_header:
                 continue
-            for j, tile in enumerate(gallery_row.tiles):
-                if tile.is_folder and tile.folder_path == folder_path:
-                    thumbs = [thumb_path, *[t for t in tile.folder_thumbs if t != thumb_path]][:4]
-                    new_tiles = gallery_row.tiles[:]
-                    new_tiles[j] = MediaRow.from_folder(tile.folder_path, tile.folder_count, thumbs)
-                    self.row_store.splice(pos, 1, [GalleryRow.from_tiles(new_tiles)])
-                    return True
-        return False
+            if media_row in gallery_row.tiles:
+                self._apply_binding(list_item)
+                break
+        return True
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -713,6 +837,7 @@ class GalleryGrid(Gtk.Overlay):
         press_g.connect("released", self._on_tile_release_or_cancel)
         press_g.connect("cancel", self._on_tile_press_cancel)
         button.add_controller(press_g)
+        button._press_gesture = press_g        # type: ignore[attr-defined]
 
         # Cancel the pending long-press if the pointer drifts beyond a small
         # threshold — typical of a scroll gesture or a drag, neither of which
@@ -773,6 +898,22 @@ class GalleryGrid(Gtk.Overlay):
             else:
                 self._bind_empty_tile(btn)
 
+    def _generic_placeholder(self, icon_theme) -> Gdk.Paintable | None:
+        if self._placeholder_generic is None:
+            self._placeholder_generic = icon_theme.lookup_icon(
+                "image-x-generic-symbolic", None, 96, 1,
+                Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
+            )
+        return self._placeholder_generic
+
+    def _folder_placeholder(self, icon_theme) -> Gdk.Paintable | None:
+        if self._placeholder_folder is None:
+            self._placeholder_folder = icon_theme.lookup_icon(
+                "folder-pictures-symbolic", None, 96, 1,
+                Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
+            )
+        return self._placeholder_folder
+
     def _bind_empty_tile(self, button: Gtk.Button) -> None:
         """Bind a placeholder cell that holds its 1/cols slot but renders nothing."""
         button._current_item = None
@@ -801,13 +942,16 @@ class GalleryGrid(Gtk.Overlay):
         check: Gtk.Image = button._check
 
         if row.is_folder:
-            valid_thumbs = [t for t in row.folder_thumbs if self._thumb_exists(t)]
+            valid_thumbs = [
+                t for t in row.folder_thumbs
+                if t in self._texture_cache or self._thumb_exists(t)
+            ]
             if len(valid_thumbs) >= 2:
                 single_pic.set_visible(False)
                 pic_grid.set_visible(True)
                 for i, picture in enumerate(preview_pics):
                     if i < len(valid_thumbs):
-                        picture.set_filename(valid_thumbs[i])
+                        self._show_thumb(picture, valid_thumbs[i], None)
                         picture.set_visible(True)
                     else:
                         picture.set_paintable(None)
@@ -816,14 +960,9 @@ class GalleryGrid(Gtk.Overlay):
                 single_pic.set_visible(True)
                 pic_grid.set_visible(False)
                 if valid_thumbs:
-                    single_pic.set_filename(valid_thumbs[0])
+                    self._show_thumb(single_pic, valid_thumbs[0], self._folder_placeholder(icon_theme))
                 else:
-                    single_pic.set_paintable(
-                        icon_theme.lookup_icon(
-                            "folder-pictures-symbolic", None, 96, 1,
-                            Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
-                        )
-                    )
+                    single_pic.set_paintable(self._folder_placeholder(icon_theme))
             label = row.folder_path.rsplit("/", 1)[-1] if row.folder_path and row.folder_path != "/" else "/"
             folder_label.set_label(label)
             folder_label.set_halign(Gtk.Align.FILL)
@@ -838,31 +977,23 @@ class GalleryGrid(Gtk.Overlay):
         assert item is not None
         single_pic.set_visible(True)
         pic_grid.set_visible(False)
-        if item.thumb_path and self._thumb_exists(item.thumb_path):
-            single_pic.set_filename(item.thumb_path)
+        if item.thumb_path and (item.thumb_path in self._texture_cache or self._thumb_exists(item.thumb_path)):
+            # Decode off-thread into the texture cache (or hit it) — never
+            # set_filename() here, which would decode on the UI thread and
+            # stall scrolling. The generic icon shows until the texture lands.
+            self._show_thumb(single_pic, item.thumb_path, self._generic_placeholder(icon_theme))
         elif is_nc_path(item.path):
-            single_pic.set_paintable(
-                icon_theme.lookup_icon(
-                    "image-x-generic-symbolic", None, 96, 1,
-                    Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
-                )
-            )
+            single_pic.set_paintable(self._generic_placeholder(icon_theme))
             # Fetch the NC thumbnail in the background; gallery is updated when it arrives.
             requester = getattr(self.owner, "request_nc_thumbnail", None)
             if requester is not None:
                 requester(item.path)
         else:
             # Local item without a cached thumb (scanner hasn't reached it, or
-            # generation failed). Show a placeholder and decode in the
+            # generation failed). Show a placeholder and generate it in the
             # background — set_filename() here would decode the full-resolution
-            # file on the UI thread and stall scrolling (and can't render a
-            # video file as an image at all).
-            single_pic.set_paintable(
-                icon_theme.lookup_icon(
-                    "image-x-generic-symbolic", None, 96, 1,
-                    Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
-                )
-            )
+            # file on the UI thread (and can't render a video file at all).
+            single_pic.set_paintable(self._generic_placeholder(icon_theme))
             local_requester = getattr(self.owner, "request_local_thumbnail", None)
             if local_requester is not None:
                 local_requester(item.path, item.media_type, item.category)
@@ -886,10 +1017,17 @@ class GalleryGrid(Gtk.Overlay):
             self._bound_list_items.remove(list_item)
         stack = list_item.get_child()
         for btn in stack._tile_buttons:
+            # A long-press hold in progress when the tile recycles (scroll
+            # while holding) must not fire on whatever row reuses this widget.
+            press_gesture = getattr(btn, "_press_gesture", None)
+            if press_gesture is not None:
+                self._abort_long_press(press_gesture)
             btn._single_pic.set_paintable(None)
+            btn._single_pic._thumb_path = None
             btn._current_item = None
             for picture in btn._preview_pics:
                 picture.set_paintable(None)
+                picture._thumb_path = None
 
     # ------------------------------------------------------------------
     # Gesture / click callbacks

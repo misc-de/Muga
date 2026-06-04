@@ -72,6 +72,11 @@ class NextcloudClient:
         self.username = username
         self._auth = base64.b64encode(f"{username}:{app_password}".encode()).decode()
         self.dav_root = f"/remote.php/dav/files/{username}"
+        # One shared SSL context for the client's lifetime. create_default_context
+        # loads the system CA bundle from disk each call, so rebuilding it per
+        # request (downloads/uploads each opened a fresh _conn) was wasted I/O;
+        # an SSLContext is safe to reuse across connections and threads.
+        self._ssl_ctx = ssl.create_default_context() if self.use_ssl else None
         # Per-thread persistent HTTP connection for thumbnail fetches.
         # HTTPS handshakes are the dominant cost in tight loops, so we keep
         # the connection alive across many requests on the same thread.
@@ -88,8 +93,7 @@ class NextcloudClient:
         # treats the timeout exception as "sync failed, try again" without
         # blocking the UI further.
         if self.use_ssl:
-            ctx = ssl.create_default_context()
-            return http.client.HTTPSConnection(self.host, context=ctx, timeout=timeout)
+            return http.client.HTTPSConnection(self.host, context=self._ssl_ctx, timeout=timeout)
         return http.client.HTTPConnection(self.host, timeout=timeout)
 
     def _persistent_conn(self, timeout: float = 10.0) -> http.client.HTTPConnection:
