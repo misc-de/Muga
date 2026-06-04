@@ -543,7 +543,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         # Group description is always empty — the QR tip lives in the setup dialog.
         self._nc_creds_group.set_description("")
         if self._nc_runtime_connected:
-            self._nc_set_status(self._("Connected"), ok=True)
+            self._nc_set_status(self._("Connected ✓"), ok=True)
         else:
             self._nc_set_status(self._("Disconnected"), ok=False)
 
