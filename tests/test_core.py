@@ -228,6 +228,57 @@ def test_scanner_reindexes_and_reinvalidates_changed_file(tmp_path: Path) -> Non
     assert thumb_file.read_bytes() == b"thumb"  # stale thumbnail was replaced
 
 
+def test_scan_reports_whether_anything_changed(tmp_path: Path) -> None:
+    """scan() returns True only when the index actually changed, so the app
+    can skip re-rendering the gallery (and the startup-scan stutter) when
+    nothing did."""
+    import os
+    db = Database(tmp_path / "test.sqlite3")
+    root = tmp_path / "Pictures"
+    root.mkdir()
+    (root / "a.jpg").write_bytes(b"a")
+    scanner = MediaScanner(db, RecordingThumbnailer(tmp_path / "thumbs"))
+    cats = [("screenshots", "Screenshots", str(root))]
+
+    assert scanner.scan(cats) is True   # first sight → new rows
+    assert scanner.scan(cats) is False  # nothing changed → no re-render needed
+
+    (root / "b.jpg").write_bytes(b"b")
+    assert scanner.scan(cats) is True   # an added file counts as a change
+
+    img_a = root / "a.jpg"
+    img_a.write_bytes(b"a-grown")
+    future = img_a.stat().st_mtime + 10
+    os.utime(img_a, (future, future))
+    assert scanner.scan(cats) is True   # an edited file counts as a change
+
+    (root / "b.jpg").unlink()
+    assert scanner.scan(cats) is True   # a removed file (pruned) counts too
+    assert scanner.scan(cats) is False  # …and then it's quiet again
+
+
+def test_delete_path_without_category_removes_every_row(tmp_path: Path) -> None:
+    """Trashing a file must drop ALL its index rows. In the Overview / Videos
+    aggregators the *view* category ("pictures"/"videos") matches no real row,
+    so a category-scoped delete used to leave the tile behind — the fix deletes
+    by path alone."""
+    db = Database(tmp_path / "test.sqlite3")
+    shared = tmp_path / "x.jpg"
+    shared.write_bytes(b"x")
+    db.upsert_media(path=shared, category="photos", media_type="image", folder="/", thumb_path=None)
+    db.upsert_media(path=shared, category="screenshots", media_type="image", folder="/", thumb_path=None)
+    db.commit()
+
+    # The old bug: deleting with the Overview's own category removes nothing.
+    db.delete_path(str(shared), "pictures")
+    assert db.get_media_by_path(str(shared), "photos") is not None
+
+    # The fix: category-agnostic delete clears every row for the trashed path.
+    db.delete_path(str(shared))
+    assert db.get_media_by_path(str(shared), "photos") is None
+    assert db.get_media_by_path(str(shared), "screenshots") is None
+
+
 def test_scanner_can_use_database_from_background_thread(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.sqlite3")
     root = tmp_path / "Pictures"
@@ -544,7 +595,9 @@ def test_viewer_delete_uses_confirmation_and_cleans_index_and_thumbnail() -> Non
     assert "Adw.ResponseAppearance.DESTRUCTIVE" in viewer_source
     assert "Gio.File.new_for_path(item.path).trash(None)" in viewer_source
     assert "Path(item.thumb_path).unlink(missing_ok=True)" in viewer_source
-    assert "self.parent_window.database.delete_path(item.path, item.category)" in viewer_source
+    # Category-agnostic delete: the trashed file's rows must go regardless of
+    # which category the current view aggregates (Overview / Videos).
+    assert "self.parent_window.database.delete_path(item.path)" in viewer_source
     assert "self.parent_window.refresh(scan=False)" in viewer_source
 
 

@@ -859,6 +859,12 @@ class GalleryWindow(Adw.ApplicationWindow):
             or self.category == "nextcloud"
             or self._should_merge_nc()
         )
+        # Track whether each phase actually changed the index, so we only
+        # re-render the gallery when there's something new to show (an
+        # unchanged startup scan no longer tears down + rebuilds the grid —
+        # that unconditional rebuild was the visible "hackelig" stutter).
+        local_changed = False
+        nc_changed = False
         try:
             nc_client = None
             if need_nc and self.settings.nextcloud_url and self.settings.nextcloud_user:
@@ -904,19 +910,22 @@ class GalleryWindow(Adw.ApplicationWindow):
                     if c not in ("nextcloud", "pictures")
                 ]
             if local_cats:
-                self.scanner.scan(
+                local_changed = self.scanner.scan(
                     local_cats,
                     excluded_subtrees=self.settings.excluded_subtrees(),
                 )
+            # Show local changes immediately — before the (potentially slow)
+            # Nextcloud phase even starts — so the user sees local edits at once.
+            if local_changed and not self._closing:
+                GLib.idle_add(self.refresh, False)
 
-            # Phase 2: NC structure scan (no thumbnails)
+            # Phase 2: NC structure scan (no thumbnails), strictly after local.
             if nc_client is not None:
                 GLib.idle_add(self._set_nc_syncing, True)
                 GLib.idle_add(self._set_nc_broken, False)
-                self.scanner.scan_nc_structure(nc_client, self.settings.nextcloud_photos_path)
-                # The structure is shown by the single refresh in the `finally`
-                # block, which runs immediately after this — no separate refresh
-                # here (it just rendered the same view twice back to back).
+                nc_changed = self.scanner.scan_nc_structure(
+                    nc_client, self.settings.nextcloud_photos_path
+                )
                 # No bulk thumbnail pre-fetch: tiles request their own thumbnail when
                 # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
@@ -925,7 +934,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         finally:
             nc_client = None
             GLib.idle_add(self._set_nc_syncing, False)
-            GLib.idle_add(self.refresh, False)
+            # Re-render only if the NC phase added something new (local already
+            # rendered above). Nothing changed → keep the view that
+            # refresh(scan=True) rendered before the scan, no rebuild, no jank.
+            if nc_changed and not self._closing:
+                GLib.idle_add(self.refresh, False)
             GLib.idle_add(self._reenable_refresh_button)
             LOGGER.info("Scan abgeschlossen in %.1fs", _time.time() - _thread_start)
             # Trim cache after every scan: thumbnail generation may have grown
@@ -1997,7 +2010,6 @@ class GalleryWindow(Adw.ApplicationWindow):
         if response != "delete" or self._sel_busy:
             return
         n = len(paths)
-        category = self.category
         self._set_sel_busy(True, self._("Deleting %d items…") % n)
 
         def _worker() -> None:
@@ -2006,7 +2018,12 @@ class GalleryWindow(Adw.ApplicationWindow):
                 for path in paths:
                     try:
                         Gio.File.new_for_path(path).trash(None)
-                        self.database.delete_path(path, category)
+                        # Drop ALL index rows for the trashed path, not just the
+                        # current view's category: in the Overview/Videos
+                        # aggregators self.category ("pictures"/"videos") matches
+                        # no real row, so a category-scoped delete left the tile
+                        # behind. The file is gone from disk → every row is stale.
+                        self.database.delete_path(path)
                     except Exception as e:
                         errors.append((path, e))
             except Exception:
@@ -2067,7 +2084,6 @@ class GalleryWindow(Adw.ApplicationWindow):
         if not paths:
             return
         n = len(paths)
-        category = self.category
         self._set_sel_busy(True, self._("Moving %d items…") % n)
 
         def _worker() -> None:
@@ -2081,7 +2097,9 @@ class GalleryWindow(Adw.ApplicationWindow):
                     try:
                         target = Path(folder) / Path(path).name
                         Path(path).rename(target)
-                        self.database.delete_path(path, category)
+                        # The file left this path → remove all its index rows
+                        # (category-agnostic, same reason as the delete path).
+                        self.database.delete_path(path)
                     except Exception as e:
                         errors.append((path, e))
             except Exception:
@@ -2143,7 +2161,10 @@ class GalleryWindow(Adw.ApplicationWindow):
                     Path(item.thumb_path).unlink(missing_ok=True)
                 except OSError:
                     pass
-            self.database.delete_path(item.path, item.category)
+            # Trashing removes the file outright → drop every index row for the
+            # path (category-agnostic), so it also disappears from the Overview
+            # / Videos aggregators where item.category wouldn't match the view.
+            self.database.delete_path(item.path)
             # No status toast — the re-render is the visual
             # confirmation (per user spec: "Bitte den Hinweis
             # entfernen").
@@ -2178,7 +2199,7 @@ class GalleryWindow(Adw.ApplicationWindow):
             target = Path(folder) / item.name
             try:
                 Path(item.path).rename(target)
-                self.database.delete_path(item.path, item.category)
+                self.database.delete_path(item.path)
                 self.refresh(scan=True)
                 self._set_status(self._("Moved"))
             except OSError:

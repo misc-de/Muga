@@ -1351,7 +1351,10 @@ class ViewerWindow(Adw.ApplicationWindow):
                 Path(item.thumb_path).unlink(missing_ok=True)
             except OSError:
                 pass
-        self.parent_window.database.delete_path(item.path, item.category)
+        # Category-agnostic: the file is trashed, so every index row for the
+        # path is stale (also covers Overview/Videos where item.category is the
+        # real category but a same-path row could exist under another category).
+        self.parent_window.database.delete_path(item.path)
         self.items.pop(self.index)
         self.parent_window.refresh(scan=False)
         if not self.items:

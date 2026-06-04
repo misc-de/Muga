@@ -39,10 +39,14 @@ class MediaScanner:
 
     def scan(self, categories: list[tuple[str, str, str]], nc_client=None,
              nc_thumbnail_only: bool = True,
-             excluded_subtrees: list[str] | None = None) -> None:
+             excluded_subtrees: list[str] | None = None) -> bool:
+        """Scan *categories* into the index. Returns True iff anything actually
+        changed (a file was added/updated, or a stale row pruned) so the caller
+        can skip re-rendering the gallery when nothing did."""
         started = time.time()
         scanned_categories: list[str] = []
         excluded_paths = [Path(p).expanduser() for p in (excluded_subtrees or [])]
+        changed_rows = 0
 
         for category, _label, root_text in categories:
             if category == "nextcloud":
@@ -138,18 +142,21 @@ class MediaScanner:
             thumb_new += self._flush_thumb_chunk(chunk, category)
             if touch_batch:
                 self.database.touch_seen(touch_batch, category)
+            # Non-skipped files are exactly the new/changed ones we upserted.
+            changed_rows += file_count - skipped
             LOGGER.info(
                 "%s: %d Dateien (%d unverändert übersprungen), %d neue Thumbnails (%.1fs)",
                 category, file_count, skipped, thumb_new, time.time() - cat_start,
             )
 
         db_start = time.time()
-        self.database.prune_missing(started, scanned_categories)
+        pruned = self.database.prune_missing(started, scanned_categories)
         self.database.commit()
         LOGGER.info(
             "Datenbank bereinigt & gespeichert (%.1fs) — Gesamtzeit: %.1fs",
             time.time() - db_start, time.time() - started,
         )
+        return changed_rows > 0 or pruned > 0
 
     def _scan_nextcloud(self, client, photos_path: str, thumbnail_only: bool = True) -> None:
         from .nextcloud import nc_path
@@ -277,8 +284,11 @@ class MediaScanner:
             return "/"
         return str(rel)
 
-    def scan_nc_structure(self, client, photos_path: str) -> None:
-        """Scan NC folder structure and store metadata without downloading thumbnails."""
+    def scan_nc_structure(self, client, photos_path: str) -> bool:
+        """Scan NC folder structure and store metadata without downloading
+        thumbnails. Returns True iff the NC index actually changed (a file was
+        added/updated, or a stale row pruned) so the caller can skip a
+        re-render when the remote is unchanged."""
         from .nextcloud import nc_path
         started = time.time()
         LOGGER.info("Nextcloud structure scan started for %r", photos_path)
@@ -291,27 +301,46 @@ class MediaScanner:
             removed = self.database.prune_missing(started, ["nextcloud"])
             self.database.commit()
             LOGGER.info("Pruned %d stale NC entries (folder vanished)", removed)
-            return
+            return removed > 0
         except Exception as e:
             LOGGER.exception("Nextcloud structure scan failed: %s", e)
-            return
+            return False
         LOGGER.info("Nextcloud: %d Dateien empfangen, schreibe in DB …", len(files))
         self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"
-        upserted = 0
+        # Same unchanged-file skip as the local scan: re-upserting every NC row
+        # on each sync (and firing the FTS triggers) is wasted work when the
+        # remote hasn't changed. Compare mtime+size against the stored index;
+        # unchanged entries just get a seen_at touch so prune spares them.
+        index = self.database.load_scan_index("nextcloud")
+        changed = 0
+        skipped = 0
         # Batched upserts: holding the DB lock once per batch (instead of per
         # row) lets the main thread interleave its render/scroll reads, which
         # is the difference between visible UI stutter and a smooth sync.
         BATCH_SIZE = 100
         batch: list[dict] = []
+        touch_batch: list[str] = []
         for info in files:
             dav = info["dav_path"]
             media_type = media_type_for(Path(info["name"]))
             if not media_type:
                 continue
+            p = nc_path(dav)
+            prev = index.get(p)
+            if (prev is not None
+                    and abs(prev[0] - info["mtime"]) <= _MTIME_EPS
+                    and prev[1] == info["size"]):
+                skipped += 1
+                touch_batch.append(p)
+                if len(touch_batch) >= _TOUCH_BATCH:
+                    self.database.touch_seen(touch_batch, "nextcloud")
+                    touch_batch = []
+                continue
             folder = self._nc_folder(dav, dav_root, photos_path)
+            changed += 1
             batch.append({
-                "path": nc_path(dav),
+                "path": p,
                 "category": "nextcloud",
                 "media_type": media_type,
                 "folder": folder,
@@ -320,7 +349,6 @@ class MediaScanner:
                 "size": info["size"],
                 "thumb_path": None,
             })
-            upserted += 1
             if len(batch) >= BATCH_SIZE:
                 self.database.upsert_remote_media_bulk(batch)
                 batch = []
@@ -329,12 +357,15 @@ class MediaScanner:
                 time.sleep(0.01)
         if batch:
             self.database.upsert_remote_media_bulk(batch)
+        if touch_batch:
+            self.database.touch_seen(touch_batch, "nextcloud")
         removed = self.database.prune_missing(started, ["nextcloud"])
         self.database.commit()
         LOGGER.info(
-            "Nextcloud structure scan indexed %s file(s), pruned %d stale, in %.2fs",
-            upserted, removed, time.time() - started,
+            "Nextcloud structure scan: %d changed, %d unchanged, %d pruned, in %.2fs",
+            changed, skipped, removed, time.time() - started,
         )
+        return changed > 0 or removed > 0
 
     def load_nc_folder_thumbs(self, client, folder: str, on_thumb_loaded) -> None:
         """Download thumbnails only for NC items in *folder* that don't have one yet."""
