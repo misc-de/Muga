@@ -931,7 +931,7 @@ class GalleryGrid(Gtk.Overlay):
         tile_index: int,
     ) -> None:
         row = self._get_tile_item(list_item, tile_index)
-        if row is None or row.is_folder:
+        if row is None or row.is_folder or row.media_item is None:
             return
         widget = gesture.get_widget()
         self.owner._show_context_menu(gesture, 1, x, y, row.media_item, widget)
