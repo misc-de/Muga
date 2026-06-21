@@ -46,6 +46,17 @@ _MAX_THUMB_BYTES = 10 * 1024 * 1024
 NC_PATH_PREFIX = "nextcloud://"
 
 
+class NextcloudConnectionError(ConnectionError):
+    """The Nextcloud server is unreachable (timeout, refused, DNS, TLS, …).
+
+    Distinct from an HTTP-level miss (a single 404/403 preview): a miss means
+    "this one file has no thumbnail", whereas this means "the server is down".
+    Callers use that distinction to stop hammering a dead server instead of
+    silently retrying every thumbnail forever. Subclasses ConnectionError so
+    the app's generic Nextcloud-error handler maps it to a connection message.
+    """
+
+
 def nc_path(dav_path: str) -> str:
     """Encode a WebDAV path as a DB-safe string."""
     return NC_PATH_PREFIX + dav_path.lstrip("/")
@@ -284,6 +295,7 @@ class NextcloudClient:
         # Try once with the persistent connection; on any failure, drop it,
         # reopen, retry. Stops after one retry so a hard server error doesn't
         # spin forever on the worker.
+        last_exc: Exception | None = None
         for attempt in (0, 1):
             try:
                 conn = self._persistent_conn()
@@ -294,18 +306,24 @@ class NextcloudClient:
                         return str(dest)
                     self._drop_persistent_conn()
                     return None
-                # Drain so the connection can be reused.
+                # Drain so the connection can be reused. A non-200 here is an
+                # HTTP-level miss for *this* file (e.g. no preview available),
+                # not a dead server — return None without tripping the breaker.
                 resp.read()
                 LOGGER.debug("Nextcloud thumbnail HTTP %s for %s", resp.status, dav_path)
                 return None
             except Exception as exc:
+                last_exc = exc
                 LOGGER.debug(
                     "NC thumb attempt %d failed for %s: %s", attempt, dav_path, exc,
                 )
                 self._drop_persistent_conn()
-                if attempt == 1:
-                    return None
-        return None
+        # Both attempts hit a transport error → the server is unreachable, not
+        # just this one preview missing. Raise so the worker stops fetching
+        # against a dead server instead of blocking ~20 s on every queued tile.
+        raise NextcloudConnectionError(
+            f"Nextcloud thumbnail fetch failed for {dav_path}: {last_exc}"
+        ) from last_exc
 
     # ------------------------------------------------------------------
     # Download full file for viewing/editing

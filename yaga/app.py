@@ -156,6 +156,10 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._nc_thumb_active_workers = 0
         self._nc_thumb_worker_target = 4  # parallel HTTPS thumb fetchers
         self._nc_thumb_shared_client = None  # lazily built, reused across workers
+        # Circuit breaker: set once an NC network op fails (sync or thumb fetch)
+        # so we stop hammering a server we already know is unreachable. Reset on
+        # the next successful sync or on (re)connect via apply_settings().
+        self._nc_unreachable = False
         # Runtime gate: True only when the user has *actively* allowed NC for
         # this session. Scripts must NEVER flip this to True; only explicit UI
         # actions (Settings toggle/Connect button, viewer Einmalig/Dauerhaft)
@@ -349,11 +353,15 @@ class GalleryWindow(Adw.ApplicationWindow):
                 self._("The folder or file doesn't exist on the Nextcloud server. It may have been deleted."),
                 str(error)
             )
-        elif isinstance(error, ConnectionError):
+        elif isinstance(error, (ConnectionError, TimeoutError, OSError)):
+            # Covers refused/reset (ConnectionError), socket timeout
+            # (TimeoutError) and DNS/TLS/other socket faults (OSError). The two
+            # OSError subclasses above are matched earlier, so this is the
+            # catch-all transport branch.
             self._show_error_dialog(
                 self._("Connection failed"),
                 self._("Could not connect to Nextcloud. Check your internet connection and server URL."),
-                ""
+                str(error) if str(error) else "",
             )
         else:
             self._show_error_dialog(
@@ -923,9 +931,23 @@ class GalleryWindow(Adw.ApplicationWindow):
             if nc_client is not None:
                 GLib.idle_add(self._set_nc_syncing, True)
                 GLib.idle_add(self._set_nc_broken, False)
-                nc_changed = self.scanner.scan_nc_structure(
-                    nc_client, self.settings.nextcloud_photos_path
-                )
+                try:
+                    nc_changed = self.scanner.scan_nc_structure(
+                        nc_client, self.settings.nextcloud_photos_path
+                    )
+                except Exception as nc_err:
+                    # Connection/timeout/auth failure during the sync. React
+                    # fast: flag broken, tell the user once, and trip the
+                    # breaker so on-demand thumbnail fetches don't keep
+                    # blocking ~20 s each against a server we know is down.
+                    LOGGER.warning("Nextcloud sync failed: %s", nc_err)
+                    self._on_nc_sync_failed(nc_err)
+                else:
+                    # Sync went through → clear any stale broken state so a
+                    # recovered connection re-enables thumbnail fetches.
+                    if self._nc_unreachable:
+                        self._nc_unreachable = False
+                        GLib.idle_add(self._set_nc_broken, False)
                 # No bulk thumbnail pre-fetch: tiles request their own thumbnail when
                 # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
@@ -955,16 +977,42 @@ class GalleryWindow(Adw.ApplicationWindow):
             else:
                 self._nc_spinner.stop()
 
-    def _set_nc_broken(self, active: bool) -> None:
+    def _set_nc_broken(self, active: bool, reason: str = "") -> None:
         if self._closing:
             return
         if self._nc_broken_img is not None:
             self._nc_broken_img.set_visible(active)
+            # A hovered tooltip explains *why* the connection is marked broken,
+            # so the red badge isn't a mystery. Cleared when the badge hides.
+            self._nc_broken_img.set_tooltip_text(reason if active and reason else None)
 
     def _reenable_refresh_button(self) -> bool:
         if not self._closing:
             self.refresh_button.set_sensitive(True)
         return GLib.SOURCE_REMOVE
+
+    def _nc_error_reason(self, error: Exception) -> str:
+        """A short, human tooltip for the broken badge."""
+        if isinstance(error, PermissionError):
+            return self._("Nextcloud authentication failed")
+        if isinstance(error, FileNotFoundError):
+            return self._("Nextcloud path not found")
+        return self._("Could not connect to Nextcloud")
+
+    def _on_nc_sync_failed(self, error: Exception) -> None:
+        """Worker-thread entry point for a failed NC network op.
+
+        Trips the circuit breaker, stops queued thumbnail fetches against the
+        dead server, marks the badge broken, and surfaces the error to the user
+        exactly once per broken episode (so repeated retries don't spam dialogs).
+        """
+        first_failure = not self._nc_unreachable
+        self._nc_unreachable = True
+        # Drop anything still queued so workers stop blocking on the dead server.
+        self._cancel_nc_thumb_queue()
+        GLib.idle_add(self._set_nc_broken, True, self._nc_error_reason(error))
+        if first_failure:
+            GLib.idle_add(self._handle_nextcloud_error, error)
 
     def _update_item_thumb(self, path: str, thumb_path: str) -> None:
         updated = self.gallery_grid.update_item_thumb(path, thumb_path)
@@ -1731,7 +1779,10 @@ class GalleryWindow(Adw.ApplicationWindow):
         we never re-establish the connection on our own; that requires explicit
         consent (Settings toggle/Connect button or the viewer's "Einmalig/
         Dauerhaft" prompt)."""
-        if not self.is_nc_active():
+        # Circuit breaker: once a sync/fetch has proven the server unreachable,
+        # don't queue more fetches that would each block ~20 s and fail. The
+        # next successful sync (or a reconnect) clears the flag.
+        if not self.is_nc_active() or self._nc_unreachable:
             return
         with self._nc_thumb_lock:
             if item_path in self._nc_thumb_pending:
@@ -1782,7 +1833,7 @@ class GalleryWindow(Adw.ApplicationWindow):
         return self._nc_thumb_shared_client
 
     def _nc_thumb_worker(self) -> None:
-        from .nextcloud import dav_path_from_nc
+        from .nextcloud import NextcloudConnectionError, dav_path_from_nc
         client = self._ensure_nc_thumb_client()
         if client is None:
             with self._nc_thumb_lock:
@@ -1830,14 +1881,27 @@ class GalleryWindow(Adw.ApplicationWindow):
                                 return
                     continue
                 thumb = None
+                server_down_err: Exception | None = None
                 try:
                     dav = dav_path_from_nc(path)
                     thumb = client.ensure_thumbnail(dav)
+                except NextcloudConnectionError as exc:
+                    # The server is unreachable (not just this one preview
+                    # missing). Bail instead of grinding through the rest of
+                    # the queue, ~20 s per tile, all failing the same way.
+                    server_down_err = exc
+                    LOGGER.warning("NC thumb fetch hit a dead server: %s", exc)
                 except Exception:
                     LOGGER.debug("NC thumb fetch failed for %s", path, exc_info=True)
                 finally:
                     with self._nc_thumb_lock:
                         self._nc_thumb_pending.discard(path)
+                if server_down_err is not None:
+                    # Trip the breaker + drain the queue, then retire this worker.
+                    self._on_nc_sync_failed(server_down_err)
+                    with self._nc_thumb_lock:
+                        self._nc_thumb_active_workers -= 1
+                    return
                 if thumb:
                     try:
                         self.database.set_thumb(path, thumb, "nextcloud")
@@ -2594,6 +2658,10 @@ class GalleryWindow(Adw.ApplicationWindow):
             self.settings.nextcloud_enabled
             and getattr(self.settings, "nextcloud_session_active", True)
         )
+        # Credentials/URL or the session gate may have changed (e.g. a fresh
+        # Connect) — give the breaker a clean slate so the next sync can prove
+        # the connection works again and re-enable thumbnail fetches.
+        self._nc_unreachable = False
         # Block our own notify::dark handler while we tear down and rebuild —
         # otherwise set_color_scheme synchronously triggers _rebuild_categories
         # on the nav_box that _build_ui is about to discard, which on rapid

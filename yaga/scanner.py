@@ -303,8 +303,13 @@ class MediaScanner:
             LOGGER.info("Pruned %d stale NC entries (folder vanished)", removed)
             return removed > 0
         except Exception as e:
-            LOGGER.exception("Nextcloud structure scan failed: %s", e)
-            return False
+            # A timeout / refused / auth (401) / TLS failure is NOT "nothing
+            # changed" — swallowing it as `return False` left the UI spinning
+            # with no feedback while the user had no idea the connection broke.
+            # Bubble it up so the caller can mark the connection broken, tell
+            # the user, and stop retrying against a dead server.
+            LOGGER.warning("Nextcloud structure scan failed: %s", e)
+            raise
         LOGGER.info("Nextcloud: %d Dateien empfangen, schreibe in DB …", len(files))
         self.missing_root.pop("nextcloud", None)
         dav_root = client.dav_root + "/"

@@ -220,6 +220,18 @@ TRANSLATIONS = {
         "QR code scanned – credentials entered ✓": "QR code scanned – credentials entered ✓",
         "QR code scanned successfully ✓": "QR code scanned successfully ✓",
         "QR code scan error": "QR code scan error",
+        # Nextcloud sync / connection errors
+        "Could not connect to Nextcloud": "Could not connect to Nextcloud",
+        "Nextcloud authentication failed": "Nextcloud authentication failed",
+        "The app password is incorrect or the account has been revoked. Check Nextcloud settings.":
+            "The app password is incorrect or the account has been revoked. Check Nextcloud settings.",
+        "Nextcloud path not found": "Nextcloud path not found",
+        "The folder or file doesn't exist on the Nextcloud server. It may have been deleted.":
+            "The folder or file doesn't exist on the Nextcloud server. It may have been deleted.",
+        "Could not connect to Nextcloud. Check your internet connection and server URL.":
+            "Could not connect to Nextcloud. Check your internet connection and server URL.",
+        "Nextcloud error": "Nextcloud error",
+        "An error occurred while accessing Nextcloud.": "An error occurred while accessing Nextcloud.",
         # Editor — colours
         "White": "White",
         "Black": "Black",
@@ -475,6 +487,18 @@ TRANSLATIONS = {
         "QR code scanned – credentials entered ✓": "QR-Code gescannt – Zugangsdaten eingetragen ✓",
         "QR code scanned successfully ✓": "QR-Code erfolgreich gescannt ✓",
         "QR code scan error": "QR-Code-Fehler",
+        # Nextcloud sync / connection errors
+        "Could not connect to Nextcloud": "Keine Verbindung zu Nextcloud",
+        "Nextcloud authentication failed": "Nextcloud-Anmeldung fehlgeschlagen",
+        "The app password is incorrect or the account has been revoked. Check Nextcloud settings.":
+            "Das App-Passwort ist falsch oder der Zugang wurde widerrufen. Bitte in den Nextcloud-Einstellungen prüfen.",
+        "Nextcloud path not found": "Nextcloud-Pfad nicht gefunden",
+        "The folder or file doesn't exist on the Nextcloud server. It may have been deleted.":
+            "Der Ordner oder die Datei existiert nicht auf dem Nextcloud-Server. Möglicherweise wurde sie gelöscht.",
+        "Could not connect to Nextcloud. Check your internet connection and server URL.":
+            "Keine Verbindung zu Nextcloud. Bitte Internetverbindung und Server-URL prüfen.",
+        "Nextcloud error": "Nextcloud-Fehler",
+        "An error occurred while accessing Nextcloud.": "Beim Zugriff auf Nextcloud ist ein Fehler aufgetreten.",
         # Editor — colours
         "White": "Weiß",
         "Black": "Schwarz",
