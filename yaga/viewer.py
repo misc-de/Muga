@@ -17,14 +17,34 @@ gi.require_version("GdkPixbuf", "2.0")
 
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, Gtk, Pango
 
+from .camera_orientation import (
+    ORIENT_BOTTOM_UP,
+    ORIENT_LEFT_UP,
+    ORIENT_NORMAL,
+    ORIENT_RIGHT_UP,
+    OrientationClient,
+)
 from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem
 from .nextcloud import is_nc_path
+from .rotated_container import RotatedContainer
 
 if TYPE_CHECKING:
     from .app import GalleryWindow
 
 LOGGER = logging.getLogger(__name__)
+
+# Maps the 4-state device orientation reported by the accelerometer to the
+# rotation (degrees) that keeps the photo upright in the user's view. Mirrors
+# the camera viewfinder's mapping (camera._ICON_ROTATION_DEG) so a phone held
+# in landscape shows the picture the same way the camera previews it — the X
+# axis is inverted relative to the Android convention to match this HAL.
+_SENSOR_ROTATION_DEG = {
+    ORIENT_NORMAL: 0,
+    ORIENT_BOTTOM_UP: 180,
+    ORIENT_LEFT_UP: 270,
+    ORIENT_RIGHT_UP: 90,
+}
 
 def _fmt_size(size: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -107,6 +127,16 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._rotation: int = 0
         self._current_display_path: str | None = None
         self._current_is_video: bool = False
+
+        # Sensor-driven *display* rotation: when the phone is physically turned
+        # but its orientation is locked (auto-rotate off), the window stays put,
+        # so we rotate the picture ourselves to keep it upright for the user.
+        # This is purely visual and never saved — distinct from the manual
+        # `_rotation` above, which is a persisted edit. `_sensor_rotator` wraps
+        # the on-screen scroller and is rebuilt on every show_item()/mount.
+        self._sensor_angle: int = 0
+        self._sensor_rotator: RotatedContainer | None = None
+        self._orientation_client = OrientationClient()
 
         # Off-thread image decoding. new_from_file() on a 48 MP photo blocks the
         # UI thread for hundreds of ms on every swipe; we decode (downscaled,
@@ -299,6 +329,11 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.add_tick_callback(self._on_date_orientation_tick)
         self.fullscreen()
         self.show_item()
+        # Follow the physical device orientation so a held-sideways phone shows
+        # the photo upright even with auto-rotate off. Callbacks arrive on the
+        # GLib main loop (D-Bus / socket watch), so touching widgets is safe.
+        # If no accelerometer is available start() is a no-op and we stay at 0°.
+        self._orientation_client.start(on_change=self._on_device_orientation_changed)
 
     def _on_date_orientation_tick(self, _widget, _clock) -> bool:
         w = self.get_width()
@@ -322,6 +357,32 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.date_revealer.set_margin_end(0)
         self.date_revealer.set_margin_start(0)
 
+    def _on_device_orientation_changed(self, orientation: str) -> None:
+        """Accelerometer reported a new device orientation — rotate the picture
+        to match so it stays upright in the user's hand. Always active in the
+        viewer; no setting gates it."""
+        angle = _SENSOR_ROTATION_DEG.get(orientation, 0)
+        if angle == self._sensor_angle:
+            return
+        self._sensor_angle = angle
+        # A pinch-zoom anchored to the old orientation no longer maps cleanly
+        # once the axes swap — reset to a clean fit before rotating.
+        self._reset_zoom()
+        if self._sensor_rotator is not None:
+            self._sensor_rotator.set_rotation(angle)
+
+    def _mount_rotatable(self, scroller: Gtk.ScrolledWindow) -> None:
+        """Place *scroller* into the stack wrapped in a RotatedContainer that
+        tracks the current device orientation. Centralises the wrap so every
+        picture-mount path (initial, rotate, …) follows the sensor."""
+        rotator = RotatedContainer()
+        rotator.set_hexpand(True)
+        rotator.set_vexpand(True)
+        rotator.set_child(scroller)
+        rotator.set_rotation(self._sensor_angle)
+        self._sensor_rotator = rotator
+        self.stack.add_child(rotator)
+
     def show_item(self) -> None:
         # Bump the token so any in-flight decode for the previous item is
         # discarded when it lands instead of painting over the new one.
@@ -338,6 +399,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._reset_zoom()
         self.zoom_view = None
         self.zoom_scroller = None
+        self._sensor_rotator = None
         self._rotation = 0
         self._current_display_path = None
         self._current_is_video = False
@@ -660,7 +722,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         scroller.set_child(picture)
         self.zoom_view = picture
         self.zoom_scroller = scroller
-        self.stack.add_child(scroller)
+        self._mount_rotatable(scroller)
 
     def _preload_neighbours(self) -> None:
         """Warm the decode cache for the items on either side of the current
@@ -705,6 +767,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._reset_zoom()
         self.zoom_view = None
         self.zoom_scroller = None
+        self._sensor_rotator = None
         spinner = Gtk.Spinner()
         spinner.start()
         spinner.set_size_request(32, 32)
@@ -751,6 +814,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._reset_zoom()
         self.zoom_view = None
         self.zoom_scroller = None
+        self._sensor_rotator = None
         if pixbuf is not None:
             picture = Gtk.Picture.new_for_pixbuf(pixbuf)
         else:
@@ -775,7 +839,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         scroller.set_child(picture)
         self.zoom_view = picture
         self.zoom_scroller = scroller
-        self.stack.add_child(scroller)
+        self._mount_rotatable(scroller)
         # Force a resize pass: removing + adding stack children doesn't always
         # reset cached size negotiation, so we nudge the toolbar/window once.
         self.queue_resize()
@@ -842,6 +906,7 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _on_destroy(self, _window) -> None:
         self._closing = True
+        self._orientation_client.stop()
         pool, self._decode_pool = self._decode_pool, None
         if pool is not None:
             pool.shutdown(wait=False)
