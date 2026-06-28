@@ -8,3 +8,4 @@ dist/
 *.egg-info/
 .venv/
 venv/
+.claude/settings.json
