@@ -4,6 +4,7 @@ import os
 import platform
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
+from . import updater
 from .camera_torch import TORCH_SYSFS_PATHS
 from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
 
@@ -181,6 +183,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         page.set_name("diagnostics")
         self.add(page)
 
+        self._build_updates_group(page)
+
         group = Adw.PreferencesGroup(
             title=self._("Diagnostics"),
             description=self._(
@@ -215,6 +219,131 @@ class SettingsWindow(Adw.PreferencesWindow):
         scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         scroller.set_child(self._diagnostics_view)
         group.add(scroller)
+
+    # ------------------------------------------------------------------
+    # In-app updates (check → apply → restart)
+    # ------------------------------------------------------------------
+
+    def _build_updates_group(self, page: Adw.PreferencesPage) -> None:
+        group = Adw.PreferencesGroup(title=self._("Updates"))
+        page.add(group)
+        self._update_row = Adw.ActionRow(title=self._("App version"))
+        self._update_row.set_subtitle(self._update_row_subtitle())
+        self._update_btn = Gtk.Button(label=self._("Check for updates"))
+        self._update_btn.set_valign(Gtk.Align.CENTER)
+        self._update_btn.connect("clicked", self._on_check_update)
+        self._update_row.add_suffix(self._update_btn)
+        group.add(self._update_row)
+
+    def _update_row_subtitle(self, check_iso: str | None = None) -> str:
+        parts = [f"v{updater.get_current_version()}"]
+        iso = check_iso or self.parent_window.settings.last_update_check
+        if iso:
+            try:
+                dt = datetime.fromisoformat(iso)
+                parts.append(self._("Last checked: ") + dt.strftime("%d.%m.%Y %H:%M"))
+            except ValueError:
+                pass
+        return "  ·  ".join(parts)
+
+    def _cancel_no_update_reset(self) -> None:
+        src = getattr(self, "_no_update_reset_src", 0)
+        if src:
+            GLib.source_remove(src)
+            self._no_update_reset_src = 0
+
+    def _reset_update_btn_idle(self) -> bool:
+        self._no_update_reset_src = 0
+        if not self._closing:
+            self._update_btn.set_label(self._("Check for updates"))
+            self._update_btn.set_sensitive(True)
+        return GLib.SOURCE_REMOVE
+
+    def _on_check_update(self, _btn: Gtk.Button) -> None:
+        self._cancel_no_update_reset()
+        self._update_btn.set_label(self._("Checking…"))
+        self._update_btn.set_sensitive(False)
+        threading.Thread(target=self._do_check_update, daemon=True).start()
+
+    def _do_check_update(self) -> None:
+        info = updater.check_for_update()
+        now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+        GLib.idle_add(self._on_check_update_done, info, now_iso)
+
+    def _on_check_update_done(self, info: "updater.UpdateInfo", now_iso: str) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
+        # Persist the timestamp so the row shows "last checked" next time too.
+        self.parent_window.settings.last_update_check = now_iso
+        self.parent_window.settings.save()
+        self._update_row.set_subtitle(self._update_row_subtitle(now_iso))
+        if info.available:
+            ver = info.remote_version or "?"
+            self._update_btn.set_label(self._("Update to v%s") % ver)
+            self._update_btn.add_css_class("suggested-action")
+            self._update_btn.set_sensitive(True)
+            try:
+                self._update_btn.disconnect_by_func(self._on_check_update)
+            except TypeError:
+                pass
+            self._update_btn.connect("clicked", self._on_apply_update)
+        else:
+            self._update_btn.set_label(self._("Up to date"))
+            self._update_btn.set_sensitive(False)
+            # Return the button to its idle "check" state after a short while.
+            self._cancel_no_update_reset()
+            self._no_update_reset_src = GLib.timeout_add_seconds(
+                10, self._reset_update_btn_idle
+            )
+        return GLib.SOURCE_REMOVE
+
+    def _on_apply_update(self, _btn: Gtk.Button) -> None:
+        self._update_btn.set_label(self._("Updating…"))
+        self._update_btn.set_sensitive(False)
+        threading.Thread(target=self._do_apply_update, daemon=True).start()
+
+    def _do_apply_update(self) -> None:
+        ok = updater.apply_update()
+        GLib.idle_add(self._on_apply_update_done, ok)
+
+    def _on_apply_update_done(self, ok: bool) -> bool:
+        if self._closing:
+            return GLib.SOURCE_REMOVE
+        if ok:
+            self._update_btn.set_label(self._("Restart required"))
+            self._update_btn.remove_css_class("suggested-action")
+            self._update_btn.set_sensitive(True)
+            try:
+                self._update_btn.disconnect_by_func(self._on_apply_update)
+            except TypeError:
+                pass
+            self._update_btn.connect("clicked", self._show_restart_dialog)
+            self._show_restart_dialog(None)
+        else:
+            self._update_btn.set_label(self._("Update failed"))
+            self._update_btn.set_sensitive(False)
+        return GLib.SOURCE_REMOVE
+
+    def _show_restart_dialog(self, _btn) -> None:
+        dialog = Adw.AlertDialog(
+            heading=self._("Restart Yaga?"),
+            body=self._("The update was installed. Restart Yaga to use the new version."),
+        )
+        dialog.add_response("no", self._("Later"))
+        dialog.add_response("yes", self._("Restart now"))
+        dialog.set_response_appearance("yes", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("yes")
+        dialog.set_close_response("no")
+        dialog.connect("response", self._on_restart_response)
+        dialog.present(self)
+
+    def _on_restart_response(self, _dialog, response: str) -> None:
+        if response == "yes":
+            # Re-exec via "-m yaga": __main__.py uses a relative import, so it
+            # can only run in package context — never as a bare script path.
+            # os.execv keeps the current environment (PYTHONPATH from the
+            # launcher), so the package stays importable.
+            os.execv(sys.executable, [sys.executable, "-m", "yaga", *sys.argv[1:]])
 
     def _copy_diagnostics(self, btn: Gtk.Button) -> None:
         text = self._diagnostics_text()
@@ -1096,6 +1225,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         if self._columns_debounce_id:
             GLib.source_remove(self._columns_debounce_id)
             self._columns_debounce_id = 0
+        self._cancel_no_update_reset()
 
     def _columns_changed(self, row: Adw.SpinRow, _param) -> None:
         # notify::value fires on every step while the user holds the +/- button

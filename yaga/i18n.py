@@ -268,6 +268,22 @@ TRANSLATIONS = {
         "October": "October",
         "November": "November",
         "December": "December",
+        # Updates (Settings → Diagnostics)
+        "Updates": "Updates",
+        "App version": "App version",
+        "Check for updates": "Check for updates",
+        "Checking…": "Checking…",
+        "Up to date": "Up to date",
+        "Update to v%s": "Update to v%s",
+        "Updating…": "Updating…",
+        "Update failed": "Update failed",
+        "Restart required": "Restart required",
+        "Restart Yaga?": "Restart Yaga?",
+        "The update was installed. Restart Yaga to use the new version.":
+            "The update was installed. Restart Yaga to use the new version.",
+        "Later": "Later",
+        "Restart now": "Restart now",
+        "Last checked: ": "Last checked: ",
     },
     "de": {
         # Navigation / gallery
@@ -532,6 +548,22 @@ TRANSLATIONS = {
         "October": "Oktober",
         "November": "November",
         "December": "Dezember",
+        # Updates (Settings → Diagnostics)
+        "Updates": "Aktualisierungen",
+        "App version": "App-Version",
+        "Check for updates": "Auf Updates prüfen",
+        "Checking…": "Prüfe …",
+        "Up to date": "Aktuell",
+        "Update to v%s": "Auf v%s aktualisieren",
+        "Updating…": "Aktualisiere …",
+        "Update failed": "Update fehlgeschlagen",
+        "Restart required": "Neustart erforderlich",
+        "Restart Yaga?": "Yaga neu starten?",
+        "The update was installed. Restart Yaga to use the new version.":
+            "Das Update wurde installiert. Starte Yaga neu, um die neue Version zu verwenden.",
+        "Later": "Später",
+        "Restart now": "Jetzt neu starten",
+        "Last checked: ": "Zuletzt geprüft: ",
     },
 }
 

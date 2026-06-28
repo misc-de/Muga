@@ -108,6 +108,9 @@ class Settings:
     # 0 means "unlimited"; any positive value triggers LRU eviction.
     cache_max_mb: int = 0
 
+    # ISO timestamp of the last in-app update check (shown in Settings).
+    last_update_check: str = ""
+
     # Nextcloud — stored in keyring; only URL/user saved to settings.json
     nextcloud_url: str = ""
     nextcloud_user: str = ""
