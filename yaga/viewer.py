@@ -957,9 +957,17 @@ class ViewerWindow(Adw.ApplicationWindow):
                 # / navigate) once the file is on disk. The cached display pixbuf
                 # is now stale, so drop it.
                 self._image_cache.pop(path, None)
+                # Grab the item now (on the main loop) so the worker doesn't read
+                # self.index while a follow-up navigation is mutating it.
+                item = (
+                    self.items[self.index]
+                    if self.items and 0 <= self.index < len(self.items)
+                    else None
+                )
 
                 def worker() -> None:
                     self._save_rotation_to_disk(path, rotation)
+                    self._refresh_thumbnail_after_rotation(path, item)
                     GLib.idle_add(lambda: (action(), GLib.SOURCE_REMOVE)[1])
 
                 threading.Thread(target=worker, daemon=True).start()
@@ -1002,6 +1010,38 @@ class ViewerWindow(Adw.ApplicationWindow):
             rotated.savev(path, fmt, [], [])
         except Exception:
             pass
+
+    def _refresh_thumbnail_after_rotation(self, path: str, item: MediaItem | None) -> None:
+        """Regenerate the gallery thumbnail after a rotation was baked into the
+        file on disk.
+
+        The thumbnail is keyed by the (unchanged) source path, so a plain
+        ``ensure_thumbnail`` would short-circuit on the still-existing stale file
+        and hand back the pre-rotation image. Delete it, regenerate, and push the
+        fresh thumb to the gallery grid so the tile turns without a full rescan.
+
+        Only for genuine local items whose display path *is* the stored path — an
+        NC item's display path is a throwaway download whose rotation never
+        persists to the server, so there is nothing to refresh there."""
+        if item is None or item.path != path:
+            return
+        parent = self.parent_window
+        try:
+            thumbnailer = parent.thumbnailer
+            thumbnailer.thumb_path_for(Path(path)).unlink(missing_ok=True)
+            thumb = thumbnailer.ensure_thumbnail(Path(path), item.media_type)
+        except Exception:
+            LOGGER.debug("thumbnail refresh after rotation failed for %s", path, exc_info=True)
+            return
+        if not thumb:
+            return
+        try:
+            parent.database.set_thumb(path, thumb, item.category)
+        except Exception:
+            LOGGER.debug("thumb DB write after rotation failed for %s", path, exc_info=True)
+        GLib.idle_add(
+            lambda: (parent._enqueue_thumb_update(path, thumb), GLib.SOURCE_REMOVE)[1]
+        )
 
     def _do_previous(self) -> None:
         self._step(-1)
