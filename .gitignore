@@ -9,3 +9,5 @@ dist/
 .venv/
 venv/
 .claude/settings.json
+.coverage
+htmlcov/

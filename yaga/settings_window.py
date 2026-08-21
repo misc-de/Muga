@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import sys
@@ -21,6 +22,8 @@ from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Se
 
 if TYPE_CHECKING:
     from .app import GalleryWindow
+
+LOGGER = logging.getLogger(__name__)
 
 
 class SettingsWindow(Adw.PreferencesWindow):
@@ -266,7 +269,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         threading.Thread(target=self._do_check_update, daemon=True).start()
 
     def _do_check_update(self) -> None:
-        info = updater.check_for_update()
+        # Any escape from this worker would kill the thread before idle_add
+        # runs, leaving the button stuck on "Checking…" forever with no way
+        # back short of restarting the app.
+        try:
+            info = updater.check_for_update()
+        except Exception:
+            LOGGER.exception("Update check failed")
+            info = updater.UpdateInfo(False, None)
         now_iso = datetime.now().astimezone().isoformat(timespec="seconds")
         GLib.idle_add(self._on_check_update_done, info, now_iso)
 
@@ -303,7 +313,14 @@ class SettingsWindow(Adw.PreferencesWindow):
         threading.Thread(target=self._do_apply_update, daemon=True).start()
 
     def _do_apply_update(self) -> None:
-        ok = updater.apply_update()
+        # Same reasoning as _do_check_update, and more consequential here: the
+        # overlay can raise (disk full, permissions), and a dead worker left
+        # the button on "Updating…" permanently.
+        try:
+            ok = updater.apply_update()
+        except Exception:
+            LOGGER.exception("Applying the update failed")
+            ok = False
         GLib.idle_add(self._on_apply_update_done, ok)
 
     def _on_apply_update_done(self, ok: bool) -> bool:
@@ -1246,6 +1263,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         value = int(row.get_value())
         self.settings.cache_max_mb = value
         self.parent_window.settings.cache_max_mb = value
+        # An explicit choice here — including 0 / unlimited — is final; mark it
+        # so load()'s one-shot default migration never overrides it.
+        self.settings.cache_budget_migrated = True
+        self.parent_window.settings.cache_budget_migrated = True
         self.parent_window.settings.save()
         # Trigger eviction in the background — won't block the UI even on
         # huge caches, since the file walk runs off the main loop.
@@ -1256,8 +1277,14 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _on_clear_cache_clicked(self, _btn: Gtk.Button) -> None:
         # Run the (potentially slow) wipe off the main thread.
         def _worker():
-            self.parent_window.clear_cache()
-            GLib.idle_add(self._refresh_cache_size_display_once)
+            try:
+                self.parent_window.clear_cache()
+            except Exception:
+                LOGGER.exception("Clearing the cache failed")
+            finally:
+                # Always refresh the size row — otherwise it keeps showing a
+                # stale figure with no hint that anything went wrong.
+                GLib.idle_add(self._refresh_cache_size_display_once)
         threading.Thread(target=_worker, daemon=True).start()
 
     def _refresh_cache_size_display(self) -> None:

@@ -191,6 +191,14 @@ TRANSLATIONS = {
         "Deleted": "Deleted",
         "Moved": "Moved",
         "Could not complete action": "Could not complete action",
+        "Save failed": "Save failed",
+        "Pillow is outdated — please update it.": "Pillow is outdated — please update it.",
+        "Your settings could not be read and were reset to defaults.":
+            "Your settings could not be read and were reset to defaults.",
+        "The media index was damaged and is being rebuilt.":
+            "The media index was damaged and is being rebuilt.",
+        "The rotation could not be saved. The photo on disk is unchanged.":
+            "The rotation could not be saved. The photo on disk is unchanged.",
         # Delete dialogs
         "Delete media?": "Delete media?",
         "Delete this item from the gallery?": "Delete this item from the gallery?",
@@ -474,6 +482,14 @@ TRANSLATIONS = {
         "Deleted": "Gelöscht",
         "Moved": "Verschoben",
         "Could not complete action": "Aktion konnte nicht ausgeführt werden",
+        "Save failed": "Speichern fehlgeschlagen",
+        "Pillow is outdated — please update it.": "Pillow ist veraltet — bitte aktualisieren.",
+        "Your settings could not be read and were reset to defaults.":
+            "Deine Einstellungen konnten nicht gelesen werden und wurden zurückgesetzt.",
+        "The media index was damaged and is being rebuilt.":
+            "Der Medienindex war beschädigt und wird neu aufgebaut.",
+        "The rotation could not be saved. The photo on disk is unchanged.":
+            "Die Drehung konnte nicht gespeichert werden. Das Foto auf der Festplatte ist unverändert.",
         # Delete dialogs
         "Delete media?": "Medium löschen?",
         "Delete this item from the gallery?": "Dieses Element aus der Galerie löschen?",

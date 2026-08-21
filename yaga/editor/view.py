@@ -1430,13 +1430,19 @@ class EditorView(Gtk.Box):
         Orientation was baked into the pixels at load time (exif_transpose), so
         the saved file must advertise Orientation=1 to avoid a double rotation
         in viewers. All other tags (camera model, GPS, capture date) are
-        preserved."""
+        preserved.
+
+        A source without EXIF still gets a minimal block, so the edited file
+        never lands on disk with no metadata at all — some receivers treat a
+        JPEG without EXIF as a plain file rather than a picture (Delta Chat's
+        core does exactly that when recoding fails)."""
         data = getattr(self, "_exif_bytes", None)
-        if not data:
-            return None
         try:
             exif = PILImage.Exif()
-            exif.load(data)
+            if data:
+                exif.load(data)
+            else:
+                exif[0x0131] = "Yaga"  # Software
             exif[0x0112] = 1  # Orientation: normal
             return exif.tobytes()
         except Exception:

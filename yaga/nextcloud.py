@@ -41,6 +41,13 @@ _NC_CACHE = CACHE_DIR / "nextcloud"
 _NC_THUMB = THUMB_DIR / "nextcloud"
 _CHUNK_SIZE = 1024 * 1024
 _MAX_THUMB_BYTES = 10 * 1024 * 1024
+# Ceiling on a PROPFIND body. Depth:infinity means the server decides how much
+# it sends, and the whole document is read into memory and then parsed into a
+# DOM — measured at ~70 MB peak for 60k files, and it scales linearly. 64 MB
+# is roughly a quarter-million entries: far past any real photo library, but
+# bounded, so a hostile or broken server cannot walk the process into the OOM
+# killer on a phone.
+_MAX_PROPFIND_BYTES = 64 * 1024 * 1024
 
 # Prefix stored in DB to identify nextcloud paths
 NC_PATH_PREFIX = "nextcloud://"
@@ -69,6 +76,10 @@ def dav_path_from_nc(nc: str) -> str:
 
 def is_nc_path(path: str) -> bool:
     return path.startswith(NC_PATH_PREFIX)
+
+
+class NextcloudResponseTooLarge(OSError):
+    """The server's PROPFIND body exceeded _MAX_PROPFIND_BYTES."""
 
 
 class NextcloudClient:
@@ -132,6 +143,38 @@ class NextcloudClient:
         if extra:
             h.update(extra)
         return h
+
+    @staticmethod
+    def _read_bounded(resp: http.client.HTTPResponse, max_bytes: int, what: str) -> bytes:
+        """Read a response body, refusing to buffer more than *max_bytes*.
+
+        A plain ``resp.read()`` lets the peer decide how much memory we spend.
+        The declared Content-Length is checked first so an oversized reply is
+        rejected before a single chunk is buffered; the streaming check below
+        covers chunked responses that declare no length at all.
+        """
+        length = resp.getheader("Content-Length")
+        if length is not None:
+            try:
+                if int(length) > max_bytes:
+                    raise NextcloudResponseTooLarge(
+                        f"{what} response is {length} bytes (limit {max_bytes})"
+                    )
+            except ValueError:
+                pass
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = resp.read(_CHUNK_SIZE)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise NextcloudResponseTooLarge(
+                    f"{what} response exceeds {max_bytes} bytes"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     def _temp_path_for(self, dest: Path) -> Path:
         return dest.with_name(f"{dest.name}.{os.getpid()}.{time.monotonic_ns()}.tmp")
@@ -217,7 +260,7 @@ class NextcloudClient:
                 raise FileNotFoundError(f"Folder not found: {remote_folder!r} (HTTP 404)")
             if resp.status not in (207,):
                 raise OSError(f"Unexpected HTTP status {resp.status} from {self.host}")
-            data = resp.read()
+            data = self._read_bounded(resp, _MAX_PROPFIND_BYTES, "PROPFIND")
         finally:
             conn.close()
         results = self._parse_propfind(data, folder_path)
@@ -234,6 +277,18 @@ class NextcloudClient:
         try:
             root = _xml_fromstring(data)
         except _xml_ParseError:
+            return []
+        except Exception:
+            # defusedxml rejects a hostile document by raising its own
+            # exceptions (EntitiesForbidden, DTDForbidden, …), none of which
+            # are ParseError — so catching only ParseError let those escape
+            # into the scan thread and abort the whole sync with a generic
+            # "could not connect". An unparsable listing means no files, the
+            # same as any other malformed response.
+            LOGGER.warning(
+                "Rejected a malformed or hostile PROPFIND response from %s",
+                self.host, exc_info=True,
+            )
             return []
         results: list[dict] = []
         for response in root.findall("D:response", ns):
