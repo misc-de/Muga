@@ -44,9 +44,61 @@ requires_display = pytest.mark.skipif(
 )
 
 
+def _offscreen_raster_works() -> bool:
+    """True when rendering a node offscreen gives back the colour it was given.
+
+    Some environments — a headless CI runner with no GPU, notably — realise a
+    GskCairoRenderer happily and then hand back a texture whose pixels are not
+    what was painted. The tests that check "the rotation actually moves
+    pixels" build their snapshot out of plain GTK primitives and never touch
+    Yaga code, so where this is broken they say nothing about the app; they
+    only report that the environment cannot rasterise. Skipping is the honest
+    answer there, and this is the check that decides it: paint one opaque red
+    square, read one pixel back.
+    """
+    if not _has_display():
+        return False
+    try:
+        import io
+
+        import gi
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Gsk", "4.0")
+        gi.require_version("Graphene", "1.0")
+        from gi.repository import Gdk, Graphene, Gsk, Gtk
+        from PIL import Image
+
+        snapshot = Gtk.Snapshot()
+        snapshot.append_color(
+            Gdk.RGBA(red=1.0, green=0.0, blue=0.0, alpha=1.0),
+            Graphene.Rect().init(0, 0, 4, 4))
+        renderer = Gsk.CairoRenderer.new()
+        renderer.realize(None)
+        try:
+            texture = renderer.render_texture(
+                snapshot.to_node(), Graphene.Rect().init(0, 0, 4, 4))
+            png = texture.save_to_png_bytes().get_data()
+        finally:
+            renderer.unrealize()
+        r, g, b, a = Image.open(io.BytesIO(png)).convert("RGBA").load()[1, 1]
+        return a > 200 and r > 200 and g < 60 and b < 60
+    except Exception:
+        return False
+
+
+requires_offscreen_raster = pytest.mark.skipif(
+    not _offscreen_raster_works(),
+    reason="offscreen rendering does not reproduce colours in this environment",
+)
+
+
 def pytest_configure(config) -> None:
     config.addinivalue_line(
         "markers", "requires_display: test constructs real GTK widgets",
+    )
+    config.addinivalue_line(
+        "markers",
+        "requires_offscreen_raster: test reads pixels back from a rendered node",
     )
 
 

@@ -24,7 +24,7 @@ import time
 
 import pytest
 
-from tests.conftest import requires_display
+from tests.conftest import requires_display, requires_offscreen_raster
 
 PILImage = pytest.importorskip("PIL.Image")
 
@@ -194,6 +194,7 @@ def _recorded_calls(gtk, widget):
 # The rotation actually moves pixels
 # ---------------------------------------------------------------------------
 
+@requires_offscreen_raster
 def test_the_marker_starts_in_the_top_left(gtk) -> None:
     """Baseline for the rotations below: unrotated, the marker is top-left."""
     pixel = _rotated_marker(gtk, 0)
@@ -203,6 +204,7 @@ def test_the_marker_starts_in_the_top_left(gtk) -> None:
     assert not _is_red(pixel(6, 41))
 
 
+@requires_offscreen_raster
 @pytest.mark.parametrize(
     ("degrees", "corner"),
     [
@@ -219,6 +221,7 @@ def test_rotation_moves_the_marker_to_the_next_corner(gtk, degrees, corner) -> N
     assert not _is_red(pixel(6, 6)), f"{degrees}° left the marker where it started"
 
 
+@requires_offscreen_raster
 def test_rotation_keeps_the_content_inside_the_widget(gtk) -> None:
     """Rotating about a corner instead of the centre would push half the glyph
     outside its allocation, where it gets clipped."""
@@ -232,6 +235,7 @@ def test_rotation_keeps_the_content_inside_the_widget(gtk) -> None:
             f"{degrees}° clipped the marker: {len(painted)} of {mark * mark} px")
 
 
+@requires_offscreen_raster
 def test_a_full_turn_is_the_same_as_none(gtk) -> None:
     plain = _rotated_marker(gtk, 0)
     full = _rotated_marker(gtk, 360)
@@ -608,6 +612,7 @@ def test_setting_the_same_mirror_state_twice_is_ignored(gtk) -> None:
     assert calls["draw"] == 1
 
 
+@requires_offscreen_raster
 def test_mirroring_is_visible_in_a_raster(gtk) -> None:
     """The transform read back from the tree says what was pushed; this says
     it has the effect the name promises."""
