@@ -472,7 +472,7 @@ def test_neutral_channel_gains_leave_the_pixels_exact() -> None:
     it anyway would round every channel through int() for nothing."""
     src = PILImage.new("RGB", (20, 20), (33, 77, 199))
     out = view.EditorView._apply_edits(_edit_win(), src)
-    assert list(out.getdata()) == list(src.getdata())
+    assert list(out.get_flattened_data()) == list(src.get_flattened_data())
 
 
 def test_filters_can_be_skipped() -> None:
@@ -511,7 +511,7 @@ def test_filter_only_stage_matches_the_full_pipeline() -> None:
     whole = view.EditorView._apply_edits(win, src)
     halves = view.EditorView._apply_edits(
         win, view.EditorView._apply_filter_only(win, src), apply_filter=False)
-    assert list(whole.getdata()) == list(halves.getdata())
+    assert list(whole.get_flattened_data()) == list(halves.get_flattened_data())
 
 
 def test_obfuscate_blurs_only_where_it_was_drawn() -> None:
@@ -558,7 +558,7 @@ def test_an_emoji_sticker_is_pasted() -> None:
     win = _edit_win(_stickers=[{"source": "🙂", "size": 0.3, "rel": (0.5, 0.5)}])
     out = view.EditorView._apply_edits(win, src)
     assert out.size == src.size
-    assert list(out.getdata()) != list(src.getdata()), "nothing was pasted"
+    assert list(out.get_flattened_data()) != list(src.get_flattened_data()), "nothing was pasted"
 
 
 def test_an_image_sticker_keeps_its_aspect() -> None:
@@ -599,6 +599,6 @@ def test_edits_do_not_mutate_the_source() -> None:
     """History snapshots share the working image by reference, so an in-place
     edit would silently rewrite every undo step."""
     src = _grey()
-    before = list(src.getdata())
+    before = list(src.get_flattened_data())
     view.EditorView._apply_edits(_edit_win(_brightness=1.5, _contrast=1.4), src)
-    assert list(src.getdata()) == before
+    assert list(src.get_flattened_data()) == before

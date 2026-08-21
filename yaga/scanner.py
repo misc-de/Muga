@@ -128,7 +128,7 @@ class MediaScanner:
                     try:
                         thumb_file.unlink()
                     except OSError:
-                        pass
+                        LOGGER.debug("thumb_file.unlink failed", exc_info=True)
                     thumb_exists = False
                 folder = self._relative_folder(root, path.parent)
                 chunk.append((path, media_type, folder, not thumb_exists, st))

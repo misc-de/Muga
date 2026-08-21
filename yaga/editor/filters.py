@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from ._pil import ImageEnhance, ImageOps, PILImage
+
+# (key, label, transform). `None` is the "Original" pass-through — callers
+# check for it rather than calling an identity function.
+FilterFn = Callable[["PILImage.Image"], "PILImage.Image"]
 
 
 def _filter_bw(img: "PILImage.Image") -> "PILImage.Image":
@@ -59,7 +65,7 @@ def _filter_invert(img: "PILImage.Image") -> "PILImage.Image":
 
 
 # Filter table consumed by the editor's filter panel — drives the toggle row.
-_FILTER_DEFS: list[tuple[str, str, object]] = [
+_FILTER_DEFS: list[tuple[str, str, FilterFn | None]] = [
     ("none",      "Original",    None),
     ("bw",        "S/W",         _filter_bw),
     ("sepia",     "Sepia",       _filter_sepia),

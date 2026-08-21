@@ -137,4 +137,4 @@ def _get_emoji_pil(char: str, px: int) -> "PILImage.Image":
     base = _EMOJI_PIL_CACHE[char]
     if px == _MASTER:
         return base
-    return base.resize((px, px), PILImage.LANCZOS)
+    return base.resize((px, px), PILImage.Resampling.LANCZOS)

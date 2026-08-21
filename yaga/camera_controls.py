@@ -117,7 +117,7 @@ def probe_controls(device_path: str) -> dict[str, V4l2Control]:
                     try:
                         setattr(ctrl, k, int(v, 0))
                     except ValueError:
-                        pass
+                        LOGGER.debug("setattr failed", exc_info=True)
             flag_m = _FLAGS_RE.search(rest)
             if flag_m:
                 ctrl.flags = [s.strip() for s in flag_m.group(1).split(",") if s.strip()]
@@ -130,7 +130,7 @@ def probe_controls(device_path: str) -> dict[str, V4l2Control]:
                 try:
                     current.menu[int(mm.group("value"))] = mm.group("label").strip()
                 except ValueError:
-                    pass
+                    LOGGER.debug("current.menu[int(mm.group('value'))] assignment failed", exc_info=True)
     return controls
 
 

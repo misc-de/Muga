@@ -71,7 +71,7 @@ def _draw_soft_border(draw: "ImageDraw.ImageDraw", iw: int, ih: int, bw: int, c1
     draw.rounded_rectangle([bw, bw, iw - bw - 1, ih - bw - 1], radius=bw // 3, outline=(255, 255, 255, 155), width=max(1, bw // 18))
 
 
-def _edge_positions(length: int, margin: int, count: int) -> list[int]:
+def _edge_positions(length: int, margin: int, count: int) -> list[float]:
     if count <= 1:
         return [length // 2]
     usable = max(1, length - margin * 2)
@@ -182,10 +182,10 @@ def _decorate_easter(draw: "ImageDraw.ImageDraw", iw: int, ih: int, bw: int) -> 
     for y in _edge_positions(ih, bw, 6):
         _draw_flower(draw, bw * 0.45, y, bw * 0.20, (255, 220, 236, 230), (255, 200, 76, 245))
     for x in [bw * 1.15, iw - bw * 1.15]:
-        y = bw * 0.92
-        draw.ellipse([x - bw * 0.42, y - bw * 0.85, x - bw * 0.08, y], fill=(255, 245, 250, 230))
-        draw.ellipse([x + bw * 0.08, y - bw * 0.85, x + bw * 0.42, y], fill=(255, 245, 250, 230))
-        draw.ellipse([x - bw * 0.55, y - bw * 0.28, x + bw * 0.55, y + bw * 0.52], fill=(255, 250, 252, 230))
+        cy = bw * 0.92
+        draw.ellipse([x - bw * 0.42, cy - bw * 0.85, x - bw * 0.08, cy], fill=(255, 245, 250, 230))
+        draw.ellipse([x + bw * 0.08, cy - bw * 0.85, x + bw * 0.42, cy], fill=(255, 245, 250, 230))
+        draw.ellipse([x - bw * 0.55, cy - bw * 0.28, x + bw * 0.55, cy + bw * 0.52], fill=(255, 250, 252, 230))
 
 
 def _decorate_wedding(draw: "ImageDraw.ImageDraw", iw: int, ih: int, bw: int) -> None:

@@ -8,7 +8,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import gi
 
@@ -29,6 +29,7 @@ from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem
 from .nextcloud import is_nc_path
 from .rotated_container import RotatedContainer
+from .gtk_util import idle_once, texture_from_pixbuf
 from .thumbnails import image_within_pixel_budget
 
 if TYPE_CHECKING:
@@ -63,20 +64,21 @@ def _write_in_place_atomic(path: str, write) -> None:
                 try:
                     os.chown(tmp, st.st_uid, st.st_gid)
                 except (OSError, PermissionError):
-                    pass
+                    LOGGER.debug("os.chown failed", exc_info=True)
         except OSError:
-            pass
+            # Best effort: the replacement file keeps default ownership/mode.
+            LOGGER.debug("could not copy owner/mode onto %s", tmp, exc_info=True)
         os.replace(tmp, target)
     except BaseException:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
-            pass
+            LOGGER.debug("tmp.unlink failed", exc_info=True)
         raise
 
 # Maps the 4-state device orientation reported by the accelerometer to the
 # rotation (degrees) that keeps the photo upright in the user's view. Mirrors
-# the camera viewfinder's mapping (camera._ICON_ROTATION_DEG) so a phone held
+# the camera viewfinder's mapping (camera_orientation._ICON_ROTATION_DEG) so a phone held
 # in landscape shows the picture the same way the camera previews it — the X
 # axis is inverted relative to the Android convention to match this HAL.
 _SENSOR_ROTATION_DEG = {
@@ -87,11 +89,12 @@ _SENSOR_ROTATION_DEG = {
 }
 
 def _fmt_size(size: int) -> str:
+    scaled = float(size)
     for unit in ("B", "KB", "MB", "GB"):
-        if size < 1024:
-            return f"{size:.0f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
+        if scaled < 1024:
+            return f"{scaled:.0f} {unit}"
+        scaled /= 1024
+    return f"{scaled:.1f} TB"
 
 
 def _fmt_date(mtime: float) -> str:
@@ -176,9 +179,13 @@ def _extract_exif(path: str) -> dict[str, str]:
                         lon = -lon
                     exif_info["GPS"] = f"{lat:.4f}, {lon:.4f}"
                 except (TypeError, IndexError, ZeroDivisionError):
-                    pass
+                    # Truncated or zero-denominator GPS rationals — drop the
+                    # coordinate, keep the rest of the EXIF block.
+                    LOGGER.debug("malformed EXIF GPS rationals in %s", path, exc_info=True)
     except Exception:
-        pass
+        # EXIF is decoration here — a malformed tag block must never stop the
+        # photo from opening.
+        LOGGER.debug("EXIF parse failed for %s", path, exc_info=True)
     return exif_info
 
 
@@ -567,7 +574,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._set_view_actions_visible(False)
         # Defer the dialog until the placeholder is on screen so the user has
         # something to look at while choosing.
-        GLib.idle_add(lambda: (self._prompt_nc_reconnect(item), GLib.SOURCE_REMOVE)[1])
+        idle_once(self._prompt_nc_reconnect, item)
 
     def _prompt_nc_reconnect(self, item: MediaItem) -> None:
         if self._closing:
@@ -621,7 +628,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             try:
                 old_client.close()
             except Exception:
-                pass
+                LOGGER.debug("old_client.close failed", exc_info=True)
         # The gallery's category nav was built without the Nextcloud entry —
         # add it back now that NC is active again.
         self.parent_window._rebuild_categories()
@@ -651,7 +658,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             try:
                 old_client.close()
             except Exception:
-                pass
+                LOGGER.debug("old_client.close failed", exc_info=True)
         # If NC vanished from the gallery (master toggle was off before), the
         # nav has to be rebuilt to reflect that.
         self.parent_window._rebuild_categories()
@@ -793,7 +800,10 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _mount_picture(self, pixbuf, path: str) -> None:
         if pixbuf is not None:
-            picture = Gtk.Picture.new_for_pixbuf(pixbuf)
+            # Gtk.Picture.new_for_pixbuf is deprecated; wrapping the pixbuf in
+            # a texture is what it does internally and is what gallery_grid
+            # already does for thumbnails.
+            picture = Gtk.Picture.new_for_paintable(texture_from_pixbuf(pixbuf))
         else:
             # Decode failed — fall back to GTK's lazy filename loader.
             picture = Gtk.Picture.new_for_filename(path)
@@ -907,7 +917,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_scroller = None
         self._sensor_rotator = None
         if pixbuf is not None:
-            picture = Gtk.Picture.new_for_pixbuf(pixbuf)
+            picture = Gtk.Picture.new_for_paintable(texture_from_pixbuf(pixbuf))
         else:
             picture = Gtk.Picture.new_for_filename(self._current_display_path or "")
         picture.set_content_fit(Gtk.ContentFit.CONTAIN)
@@ -943,9 +953,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         if w > 0 and h > 0 and w > h:
             # Landscape video: auto-hide chrome, and route through the same
             # helper so a subsequent swipe keeps the chrome hidden.
-            GLib.idle_add(
-                lambda: (self._set_chrome_visible(False), GLib.SOURCE_REMOVE)[1],
-            )
+            idle_once(self._set_chrome_visible, False)
 
     def _update_date_label(self, item: MediaItem) -> None:
         try:
@@ -1014,7 +1022,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         if self.props.fullscreened:
             self.unfullscreen()
         parent = self.parent_window
-        GLib.idle_add(lambda: (parent.present(), GLib.SOURCE_REMOVE)[1])
+        idle_once(parent.present)
         return False
 
     def _check_rotation_before_action(self, action) -> None:
@@ -1120,7 +1128,7 @@ class ViewerWindow(Adw.ApplicationWindow):
                     img = ImageOps.exif_transpose(src)
                     img = img.rotate(-rotation, expand=True)
                 ext = Path(path).suffix.lower()
-                save_kwargs = {"exif": exif_bytes} if exif_bytes else {}
+                save_kwargs: dict[str, Any] = {"exif": exif_bytes} if exif_bytes else {}
                 if ext in (".jpg", ".jpeg"):
                     save_kwargs["quality"] = 95
                 # Pillow infers the output format from the filename, and the
@@ -1179,9 +1187,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             parent.database.set_thumb(path, thumb, item.category)
         except Exception:
             LOGGER.debug("thumb DB write after rotation failed for %s", path, exc_info=True)
-        GLib.idle_add(
-            lambda: (parent._enqueue_thumb_update(path, thumb), GLib.SOURCE_REMOVE)[1]
-        )
+        idle_once(parent._enqueue_thumb_update, path, thumb)
 
     def _do_previous(self) -> None:
         self._step(-1)
@@ -1595,7 +1601,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             try:
                 Path(item.thumb_path).unlink(missing_ok=True)
             except OSError:
-                pass
+                LOGGER.debug("Path failed", exc_info=True)
         # Category-agnostic: the file is trashed, so every index row for the
         # path is stale (also covers Overview/Videos where item.category is the
         # real category but a same-path row could exist under another category).
