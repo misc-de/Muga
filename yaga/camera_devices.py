@@ -349,5 +349,37 @@ def resolutions_from_caps(caps: Any) -> list[tuple[int, int]]:
 
 
 def device_kinds(caps: Any) -> set[str]:
-    """Which capture formats a device advertises: {'raw', 'jpeg'}."""
-    return {k for _w, _h, k in modes_from_caps(caps)}
+    """Which capture formats a device advertises: {'raw', 'jpeg'}.
+
+    Read off the structure names directly rather than via modes_from_caps,
+    because the two questions have different answers. modes_from_caps needs
+    concrete numbers to offer in the resolution picker, so it skips a
+    structure whose width/height are ranges. But "does this device do raw
+    video" is answerable from the structure name alone — and libcamera
+    reports exactly that shape before a device is opened:
+
+        video/x-raw, format=(string)I420, width=(int)[ 320, 1920 ], ...
+
+    Going through modes_from_caps meant every such device came back with no
+    kinds and was dropped as metadata-only. Verified on a FuriOS phone, whose
+    three libcamera cameras all advertise ranges; there droidcamsrc takes over
+    and hides the problem, but a desktop on the libcamera stack (Intel IPU6
+    webcams, for one) would have found no camera at all.
+    """
+    if caps is None:
+        return set()
+    try:
+        n = caps.get_size()
+    except Exception:
+        return set()
+    kinds: set[str] = set()
+    for i in range(n):
+        s = caps.get_structure(i)
+        if s is None:
+            continue
+        name = s.get_name()
+        if name == "video/x-raw":
+            kinds.add("raw")
+        elif name == "image/jpeg":
+            kinds.add("jpeg")
+    return kinds
