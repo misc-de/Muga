@@ -69,7 +69,7 @@ def test_viewer_and_camera_rotation_maps_agree() -> None:
 def test_rotated_container_snaps_to_quarter_turns() -> None:
     """RotatedContainer normalises any angle to {0,90,180,270}; off-axis values
     snap to 0 so the layout never skews."""
-    Gtk = pytest.importorskip("gi.repository.Gtk")
+    pytest.importorskip("gi.repository.Gtk")
     try:
         from yaga.rotated_container import RotatedContainer
 

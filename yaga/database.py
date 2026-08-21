@@ -12,6 +12,10 @@ from .models import MediaItem
 
 LOGGER = logging.getLogger(__name__)
 
+# Attempts for a write that finds the database busy (exponential backoff,
+# 0.05 s doubling — ~0.75 s of patience in total).
+_WRITE_RETRIES = 5
+
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS media (
@@ -125,17 +129,55 @@ class Database:
         # the rare write-vs-write race at the SQLite layer with a short
         # internal wait-and-retry instead of an exception.
         self._tls = threading.local()
+        # Shared by every thread — see the wlock property.
+        self._write_lock = threading.RLock()
         # Initialise the *current* thread's connection so the schema/migration
         # work below runs on a fully-configured handle.
-        self._open_conn()
-        with self.lock:
-            self.conn.executescript(SCHEMA_V1)
-            self._migrate()
+        try:
+            # _open_conn already runs PRAGMAs, so an unreadable file fails here
+            # rather than at the first query — keep it inside the guard.
+            self._open_conn()
+            with self.lock:
+                self.wconn.executescript(SCHEMA_V1)
+                self._migrate()
+        except sqlite3.DatabaseError:
+            # The file at DB_PATH is not a usable database — a truncated write,
+            # a bad block on an SD card, or something else entirely landing on
+            # the path. Every row in here is derived from files on disk, so the
+            # cheapest correct answer is to throw it away and let the next scan
+            # rebuild it. Crashing instead would leave the app unable to start
+            # at all, with nothing but a traceback on a device that has no
+            # terminal.
+            LOGGER.warning("Media index at %s is unusable — rebuilding", path, exc_info=True)
+            self._discard_and_reopen()
+            with self.lock:
+                self.wconn.executescript(SCHEMA_V1)
+                self._migrate()
 
-    def _open_conn(self) -> "sqlite3.Connection":
-        """Open a fresh sqlite3 connection for the calling thread, applying
-        the same PRAGMAs as the main connection. Called lazily from the
-        :pyattr:`conn` property the first time each thread touches the DB."""
+    def _discard_and_reopen(self) -> None:
+        """Move the unusable database file aside and open a fresh one."""
+        for existing in (getattr(self._tls, "conn", None), getattr(self, "_wconn", None)):
+            if existing is not None:
+                try:
+                    existing.close()
+                except Exception:
+                    pass
+        self._tls.conn = None
+        self._wconn = None
+        for suffix in ("", "-wal", "-shm"):
+            broken = Path(str(self._db_path) + suffix)
+            try:
+                if broken.exists():
+                    broken.replace(Path(str(broken) + ".corrupt"))
+            except OSError:
+                try:
+                    broken.unlink(missing_ok=True)
+                except OSError:
+                    LOGGER.debug("Could not clear %s", broken, exc_info=True)
+        self._open_conn()
+
+    def _new_conn(self) -> "sqlite3.Connection":
+        """Open a connection with the app's standard PRAGMAs applied."""
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         # WAL: readers + one writer in parallel, no SQLite-level blocking.
@@ -147,10 +189,37 @@ class Database:
         # spill to disk; 16 MB keeps the working set resident on phone-sized
         # libraries for a noticeable win on those queries.
         conn.execute("PRAGMA cache_size=-16000")
-        # 5 s busy timeout so concurrent writers wait at the SQLite layer
-        # instead of raising OperationalError("database is locked").
+        # 5 s busy timeout so a writer waiting on *another process* waits at
+        # the SQLite layer instead of raising straight away.
         conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
+    def _open_conn(self) -> "sqlite3.Connection":
+        """Open this thread's read connection. Called lazily from the
+        :pyattr:`conn` property the first time each thread touches the DB."""
+        conn = self._new_conn()
         self._tls.conn = conn
+        return conn
+
+    @property
+    def wconn(self) -> "sqlite3.Connection":
+        """The single connection every write goes through.
+
+        Writes used to run on the calling thread's own connection, and most
+        write methods deliberately leave the transaction open so the scanner
+        can batch a whole sweep into one commit. Those two facts together mean
+        a scan thread holds SQLite's write lock for as long as its batch
+        lasts, and every other thread's write hits SQLITE_BUSY and is lost —
+        busy_timeout cannot help, because the holder is not going to finish
+        within any timeout. Funnelling writes through one connection, guarded
+        by :pyattr:`wlock`, means there is only ever one write transaction in
+        this process. Readers keep their own connections and still run
+        concurrently, which is what WAL is for.
+        """
+        conn = getattr(self, "_wconn", None)
+        if conn is None:
+            conn = self._new_conn()
+            self._wconn = conn
         return conn
 
     @property
@@ -159,6 +228,45 @@ class Database:
         if c is None:
             c = self._open_conn()
         return c
+
+    @property
+    def wlock(self) -> threading.RLock:
+        """Process-wide lock held across every write.
+
+        ``lock`` below is deliberately *per thread* and therefore serialises
+        nothing between threads — WAL plus busy_timeout were meant to absorb
+        write-vs-write contention at the SQLite layer. Under load they don't
+        quite: a scan thread, the NC sync and a delete running together still
+        produced ``OperationalError: database is locked`` a handful of times
+        per 70k writes, and nothing retried them, so the write was simply lost.
+
+        Serialising *writers* fixes that at the source without bringing back
+        the UI stalls that killed the old global lock: readers never take this,
+        so gallery rendering still runs concurrently with a long scan.
+        """
+        return self._write_lock
+
+    def _run_write(self, fn):
+        """Execute *fn* under the writer lock, retrying a busy database.
+
+        The lock removes contention between Yaga's own threads; the retry
+        covers the remaining case of a second process (a second window, or a
+        stray instance) holding the write lock when we arrive.
+        """
+        with self._write_lock:
+            delay = 0.05
+            for attempt in range(_WRITE_RETRIES):
+                try:
+                    return fn()
+                except sqlite3.OperationalError as exc:
+                    message = str(exc).lower()
+                    if "locked" not in message and "busy" not in message:
+                        raise
+                    if attempt == _WRITE_RETRIES - 1:
+                        LOGGER.warning("Write gave up after %d attempts: %s", _WRITE_RETRIES, exc)
+                        raise
+                    time.sleep(delay)
+                    delay *= 2
 
     @property
     def lock(self) -> threading.RLock:
@@ -174,20 +282,20 @@ class Database:
         return lk
 
     def _migrate(self) -> None:
-        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        version = self.wconn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             # Check if old schema (UNIQUE on path alone) is in use
-            info = self.conn.execute(
+            info = self.wconn.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name='media'"
             ).fetchone()
             if info and "UNIQUE(path, category)" not in info["sql"]:
-                self.conn.executescript(_MIGRATION_V1)
+                self.wconn.executescript(_MIGRATION_V1)
         if version < 2:
             # Add EXIF cache column
             try:
-                self.conn.execute("ALTER TABLE media ADD COLUMN exif_data TEXT DEFAULT NULL")
-                self.conn.execute("PRAGMA user_version = 2")
-                self.conn.commit()
+                self.wconn.execute("ALTER TABLE media ADD COLUMN exif_data TEXT DEFAULT NULL")
+                self.wconn.execute("PRAGMA user_version = 2")
+                self.wconn.commit()
             except sqlite3.OperationalError:
                 # Column already exists
                 pass
@@ -198,13 +306,13 @@ class Database:
         # directly.) Idempotent: gated on user_version, runs once.
         if version < 6:
             try:
-                self.conn.executescript(
+                self.wconn.executescript(
                     "DROP TRIGGER IF EXISTS media_ai;"
                     "DROP TRIGGER IF EXISTS media_ad;"
                     "DROP TRIGGER IF EXISTS media_au;"
                     "DROP TABLE IF EXISTS media_fts;"
                 )
-                self.conn.commit()
+                self.wconn.commit()
             except sqlite3.OperationalError:
                 pass
         # FTS5 trigram index for substring search on `name` + `exif_data`.
@@ -213,14 +321,14 @@ class Database:
         # Search falls back to LIKE when the table isn't there.
         self._has_fts = False
         try:
-            self.conn.execute(_FTS_CREATE_SQL)
+            self.wconn.execute(_FTS_CREATE_SQL)
             # Whether the index is populated and its sync triggers are
             # installed cannot be inferred from user_version alone: if FTS5 was
             # unavailable on an earlier open, user_version advanced past 3 via
             # later migrations while the index was never built. Probe the
             # triggers directly so a later FTS-capable open self-heals instead
             # of silently returning zero matches forever.
-            have_triggers = self.conn.execute(
+            have_triggers = self.wconn.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
                 "AND name IN ('media_ai', 'media_ad', 'media_au')"
             ).fetchone()[0] == 3
@@ -235,11 +343,11 @@ class Database:
                 # rows are visible via `SELECT rowid, name FROM
                 # media_fts`. The 'rebuild' command is the documented
                 # initial-population path and idempotent on its own.
-                self.conn.execute("INSERT INTO media_fts(media_fts) VALUES('rebuild')")
-                self.conn.executescript(_FTS_TRIGGERS_SQL)
+                self.wconn.execute("INSERT INTO media_fts(media_fts) VALUES('rebuild')")
+                self.wconn.executescript(_FTS_TRIGGERS_SQL)
                 if version < 3:
-                    self.conn.execute("PRAGMA user_version = 3")
-                self.conn.commit()
+                    self.wconn.execute("PRAGMA user_version = 3")
+                self.wconn.commit()
             self._has_fts = True
         except sqlite3.OperationalError as exc:
             LOGGER.warning(
@@ -253,15 +361,15 @@ class Database:
             # files that happened to live under both ~/Pictures and
             # another scanned root.
             try:
-                self.conn.execute("DELETE FROM media WHERE category = 'pictures'")
-                self.conn.execute("PRAGMA user_version = 4")
-                self.conn.commit()
+                self.wconn.execute("DELETE FROM media WHERE category = 'pictures'")
+                self.wconn.execute("PRAGMA user_version = 4")
+                self.wconn.commit()
             except sqlite3.OperationalError:
                 pass
         if version < 5:
             try:
-                self.conn.executescript(_MIGRATION_V5)
-                self.conn.commit()
+                self.wconn.executescript(_MIGRATION_V5)
+                self.wconn.commit()
             except sqlite3.OperationalError as exc:
                 LOGGER.warning("Could not create media performance indexes: %s", exc)
         if version < 6:
@@ -269,8 +377,8 @@ class Database:
             # place; pin the schema version so the drop/rebuild above runs at
             # most once. Done even when FTS is unavailable — the version only
             # records that the migration step was reached.
-            self.conn.execute("PRAGMA user_version = 6")
-            self.conn.commit()
+            self.wconn.execute("PRAGMA user_version = 6")
+            self.wconn.commit()
 
     def load_scan_index(self, category: str) -> dict[str, tuple[float, int]]:
         """Return ``{path: (mtime, size)}`` for every row in *category*.
@@ -296,8 +404,8 @@ class Database:
         if not paths:
             return
         now = time.time()
-        with self.lock:
-            self.conn.executemany(
+        with self.wlock:
+            self.wconn.executemany(
                 "UPDATE media SET seen_at = ? WHERE path = ? AND category = ?",
                 [(now, p, category) for p in paths],
             )
@@ -306,8 +414,8 @@ class Database:
                      thumb_path: str | None, stat: os.stat_result | None = None) -> None:
         if stat is None:
             stat = path.stat()
-        with self.lock:
-            self.conn.execute(
+        with self.wlock:
+            self.wconn.execute(
                 """
                 INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -325,8 +433,8 @@ class Database:
 
     def upsert_remote_media(self, *, path: str, category: str, media_type: str, folder: str,
                              name: str, mtime: float, size: int, thumb_path: str | None) -> None:
-        with self.lock:
-            self.conn.execute(
+        with self.wlock:
+            self.wconn.execute(
                 """
                 INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -356,8 +464,8 @@ class Database:
             )
             for r in rows
         ]
-        with self.lock:
-            self.conn.executemany(
+        with self.wlock:
+            self.wconn.executemany(
                 """
                 INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
                 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -377,11 +485,11 @@ class Database:
         if not categories:
             return 0
         placeholders = ",".join("?" for _category in categories)
-        with self.lock:
+        with self.wlock:
             # DELETE … RETURNING evaluates the (un-indexed) seen_at predicate
             # once instead of twice — the old SELECT-then-DELETE ran it back to
             # back. SQLite ≥ 3.35 (we require far newer) supports RETURNING.
-            stale = self.conn.execute(
+            stale = self.wconn.execute(
                 f"DELETE FROM media WHERE seen_at < ? AND category IN ({placeholders}) "
                 "RETURNING thumb_path",
                 [seen_since, *categories],
@@ -396,25 +504,25 @@ class Database:
         return len(stale)
 
     def set_thumb(self, path: str, thumb_path: str, category: str | None = None) -> None:
-        with self.lock:
+        with self.wlock:
             if category is not None:
-                self.conn.execute(
+                self.wconn.execute(
                     "UPDATE media SET thumb_path = ? WHERE path = ? AND category = ?",
                     (thumb_path, path, category),
                 )
             else:
-                self.conn.execute("UPDATE media SET thumb_path = ? WHERE path = ?", (thumb_path, path))
+                self.wconn.execute("UPDATE media SET thumb_path = ? WHERE path = ?", (thumb_path, path))
 
     def set_exif_data(self, path: str, exif_json: str, category: str | None = None) -> None:
         """Store cached EXIF data (JSON) for a media item."""
-        with self.lock:
+        with self.wlock:
             if category is not None:
-                self.conn.execute(
+                self.wconn.execute(
                     "UPDATE media SET exif_data = ? WHERE path = ? AND category = ?",
                     (exif_json, path, category),
                 )
             else:
-                self.conn.execute("UPDATE media SET exif_data = ? WHERE path = ?", (exif_json, path))
+                self.wconn.execute("UPDATE media SET exif_data = ? WHERE path = ?", (exif_json, path))
 
     def get_exif_data(self, path: str, category: str | None = None) -> str | None:
         """Retrieve cached EXIF data (JSON) for a media item."""
@@ -430,8 +538,11 @@ class Database:
         return row["exif_data"] if row else None
 
     def commit(self) -> None:
-        with self.lock:
-            self.conn.commit()
+        # _run_write, not a bare wlock: this is where the batched transaction
+        # actually reaches disk, so it is the moment another *process* (a
+        # second window, a stray instance) can be holding the file's write
+        # lock. Losing here would discard a whole scan batch.
+        self._run_write(self.wconn.commit)
 
     @staticmethod
     def _build_list_where(category: str, folder: str | None, include_nc: bool,
@@ -765,19 +876,23 @@ class Database:
         ]
 
     def delete_path(self, path: str, category: str | None = None) -> None:
-        with self.lock:
+        def _delete() -> None:
             if category is not None:
-                self.conn.execute(
+                self.wconn.execute(
                     "DELETE FROM media WHERE path = ? AND category = ?", (path, category)
                 )
             else:
-                self.conn.execute("DELETE FROM media WHERE path = ?", (path,))
-            self.conn.commit()
+                self.wconn.execute("DELETE FROM media WHERE path = ?", (path,))
+            self.wconn.commit()
+
+        # Deletes commit immediately and follow a file that is already gone
+        # from disk; a dropped one leaves a tile pointing at nothing.
+        self._run_write(_delete)
 
     def clear_category(self, category: str) -> None:
         """Delete all DB rows for a category and remove their thumbnail files."""
-        with self.lock:
-            rows = self.conn.execute(
+        with self.wlock:
+            rows = self.wconn.execute(
                 "SELECT thumb_path FROM media WHERE category = ?", (category,)
             ).fetchall()
         for row in rows:
@@ -786,9 +901,11 @@ class Database:
                     Path(row["thumb_path"]).unlink(missing_ok=True)
                 except OSError:
                     pass
-        with self.lock:
-            self.conn.execute("DELETE FROM media WHERE category = ?", (category,))
-            self.conn.commit()
+        def _clear() -> None:
+            self.wconn.execute("DELETE FROM media WHERE category = ?", (category,))
+            self.wconn.commit()
+
+        self._run_write(_clear)
 
     def _row_to_item(self, row: sqlite3.Row) -> MediaItem:
         return MediaItem(

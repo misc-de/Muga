@@ -232,6 +232,34 @@ _ICON_ROTATION_DEG = {
     ORIENT_RIGHT_UP:  90,
 }
 
+# Clockwise rotation (degrees) a captured frame needs so the saved photo
+# comes out upright. The sensor is fixed in the chassis, so a frame is
+# always in *device* coordinates: turning the phone turns the scene the
+# other way inside the frame, and we have to turn it back by the same
+# angle the viewer applies to display a photo upright (see
+# viewer._SENSOR_ROTATION_DEG — same compensation, other direction of
+# the same pipeline).
+#
+# Note the two landscape lays are the mirror of the naive EXIF cookbook
+# reading of the orientation names: _classify_orientation inverts the X
+# axis to match this HAL's accelerometer mounting (see
+# camera_orientation.py), so the string that reaches us is the one that
+# keeps the UI layout right, and the pixels need the opposite quarter
+# turn from what the name literally suggests. Photos used to be saved
+# with the un-mirrored map and came out sideways in landscape.
+_CAPTURE_ROTATION_CW = {
+    ORIENT_NORMAL:    0,
+    ORIENT_BOTTOM_UP: 180,
+    ORIENT_LEFT_UP:   270,
+    ORIENT_RIGHT_UP:  90,
+}
+
+# EXIF Orientation tag describing an *outstanding* clockwise rotation —
+# only used as a fallback when the pixels couldn't be rotated (no
+# Pillow). 1 = upright, 6 = rotate 90° CW to display, 3 = 180°,
+# 8 = 270° CW (i.e. 90° CCW).
+_CW_TO_EXIF_ORIENTATION = {0: 1, 90: 6, 180: 3, 270: 8}
+
 
 # Shared letterbox-math helper — now lives in camera_widgets next to
 # ImageChrome (its primary consumer). Re-imported here so the existing
@@ -348,6 +376,13 @@ class CameraWindow(Adw.Window):
         # in the options bar before the orientation backend starts, and
         # its _RotatableIcon needs to know the current rotation.
         self._device_orientation: str = ORIENT_NORMAL
+        # Orientation latched when the shutter fired. Saving happens
+        # hundreds of ms (Halium: seconds, the mode-switch rebuilds the
+        # whole pipeline) after the frame was taken, so reading
+        # _device_orientation at save time tags the photo with wherever
+        # the phone has drifted to since — not with how the shot was
+        # framed.
+        self._capture_orientation: str = ORIENT_NORMAL
         self._applied_layout: str | None = None
         # Tracks the active layout's landscape-ness (bool). Renamed
         # from _layout_landscape to dodge the name clash with the
@@ -3017,6 +3052,10 @@ class CameraWindow(Adw.Window):
     def _capture(self) -> None:
         if self._busy_capture:
             return
+        # Latch the orientation now, while it still describes how the
+        # user framed the shot — every path below reaches _write_sample
+        # asynchronously.
+        self._capture_orientation = self._device_orientation
         # Routing:
         #   1. In-pipeline imgsrc (Halium with cooperative gst-droid) —
         #      best case, instant + full res. Currently unavailable on
@@ -4128,6 +4167,82 @@ class CameraWindow(Adw.Window):
         except Exception:
             LOGGER.debug("camera cleanup/op failed", exc_info=True)
 
+    def _orient_and_resize(self, data: bytes) -> tuple[bytes, int]:
+        """Turn the captured JPEG upright and apply the optional
+        resolution downscale in a single Pillow pass.
+
+        The rotation goes into the pixels rather than into an EXIF
+        Orientation tag, so the photo is right way up everywhere — file
+        managers, Nextcloud's web view and the share targets that ignore
+        the tag included.
+
+        Returns the (possibly rewritten) bytes plus the EXIF Orientation
+        value the caller still has to write: 1 once the rotation sits in
+        the pixels, or the tag describing the outstanding rotation if
+        Pillow wasn't around to bake it in.
+
+        When there is nothing to do — upright portrait shot, no
+        downscale — the original bytes are handed straight back: no
+        decode, no re-encode, no generation loss on the common case.
+        """
+        rotation = _CAPTURE_ROTATION_CW.get(self._capture_orientation, 0)
+        target = self._image_resolution
+        if rotation == 0 and target is None:
+            return data, 1
+        try:
+            import io
+
+            from PIL import Image as PILImage
+
+            src = PILImage.open(io.BytesIO(data))
+            resized = False
+            # Image resolution picker on Halium sets _image_resolution;
+            # we keep aspect ratio by fitting inside the target box
+            # (thumbnail()), only downscaling (never upscaling).
+            if target is not None:
+                tw, th = target
+                if src.width > tw or src.height > th:
+                    src.thumbnail((tw, th), PILImage.LANCZOS)
+                    resized = True
+            if rotation:
+                # Quarter turns only, so transpose() just re-indexes
+                # pixels — no resampling. The re-encode below is the
+                # whole quality cost of baking the rotation in. Pillow's
+                # ROTATE_* names are counter-clockwise, hence the
+                # 90↔270 swap against our clockwise angles.
+                src = src.transpose({
+                    90:  PILImage.Transpose.ROTATE_270,
+                    180: PILImage.Transpose.ROTATE_180,
+                    270: PILImage.Transpose.ROTATE_90,
+                }[rotation])
+            if not (rotation or resized):
+                return data, 1
+            quality = max(0, min(100, self._jpeg_quality))
+            if rotation and not resized:
+                # Rotation is the only reason we're re-encoding here, and
+                # the user never asked for that extra generation — keep
+                # it well above the preset so straightening a photo
+                # doesn't visibly cost quality. A downscale re-encodes
+                # anyway, so there the preset is exactly what they asked
+                # for and we leave it alone.
+                quality = max(quality, 92)
+            out = io.BytesIO()
+            src.save(out, format="JPEG", quality=quality)
+            data = out.getvalue()
+            _dlog(
+                f"[yaga.camera] capture: {src.width}x{src.height} "
+                f"rotation={rotation}deg q={quality} ({len(data)} bytes)"
+            )
+            return data, 1
+        except Exception as exc:
+            # Pillow missing or the decode blew up. Keep the native
+            # bytes and fall back to the EXIF tag, so the photo is at
+            # least upright in the viewers that honour it (Yaga's own
+            # gallery does).
+            _dlog(f"[yaga.camera] capture: orient/resize failed, keeping "
+                f"native ({exc})")
+            return data, _CW_TO_EXIF_ORIENTATION.get(rotation, 1)
+
     def _write_sample(self, sample: Any) -> None:
         buf = sample.get_buffer() if sample is not None else None
         if buf is None:
@@ -4145,30 +4260,7 @@ class CameraWindow(Adw.Window):
             buf.unmap(mapinfo)
         _dlog(f"[yaga.camera] capture: jpeg bytes={len(data)} save_dir={self._save_dir}")
 
-        # Optional Pillow downscale to the user-picked target. Image
-        # resolution picker on Halium sets _image_resolution; we keep
-        # aspect ratio by fitting inside the target box (thumbnail()),
-        # only downscaling (never upscaling).
-        target = self._image_resolution
-        if target is not None:
-            try:
-                from PIL import Image as PILImage
-                import io
-                src = PILImage.open(io.BytesIO(data))
-                tw, th = target
-                if src.width > tw or src.height > th:
-                    src.thumbnail((tw, th), PILImage.LANCZOS)
-                    buf_out = io.BytesIO()
-                    src.save(
-                        buf_out, format="JPEG",
-                        quality=max(0, min(100, self._jpeg_quality)),
-                    )
-                    data = buf_out.getvalue()
-                    _dlog(f"[yaga.camera] capture: downscaled to "
-                        f"{src.width}x{src.height} ({len(data)} bytes)")
-            except Exception as exc:
-                _dlog(f"[yaga.camera] capture: downscale failed, keeping "
-                    f"native ({exc})")
+        data, exif_orientation = self._orient_and_resize(data)
 
         try:
             self._save_dir.mkdir(parents=True, exist_ok=True)
@@ -4212,7 +4304,7 @@ class CameraWindow(Adw.Window):
             return
         _dlog(f"[yaga.camera] capture: SAVED {path}")
 
-        self._write_exif(path)
+        self._write_exif(path, exif_orientation)
         self._show_toast(self._("Saved %s") % path.name)
         if self._on_captured is not None:
             try:
@@ -4220,17 +4312,23 @@ class CameraWindow(Adw.Window):
             except Exception:
                 LOGGER.debug("on_captured callback failed", exc_info=True)
 
-    def _write_exif(self, path: Path) -> None:
+    def _write_exif(self, path: Path, orientation: int = 1) -> None:
         # Prefer GExiv2 when it's available (proper Exiv2 backend, full
         # tag support). Fall back to Pillow when the GExiv2 GIR isn't
         # installed — covers the basic tags + GPS without requiring the
         # gir1.2-gexiv2-0.10 system package.
+        #
+        # `orientation` is normally 1: _orient_and_resize has already
+        # turned the pixels upright, and a stale tag on top of that
+        # would rotate the photo a second time in every viewer that
+        # honours it. Anything else means the bake-in failed and the
+        # tag is carrying the rotation instead.
         if _HAS_GEXIV2:
-            self._write_exif_gexiv2(path)
+            self._write_exif_gexiv2(path, orientation)
         else:
-            self._write_exif_pillow(path)
+            self._write_exif_pillow(path, orientation)
 
-    def _current_exif_basics(self) -> dict[str, Any]:
+    def _current_exif_basics(self, orientation: int = 1) -> dict[str, Any]:
         """Common bits used by both EXIF backends."""
         device = self._current_device()
         model = (device.get("name") if device else None) or ""
@@ -4241,20 +4339,11 @@ class CameraWindow(Adw.Window):
             "model": model,
             "software": "Yaga",
             "now": time.strftime("%Y:%m:%d %H:%M:%S"),
-            "orientation": {
-                # 1 = top-left, 3 = bottom-right (180), 6 = right-top
-                # (90 CW), 8 = left-bottom (90 CCW). Assumes sensor top
-                # edge aligns with device top — true for most phone
-                # modules.
-                ORIENT_NORMAL:    1,
-                ORIENT_BOTTOM_UP: 3,
-                ORIENT_LEFT_UP:   6,
-                ORIENT_RIGHT_UP:  8,
-            }.get(self._device_orientation, 1),
+            "orientation": orientation,
         }
 
-    def _write_exif_gexiv2(self, path: Path) -> None:
-        basics = self._current_exif_basics()
+    def _write_exif_gexiv2(self, path: Path, orientation: int = 1) -> None:
+        basics = self._current_exif_basics(orientation)
         try:
             md = GExiv2.Metadata()  # type: ignore[union-attr]
             md.open_path(str(path))
@@ -4285,7 +4374,7 @@ class CameraWindow(Adw.Window):
         except Exception:
             LOGGER.debug("Could not write EXIF (GExiv2) for %s", path, exc_info=True)
 
-    def _write_exif_pillow(self, path: Path) -> None:
+    def _write_exif_pillow(self, path: Path, orientation: int = 1) -> None:
         """Pillow-based EXIF writer used when GExiv2 isn't installed.
         Covers Make/Model/Software/DateTime/Orientation, plus GPS when
         the user has the geo toggle on and there's a fresh fix.
@@ -4299,7 +4388,7 @@ class CameraWindow(Adw.Window):
             from PIL.Image import Exif
         except ImportError:
             return
-        basics = self._current_exif_basics()
+        basics = self._current_exif_basics(orientation)
         try:
             exif = Exif()
             # 0th IFD (image-level metadata).
@@ -4313,12 +4402,22 @@ class CameraWindow(Adw.Window):
             exif_ifd = exif.get_ifd(0x8769)
             exif_ifd[0x9003] = basics["now"]        # DateTimeOriginal
             exif_ifd[0x9004] = basics["now"]        # DateTimeDigitized
-            # GPS sub-IFD.
+            # GPS sub-IFD. Guarded separately: exif.tobytes() serialises the
+            # whole block at once, so anything the GPS tags upset takes the
+            # camera model, capture date and orientation down with it. A photo
+            # without a geotag is a far smaller loss than one with no metadata
+            # at all — and a JPEG with no EXIF is treated as a plain file
+            # rather than an image by some receivers (Delta Chat, for one).
             if self._geo is not None:
                 loc = self._geo.latest()
                 if loc is not None:
-                    gps = exif.get_ifd(0x8825)
-                    self._pillow_set_gps(gps, loc)
+                    try:
+                        gps = exif.get_ifd(0x8825)
+                        self._pillow_set_gps(gps, loc)
+                        exif.tobytes()  # fail here, while GPS is still droppable
+                    except Exception:
+                        LOGGER.debug("Dropping GPS from EXIF", exc_info=True)
+                        exif.get_ifd(0x8825).clear()
             _write_exif_app1_inplace(path, exif.tobytes())
         except Exception:
             LOGGER.debug("Could not write EXIF (Pillow) for %s", path, exc_info=True)
@@ -4330,6 +4429,14 @@ class CameraWindow(Adw.Window):
             return
         alt = location.get("alt", 0.0) or 0.0
 
+        # RATIONAL tags have to be handed to Pillow as IFDRational. A plain
+        # (numerator, denominator) tuple used to survive the encoder, but
+        # Pillow 11+ runs every rational through abs() and raises TypeError
+        # on a tuple — which, because exif.tobytes() builds the whole block
+        # in one go, silently cost the photo its *entire* EXIF, not just the
+        # GPS tags.
+        from PIL.TiffImagePlugin import IFDRational
+
         def to_dms(decimal: float) -> tuple:
             # Round in integer ten-thousandths of an arcsecond so a value that
             # rounds up to exactly 60" (or 60') carries into the next minute /
@@ -4339,9 +4446,9 @@ class CameraWindow(Adw.Window):
             d, rem = divmod(total, 3600 * 10000)
             m, rem = divmod(rem, 60 * 10000)
             return (
-                (d, 1),
-                (m, 1),
-                (rem, 10000),
+                IFDRational(d, 1),
+                IFDRational(m, 1),
+                IFDRational(rem, 10000),
             )
 
         gps_ifd[0x0000] = b"\x02\x02\x00\x00"        # GPSVersionID 2.2.0.0
@@ -4350,7 +4457,7 @@ class CameraWindow(Adw.Window):
         gps_ifd[0x0003] = "E" if lon >= 0 else "W"   # LongitudeRef
         gps_ifd[0x0004] = to_dms(abs(lon))           # Longitude
         gps_ifd[0x0005] = 0 if alt >= 0 else 1       # AltitudeRef
-        gps_ifd[0x0006] = (int(round(abs(alt) * 100)), 100)  # Altitude
+        gps_ifd[0x0006] = IFDRational(int(round(abs(alt) * 100)), 100)  # Altitude
 
     # ------------------------------------------------------------------
     # Window chrome substitutes

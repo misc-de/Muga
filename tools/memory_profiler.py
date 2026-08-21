@@ -11,7 +11,6 @@ import sys
 
 from yaga.database import Database
 from yaga.scanner import MediaScanner
-from yaga.config import Settings
 from yaga.thumbnails import Thumbnailer
 
 
@@ -50,7 +49,7 @@ def test_database_memory():
         def load_many_files():
             # Simulate loading 50k files
             for i in range(50000):
-                path = tmp_path / f"photo_{i:06d}.jpg"
+                tmp_path / f"photo_{i:06d}.jpg"
                 # Don't create actual files, just simulate DB inserts
                 # (Database.upsert_media doesn't actually need stat() for path validation here)
                 db.conn.execute(
@@ -129,7 +128,6 @@ def test_emoji_cache_memory():
     
     measure_operation("Editor: Build emoji cache (50 emoji at 128px)", build_emoji_cache)
     
-    from yaga.editor import _EMOJI_PIL_CACHE
     print(f"   Emoji cache size: {len(_EMOJI_PIL_CACHE)} entries")
 
 

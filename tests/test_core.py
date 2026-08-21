@@ -61,8 +61,11 @@ def test_database_sort_modes(tmp_path: Path) -> None:
 
     db.upsert_media(path=older, category="photos", media_type="image", folder="/", thumb_path=None)
     db.upsert_media(path=newer, category="photos", media_type="image", folder="/", thumb_path=None)
-    db.conn.execute("UPDATE media SET mtime = 100 WHERE path = ?", (str(older),))
-    db.conn.execute("UPDATE media SET mtime = 200 WHERE path = ?", (str(newer),))
+    # Writes go through the writer connection: upsert_media above leaves its
+    # transaction open for the scanner to batch, so a second connection would
+    # sit behind SQLite's write lock here.
+    db.wconn.execute("UPDATE media SET mtime = 100 WHERE path = ?", (str(older),))
+    db.wconn.execute("UPDATE media SET mtime = 200 WHERE path = ?", (str(newer),))
     db.commit()
 
     assert [item.name for item in db.list_media("photos", "newest")] == ["b-newer.jpg", "a-older.jpg"]

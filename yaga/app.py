@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import faulthandler
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 import signal
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import shutil
 import time
@@ -30,7 +32,7 @@ from .i18n import Translator
 from .models import MediaItem
 from .settings_window import SettingsWindow
 from .scanner import MediaScanner
-from .thumbnails import Thumbnailer
+from .thumbnails import Thumbnailer, pillow_version_warning
 from .viewer import ViewerWindow
 from .camera import CameraWindow, camera_supported
 
@@ -116,6 +118,62 @@ class GalleryApplication(Adw.Application):
         window.present()
 
 
+def _move_file_no_clobber(src: Path, folder: Path) -> Path:
+    """Move *src* into *folder* and return where it landed.
+
+    Replaces the plain ``Path.rename`` this used to be, which had two ways of
+    losing a user's photos:
+
+    * it silently destroyed a same-named file already in the destination —
+      two cameras both numbering from ``IMG_0001.jpg`` cost you one of them;
+    * it cannot cross filesystems, so moving anything onto an SD card or USB
+      stick failed with EXDEV for every single file.
+
+    A colliding name gets a ``" (2)"`` suffix instead. The name is claimed
+    with an atomic exclusive create — ``os.link`` within one filesystem,
+    ``O_CREAT|O_EXCL`` across two — so a second process racing for the same
+    name loses the race rather than both writing it. The source is only
+    unlinked once the destination is complete, so an interrupted cross-device
+    move leaves the original in place.
+    """
+    stem, suffix = Path(src.name).stem, Path(src.name).suffix
+    for attempt in range(1, 1000):
+        name = src.name if attempt == 1 else f"{stem} ({attempt}){suffix}"
+        target = folder / name
+        try:
+            os.link(src, target)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            import errno
+            if exc.errno not in (errno.EXDEV, errno.EPERM, errno.EMLINK, errno.ENOSYS):
+                raise
+            # Different filesystem (or one that refuses hard links): claim the
+            # name exclusively, then stream the bytes over.
+            try:
+                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                continue
+            os.close(fd)
+            try:
+                shutil.copyfile(src, target)
+                shutil.copystat(src, target)
+            except BaseException:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+            src.unlink()
+            return target
+        else:
+            # Hard link placed: the destination now has the data, so dropping
+            # the source completes the move without ever copying bytes.
+            src.unlink()
+            return target
+    raise FileExistsError(f"No free filename for {src.name} in {folder}")
+
+
 # ---------------------------------------------------------------------------
 # Main window
 # ---------------------------------------------------------------------------
@@ -126,9 +184,26 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.set_default_size(1120, 760)
         self.set_icon_name(APP_ID)
 
-        self.settings = Settings.load()
+        # Settings.load() and Database() both self-heal on damaged input, but
+        # they are the very first things to run at startup and the only ones
+        # whose failure means no window at all — on a phone that shows up as
+        # "the app just doesn't open", with the traceback on a terminal nobody
+        # is looking at. Fall back to defaults / an in-memory index so the user
+        # still gets a working window and a visible explanation.
+        self._startup_warning: str = ""
+        try:
+            self.settings = Settings.load()
+        except Exception:
+            LOGGER.exception("Could not load settings — starting with defaults")
+            self.settings = Settings()
+            self._startup_warning = "settings"
         self.translator = Translator(self.settings.language)
-        self.database = Database()
+        try:
+            self.database = Database()
+        except Exception:
+            LOGGER.exception("Could not open the media index — using a temporary one")
+            self.database = Database(Path(tempfile.gettempdir()) / "yaga-fallback.sqlite3")
+            self._startup_warning = "database"
         self.thumbnailer = Thumbnailer()
         self.scanner = MediaScanner(self.database, self.thumbnailer)
         self.category = self._first_existing_category()
@@ -233,6 +308,20 @@ class GalleryWindow(Adw.ApplicationWindow):
             "notify::dark", self._on_system_theme_changed,
         )
         self.refresh(scan=True)
+        pil_warning = pillow_version_warning()
+        if pil_warning:
+            LOGGER.warning("%s", pil_warning)
+            self._set_status(self._("Pillow is outdated — please update it."))
+        if self._startup_warning:
+            # _set_status needs the UI, so this waits until after _build_ui.
+            if self._startup_warning == "settings":
+                self._set_status(self._(
+                    "Your settings could not be read and were reset to defaults."
+                ))
+            else:
+                self._set_status(self._(
+                    "The media index was damaged and is being rebuilt."
+                ))
         # Note: a previous iteration auto-reopened the settings dialog on the
         # appearance page after a nav-position-driven window recreate, but
         # however we sequenced the destroys/timeouts the just-torn-down old
@@ -862,11 +951,19 @@ class GalleryWindow(Adw.ApplicationWindow):
         # current Pictures view is configured to fold in Nextcloud entries —
         # but ONLY if the user has actively allowed NC for this session
         # (is_nc_active() respects manual disconnects too).
-        need_nc = self.is_nc_active() and (
-            (not only_current)
-            or self.category == "nextcloud"
-            or self._should_merge_nc()
-        )
+        # Guarded: these read live window state, and anything escaping here
+        # would skip the finally block below — the one that re-enables the
+        # refresh button. A stuck-disabled refresh is exactly the failure the
+        # finally exists to prevent.
+        try:
+            need_nc = self.is_nc_active() and (
+                (not only_current)
+                or self.category == "nextcloud"
+                or self._should_merge_nc()
+            )
+        except Exception:
+            LOGGER.exception("Could not determine Nextcloud scan scope")
+            need_nc = False
         # Track whether each phase actually changed the index, so we only
         # re-render the gallery when there's something new to show (an
         # unchanged startup scan no longer tears down + rebuilds the grid —
@@ -1938,9 +2035,16 @@ class GalleryWindow(Adw.ApplicationWindow):
                 shlex.split(self.settings.external_video_player) + ["--", item.path],
             )
             return
-        items = self.current_items or self.database.list_media(
+        # Fallback for the rare case where the grid has no cached page (e.g. a
+        # tile clicked while a refresh is mid-flight). Bounded to the same
+        # window the gallery itself keeps in memory: the unbounded list_media
+        # this replaces pulled every row in the category — ~150 ms on a 50k
+        # library on a desktop, and this runs on the main loop, so on a phone
+        # it was a visible freeze between tap and viewer.
+        items = self.current_items or self.database.list_media_paginated(
             item.category, self.settings.get_sort_mode(item.category, self.current_folder),
             self.current_folder,
+            limit=self._MAX_LOADED_ITEMS, offset=0,
             media_filter=self.settings.media_filter_for(item.category),
         )
         # Match by path — frozen MediaItem __eq__ compares all fields, and thumb_path
@@ -2159,8 +2263,7 @@ class GalleryWindow(Adw.ApplicationWindow):
                     # and leave _sel_busy stuck at True with the toolbar
                     # frozen. Specific exception types were too narrow.
                     try:
-                        target = Path(folder) / Path(path).name
-                        Path(path).rename(target)
+                        _move_file_no_clobber(Path(path), Path(folder))
                         # The file left this path → remove all its index rows
                         # (category-agnostic, same reason as the delete path).
                         self.database.delete_path(path)
@@ -2260,9 +2363,8 @@ class GalleryWindow(Adw.ApplicationWindow):
     def _move_item_response(self, chooser: Gtk.FileChooserNative, response: int, item: MediaItem) -> None:
         if response == Gtk.ResponseType.ACCEPT:
             folder = chooser.get_file().get_path()
-            target = Path(folder) / item.name
             try:
-                Path(item.path).rename(target)
+                _move_file_no_clobber(Path(item.path), Path(folder))
                 self.database.delete_path(item.path)
                 self.refresh(scan=True)
                 self._set_status(self._("Moved"))

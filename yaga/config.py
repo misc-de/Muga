@@ -106,7 +106,18 @@ class Settings:
 
     # Disk cache budget for thumbnails + downloaded NC originals (MB).
     # 0 means "unlimited"; any positive value triggers LRU eviction.
-    cache_max_mb: int = 0
+    #
+    # Defaults to 2 GB rather than unlimited: every Nextcloud photo opened is
+    # cached full-size and never expires on its own, so the old default let
+    # ~/.cache grow until the partition filled — on a phone that takes the
+    # camera down with it. The eviction machinery was already there; nothing
+    # ever switched it on.
+    cache_max_mb: int = 2048
+    # One-shot marker for the 0 → 2048 default change. Installs that predate
+    # it have an explicit 0 in settings.json that was never a real choice;
+    # this lifts them to the new default exactly once, while still honouring
+    # a 0 the user picks deliberately afterwards.
+    cache_budget_migrated: bool = False
 
     # ISO timestamp of the last in-app update check (shown in Settings).
     last_update_check: str = ""
@@ -124,6 +135,63 @@ class Settings:
     # disconnected (cached items still visible, no network until user reconnects).
     nextcloud_session_active: bool = True
 
+    @staticmethod
+    def _quarantine(path: Path, reason: str) -> None:
+        """Move an unusable settings file aside instead of silently dropping the
+        user's configuration. They keep a copy they can fix by hand, and the
+        next save() starts from a clean file rather than failing forever."""
+        try:
+            backup = path.with_suffix(".json.corrupt")
+            os.replace(path, backup)
+            LOGGER.warning("settings.json unusable (%s) — moved to %s", reason, backup)
+        except OSError:
+            LOGGER.warning("settings.json unusable (%s) and could not be moved aside", reason)
+
+    @classmethod
+    def _accepted_fields(cls, data: dict) -> dict:
+        """Keep only known keys whose value type matches the field's default.
+
+        settings.json is explicitly documented as hand-editable, so a typo has
+        to degrade to "that one setting reverts to its default", never to a
+        crash on startup. A bare ``cls(**data)`` accepted anything JSON could
+        express: ``"grid_columns": "vier"`` blew up in the int() clamp below,
+        and ``"extra_locations": "text"`` sailed through as a str that later
+        code iterated character by character.
+        """
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        reference = cls()
+        accepted: dict = {}
+        for key, value in data.items():
+            if key not in known:
+                continue
+            default = getattr(reference, key, None)
+            # Fields whose default is None carry their own validation further
+            # down (camera_image_resolution); accept None or a list here.
+            if default is None:
+                if value is None or isinstance(value, list):
+                    accepted[key] = value
+                else:
+                    LOGGER.warning("settings.json: ignoring %r (unexpected type)", key)
+                continue
+            # bool before int — bool IS an int in Python, and letting True
+            # through as grid_columns=1 would be a silent surprise.
+            if isinstance(default, bool):
+                ok = isinstance(value, bool)
+            elif isinstance(default, int):
+                ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+                if ok:
+                    value = int(value)
+            else:
+                ok = isinstance(value, type(default))
+            if ok:
+                accepted[key] = value
+            else:
+                LOGGER.warning(
+                    "settings.json: ignoring %r (expected %s, got %s)",
+                    key, type(default).__name__, type(value).__name__,
+                )
+        return accepted
+
     @classmethod
     def load(cls) -> "Settings":
         path = CONFIG_DIR / "settings.json"
@@ -133,8 +201,26 @@ class Settings:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return cls()
-        known = {f.name for f in cls.__dataclass_fields__.values()}
-        settings = cls(**{k: v for k, v in data.items() if k in known})
+        if not isinstance(data, dict):
+            # Valid JSON, but not an object (null, a list, a bare string …).
+            cls._quarantine(path, f"top level is {type(data).__name__}, not an object")
+            return cls()
+        try:
+            settings = cls(**cls._accepted_fields(data))
+        except Exception:
+            LOGGER.warning("settings.json could not be applied", exc_info=True)
+            cls._quarantine(path, "could not be applied")
+            return cls()
+        if not settings.cache_budget_migrated and settings.cache_max_mb <= 0:
+            # Only rewrite an unlimited budget that was never a real choice.
+            # Deliberately choosing 0 in Settings sets the flag there, so this
+            # never second-guesses the user twice.
+            settings.cache_max_mb = cls.__dataclass_fields__["cache_max_mb"].default
+            settings.cache_budget_migrated = True
+            LOGGER.info(
+                "Cache budget was unlimited — defaulting to %d MB", settings.cache_max_mb,
+            )
+            settings.save()
         settings.grid_columns = min(max(int(settings.grid_columns), 2), 10)
         # Clamp legacy / hand-edited values to the four supported positions so a
         # typo in settings.json doesn't crash the layout logic in _build_ui.
@@ -162,23 +248,40 @@ class Settings:
                 settings.camera_image_resolution = None
         return settings
 
-    def save(self) -> None:
-        # Atomic write: serialise to a sibling tmp file, fsync, rename
-        # into place. Without this, a crash mid-write produces a
-        # truncated JSON file that load() can't parse — and load()
-        # silently falls back to defaults, losing every user setting.
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    def save(self) -> bool:
+        """Persist the settings. Returns False if they could not be written.
+
+        Atomic write: serialise to a sibling tmp file, fsync, rename into
+        place. Without this, a crash mid-write produces a truncated JSON file
+        that load() can't parse — and load() silently falls back to defaults,
+        losing every user setting.
+
+        Failures are reported, not raised: this is called from ~24 UI
+        callbacks (every toggle, every folder edit), and a full disk or a
+        read-only config dir would otherwise propagate out of a signal handler
+        and abort whatever the user was doing mid-way.
+        """
         path = CONFIG_DIR / "settings.json"
         tmp = path.with_suffix(".json.tmp")
-        data = json.dumps(self.__dict__, indent=2, ensure_ascii=False)
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(data)
-            fh.flush()
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            data = json.dumps(self.__dict__, indent=2, ensure_ascii=False)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(data)
+                fh.flush()
+                try:
+                    os.fsync(fh.fileno())
+                except OSError:
+                    pass
+            os.replace(tmp, path)
+            return True
+        except (OSError, TypeError, ValueError):
+            LOGGER.exception("Could not write %s", path)
             try:
-                os.fsync(fh.fileno())
+                tmp.unlink(missing_ok=True)
             except OSError:
                 pass
-        os.replace(tmp, path)
+            return False
 
     def get_sort_mode(self, category: str, folder: str | None = None) -> str:
         default = "folder" if category == "nextcloud" else self.sort_mode

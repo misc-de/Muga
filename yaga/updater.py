@@ -39,6 +39,9 @@ _VERSION_RE = re.compile(r"""VERSION\s*=\s*['"]([^'"]+)['"]""")
 
 # Never overwrite these during a zip overlay.
 _ZIP_SKIP = {".git"}
+# Sanity bound on the unpacked archive. The source tree is a few MB; anything
+# near this is a decompression bomb or the wrong URL, not a Yaga release.
+_MAX_UNPACKED_BYTES = 250 * 1024 * 1024
 
 
 class UpdateInfo(NamedTuple):
@@ -59,6 +62,37 @@ def _parse_version(text: str | None) -> str | None:
         return None
     match = _VERSION_RE.search(text)
     return match.group(1) if match else None
+
+
+def _version_tuple(version: str) -> tuple:
+    """Comparable form of a dotted version string. Non-numeric trailing parts
+    (``1.2.0rc1``) sort before the plain release, which is the conventional
+    reading and good enough for an "is the remote newer" check."""
+    parts: list = []
+    for chunk in version.strip().split("."):
+        digits = re.match(r"(\d+)(.*)", chunk)
+        if digits:
+            parts.append((int(digits.group(1)), digits.group(2) or "~"))
+        else:
+            parts.append((-1, chunk))
+    return tuple(parts)
+
+
+def _is_newer(remote: str | None, local: str) -> bool:
+    """True only when *remote* is strictly newer than *local*.
+
+    The previous check was ``remote != local``, which also fired when the
+    remote was *older* — a branch rolled back on GitHub would have been
+    offered (and installed) as an "update", silently downgrading the app.
+    """
+    if not remote:
+        return False
+    try:
+        return _version_tuple(remote) > _version_tuple(local)
+    except Exception:
+        # Unparseable version: fall back to "different means newer" rather
+        # than never offering an update again.
+        return remote != local
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +206,7 @@ def _check_zip() -> UpdateInfo:
     remote_ver = _parse_version(_http_get_text(_RAW_INIT_URL.format(branch=_DEFAULT_BRANCH)))
     if not remote_ver:
         return UpdateInfo(False, None)
-    if remote_ver == VERSION:
+    if not _is_newer(remote_ver, VERSION):
         return UpdateInfo(False, None)
     return UpdateInfo(True, remote_ver)
 
@@ -188,6 +222,16 @@ def _apply_zip() -> bool:
         extract_dir.mkdir()
         try:
             with zipfile.ZipFile(zip_path) as zf:
+                # A zip that expands to far more than a source checkout could
+                # ever be is not an update — refuse it before it fills the
+                # user's disk. (Yaga's own tree is a couple of MB.)
+                total = sum(info.file_size for info in zf.infolist())
+                if total > _MAX_UNPACKED_BYTES:
+                    LOGGER.error(
+                        "Refusing update archive: unpacks to %.0f MB (limit %.0f MB)",
+                        total / 1e6, _MAX_UNPACKED_BYTES / 1e6,
+                    )
+                    return False
                 zf.extractall(extract_dir)
         except Exception as exc:
             LOGGER.error("ZIP extraction failed: %s", exc)
@@ -199,20 +243,57 @@ def _apply_zip() -> bool:
             LOGGER.error("Unexpected ZIP structure: %s", subdirs)
             return False
 
-        _copy_update(subdirs[0], _APP_DIR)
+        # Overlaying happens file by file over the *running* installation, so a
+        # failure partway through (disk full, a read-only file) would leave a
+        # tree that is half 0.2.0 and half 0.3.0 — an app that may not even
+        # import. Back up every file we are about to replace and put it back if
+        # anything goes wrong.
+        backup = Path(tmp) / "backup"
+        backup.mkdir()
+        try:
+            _copy_update(subdirs[0], _APP_DIR, backup)
+        except Exception as exc:
+            LOGGER.error("Update failed midway (%s) — rolling back", exc)
+            try:
+                _restore_backup(backup, _APP_DIR)
+                LOGGER.info("Rollback complete; the installation is unchanged.")
+            except Exception:
+                LOGGER.exception("Rollback FAILED — installation may be inconsistent")
+            return False
         return True
 
 
-def _copy_update(src: Path, dst: Path) -> None:
+def _copy_update(src: Path, dst: Path, backup: Path | None = None) -> None:
     """Recursively overlay *src* onto *dst*, skipping entries in _ZIP_SKIP.
     Only copies files present in the zip — local-only files (caches, the user's
-    data dirs live outside the tree anyway) are left untouched."""
+    data dirs live outside the tree anyway) are left untouched.
+
+    When *backup* is given, every file that is about to be overwritten is
+    copied there first (mirroring the relative layout), so _restore_backup can
+    undo a partial overlay.
+    """
     for item in src.iterdir():
         if item.name in _ZIP_SKIP:
             continue
         target = dst / item.name
         if item.is_dir():
             target.mkdir(exist_ok=True)
-            _copy_update(item, target)
+            _copy_update(item, target, (backup / item.name) if backup else None)
+        else:
+            if backup is not None and target.exists():
+                backup.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target, backup / item.name)
+            shutil.copy2(item, target)
+
+
+def _restore_backup(backup: Path, dst: Path) -> None:
+    """Copy every file saved under *backup* back over *dst*."""
+    if not backup.exists():
+        return
+    for item in backup.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            target.mkdir(exist_ok=True)
+            _restore_backup(item, target)
         else:
             shutil.copy2(item, target)

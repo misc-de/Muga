@@ -4,9 +4,14 @@ version = "0.2.0"
 description = "GTK4/libadwaita gallery app"
 requires-python = ">=3.11"
 dependencies = [
-    # Pillow floor: 10.3 is the first release after CVE-2024-28219
-    # (buffer overflow in ICC profile parsing, exploitable via crafted images).
-    "Pillow>=10.3",
+    # Pillow floor: every photo Yaga opens is untrusted input (a scanned
+    # folder, a Nextcloud server), so the decoders have to be current.
+    # 12.3 is the first release clear of the 2026 decoder advisories —
+    # OOB writes in Image.paste/crop, ImageCmsTransform.apply, RankFilter
+    # and the PSD/TGA/JPEG2000 paths, plus several decompression-bomb
+    # bypasses. 10.3 (the previous floor) carries 34 known advisories.
+    # Re-check with: pip-audit, or OSV for the pinned version.
+    "Pillow>=12.3",
     "pycairo>=1.25",
     "PyGObject>=3.46",
     # defusedxml hardens the PROPFIND parser against XML billion-laughs / DoS

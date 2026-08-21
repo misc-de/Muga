@@ -2252,11 +2252,24 @@ def test_editor_exif_for_save_resets_orientation_keeps_tags() -> None:
     assert restored[0x0132] == "2026:06:04 12:00:00"   # capture date kept
 
 
-def test_editor_exif_for_save_none_without_source_exif() -> None:
+def test_editor_exif_for_save_writes_minimal_block_without_source_exif() -> None:
+    """A source with no EXIF used to yield None here, so the edited copy was
+    written with no metadata at all. That turned out to matter when sharing:
+    Delta Chat's core demotes an attachment from image to plain file when
+    recoding fails *and* the file carries no EXIF, so a bare JPEG arrives as a
+    file attachment. A minimal block states only what is true — the pixels are
+    upright, and Yaga wrote them. See tests/test_rotation_exif.py."""
+    from PIL import Image
+
     from yaga.editor.view import EditorView
 
-    assert EditorView._exif_for_save(SimpleNamespace(_exif_bytes=None)) is None
-    assert EditorView._exif_for_save(SimpleNamespace(_exif_bytes=b"")) is None
+    for source in (None, b""):
+        out = EditorView._exif_for_save(SimpleNamespace(_exif_bytes=source))
+        assert out
+        restored = Image.Exif()
+        restored.load(out)
+        assert restored[0x0112] == 1       # Orientation: upright
+        assert restored[0x0131] == "Yaga"  # Software
 
 
 # ── GalleryWindow: teardown guard ────────────────────────────────────────

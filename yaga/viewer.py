@@ -3,6 +3,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import logging
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -28,11 +29,50 @@ from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem
 from .nextcloud import is_nc_path
 from .rotated_container import RotatedContainer
+from .thumbnails import image_within_pixel_budget
 
 if TYPE_CHECKING:
     from .app import GalleryWindow
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _write_in_place_atomic(path: str, write) -> None:
+    """Run ``write(tmp_path)`` and only then replace *path* with the result.
+
+    Rotation is the one place where we overwrite a user's original photo, so
+    it must never be a partial write: a save that dies mid-stream (ENOSPC, a
+    flat battery, an OOM kill) would otherwise leave a truncated file where
+    an irreplaceable photo used to be — and the GdkPixbuf fallback below
+    would then be handed that corpse to re-encode. Writing beside the target
+    and swapping via os.replace keeps the original intact until a *complete*
+    new file exists. Mirrors thumbnails._save_atomic, plus the mode/owner
+    copy the original file deserves.
+    """
+    target = Path(path)
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        write(str(tmp))
+        # os.replace takes the tmp file's permissions with it, so carry the
+        # original's mode over first — otherwise a 0600 photo silently
+        # widens to the process umask on every rotation.
+        try:
+            st = target.stat()
+            os.chmod(tmp, st.st_mode & 0o7777)
+            if hasattr(os, "chown"):
+                try:
+                    os.chown(tmp, st.st_uid, st.st_gid)
+                except (OSError, PermissionError):
+                    pass
+        except OSError:
+            pass
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 # Maps the 4-state device orientation reported by the accelerometer to the
 # rotation (degrees) that keeps the photo upright in the user's view. Mirrors
@@ -63,6 +103,37 @@ def _image_dimensions(path: str) -> str | None:
     if fmt is not None:
         return f"{w} × {h}"
     return None
+
+
+def _exif_for_upright_save(img) -> bytes | None:
+    """Return `img`'s EXIF block with Orientation normalised to 1, ready to be
+    written back after a rotation was baked into the pixels.
+
+    Saving without this drops the entire metadata block — capture date, camera
+    model, GPS. It also costs the photo a protection it silently relies on:
+    Delta Chat's core (src/blob.rs) only demotes an attachment from image to
+    plain file when recoding fails *and* the file carries no EXIF at all, so a
+    JPEG that lost its metadata gets sent as a file attachment instead of a
+    picture.
+
+    When the source has no EXIF of its own (an older Yaga photo that already
+    went through this path, back when it stripped them) a minimal block is
+    written instead. Nothing is invented: Orientation=1 states that the pixels
+    are upright, and Software names the app that wrote them."""
+    if not _PIL_OK or PILImage is None:
+        return None
+    try:
+        exif = PILImage.Exif()
+        data = img.info.get("exif")
+        if data:
+            exif.load(data)
+        else:
+            exif[0x0131] = "Yaga"  # Software
+        exif[0x0112] = 1  # Orientation: pixels are already the right way up
+        return exif.tobytes()
+    except Exception:
+        LOGGER.debug("Could not rebuild EXIF for rotated save", exc_info=True)
+        return None
 
 
 def _extract_exif(path: str) -> dict[str, str]:
@@ -125,6 +196,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_view: Gtk.Picture | None = None
         self.zoom_scroller: Gtk.ScrolledWindow | None = None
         self._rotation: int = 0
+        # Deferred close/navigate action handed to the rotation worker.
+        self._pending_rotation_action = None
         self._current_display_path: str | None = None
         self._current_is_video: bool = False
 
@@ -585,16 +658,27 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _nc_download_worker(self, item) -> None:
         from .nextcloud import NextcloudClient, dav_path_from_nc
-        settings = self.parent_window.settings
-        pwd = settings.load_app_password()
         local = None
-        if pwd:
-            try:
-                client = NextcloudClient(settings.nextcloud_url, settings.nextcloud_user, pwd)
-                local = client.download_file(dav_path_from_nc(item.path))
-            except Exception:
-                pass
-        GLib.idle_add(self._nc_show_loaded, item, local)
+        try:
+            settings = self.parent_window.settings
+            pwd = settings.load_app_password()
+            if pwd:
+                try:
+                    client = NextcloudClient(settings.nextcloud_url, settings.nextcloud_user, pwd)
+                    local = client.download_file(dav_path_from_nc(item.path))
+                except Exception:
+                    LOGGER.debug("NC download failed for %s", item.path, exc_info=True)
+            if local:
+                # Each viewed Nextcloud photo lands in the cache full-size and
+                # never expires on its own; give the (throttled, no-op when
+                # unbudgeted) evictor a chance to keep it in bounds.
+                GLib.idle_add(self.parent_window.evict_cache_async)
+        except Exception:
+            LOGGER.exception("NC download worker crashed for %s", getattr(item, "path", "?"))
+        finally:
+            # _nc_show_loaded owns the spinner/placeholder teardown; skipping it
+            # would leave the viewer on a permanent loading state.
+            GLib.idle_add(self._nc_show_loaded, item, local)
 
     def _nc_show_loaded(self, item, local_path: str | None) -> None:
         if self._closing:
@@ -666,6 +750,11 @@ class ViewerWindow(Adw.ApplicationWindow):
         """Decode *path* to an EXIF-oriented pixbuf, downscaled so its long
         edge never exceeds _DECODE_MAX_DIM. Runs on a worker thread."""
         try:
+            # GdkPixbuf has no decompression-bomb guard of its own, and the
+            # branch below falls through to a full-size decode whenever the
+            # header didn't yield dimensions.
+            if not image_within_pixel_budget(path):
+                return None
             info = GdkPixbuf.Pixbuf.get_file_info(path)
             w, h = (info[1], info[2]) if info else (0, 0)
             cap = self._DECODE_MAX_DIM
@@ -787,6 +876,8 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _rotate_worker(self, path: str, rotation: int) -> None:
         try:
+            if not image_within_pixel_budget(path):
+                return
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
             # Apply EXIF orientation first so the user's rotation stacks on top
             # of the already-corrected display (matches _show_local_image).
@@ -966,37 +1057,84 @@ class ViewerWindow(Adw.ApplicationWindow):
                 )
 
                 def worker() -> None:
-                    self._save_rotation_to_disk(path, rotation)
-                    self._refresh_thumbnail_after_rotation(path, item)
-                    GLib.idle_add(lambda: (action(), GLib.SOURCE_REMOVE)[1])
+                    ok = False
+                    try:
+                        ok = self._save_rotation_to_disk(path, rotation)
+                        if ok:
+                            self._refresh_thumbnail_after_rotation(path, item)
+                    except Exception:
+                        LOGGER.exception("Rotation worker crashed for %s", path)
+                    finally:
+                        # The follow-up action (close / navigate) has to run
+                        # even when the save failed, or the viewer stays stuck
+                        # on a photo the user already asked to leave.
+                        GLib.idle_add(self._on_rotation_saved, ok)
 
+                self._pending_rotation_action = action
                 threading.Thread(target=worker, daemon=True).start()
                 return
         self._rotation = 0
         action()
 
+    def _on_rotation_saved(self, ok: bool) -> bool:
+        """Main-loop tail of the rotation worker: run the deferred action and,
+        if the file could not be written, tell the user instead of failing
+        silently — the photo on disk is unchanged in that case."""
+        action = getattr(self, "_pending_rotation_action", None)
+        self._pending_rotation_action = None
+        if not ok:
+            try:
+                _ = self.parent_window._
+                self.parent_window._show_error_dialog(
+                    _("Save failed"),
+                    _("The rotation could not be saved. The photo on disk is unchanged."),
+                )
+            except Exception:
+                LOGGER.debug("Could not surface rotation failure", exc_info=True)
+        if action is not None:
+            action()
+        return GLib.SOURCE_REMOVE
+
     @staticmethod
-    def _save_rotation_to_disk(path: str, rotation: int) -> None:
+    def _save_rotation_to_disk(path: str, rotation: int) -> bool:
+        """Bake *rotation* into the file at *path*. Returns True on success.
+
+        Both encoder paths write beside the original and swap atomically, so a
+        failed save leaves the photo exactly as it was — which is also what
+        lets the GdkPixbuf fallback read an intact source after the PIL path
+        gave up.
+        """
         if not path or rotation == 0:
-            return
+            return True
         if _PIL_OK:
             try:
                 from PIL import ImageOps
-                img = PILImage.open(path)
-                # Bake EXIF orientation into the pixels first so the saved file is
-                # standalone-correct (no orientation tag needed), then layer the
-                # user's rotation on top.
-                img = ImageOps.exif_transpose(img)
-                img = img.rotate(-rotation, expand=True)
+                with PILImage.open(path) as src:
+                    # Read the metadata off the source before any transform — the
+                    # save below has to carry it over explicitly or Pillow writes a
+                    # file with no EXIF at all.
+                    exif_bytes = _exif_for_upright_save(src)
+                    # Bake EXIF orientation into the pixels first so the saved file is
+                    # standalone-correct (no orientation tag needed), then layer the
+                    # user's rotation on top.
+                    img = ImageOps.exif_transpose(src)
+                    img = img.rotate(-rotation, expand=True)
                 ext = Path(path).suffix.lower()
+                save_kwargs = {"exif": exif_bytes} if exif_bytes else {}
                 if ext in (".jpg", ".jpeg"):
-                    img.save(path, quality=95)
-                else:
-                    img.save(path)
-                return
+                    save_kwargs["quality"] = 95
+                # Pillow infers the output format from the filename, and the
+                # temp file ends in ".tmp" — pass the source format explicitly.
+                fmt = PILImage.registered_extensions().get(ext)
+                if fmt:
+                    save_kwargs["format"] = fmt
+                _write_in_place_atomic(path, lambda tmp: img.save(tmp, **save_kwargs))
+                return True
             except Exception:
                 LOGGER.exception("PIL save_rotation failed for %s", path)
         try:
+            if not image_within_pixel_budget(path):
+                return False
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
             pixbuf = pixbuf.apply_embedded_orientation() or pixbuf
             rot_map = {
@@ -1007,9 +1145,11 @@ class ViewerWindow(Adw.ApplicationWindow):
             rotated = pixbuf.rotate_simple(rot_map[rotation])
             ext = Path(path).suffix.lower()
             fmt = "jpeg" if ext in (".jpg", ".jpeg") else "png"
-            rotated.savev(path, fmt, [], [])
+            _write_in_place_atomic(path, lambda tmp: rotated.savev(tmp, fmt, [], []))
+            return True
         except Exception:
-            pass
+            LOGGER.exception("GdkPixbuf save_rotation failed for %s", path)
+            return False
 
     def _refresh_thumbnail_after_rotation(self, path: str, item: MediaItem | None) -> None:
         """Regenerate the gallery thumbnail after a rotation was baked into the
