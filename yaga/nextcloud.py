@@ -278,6 +278,18 @@ class NextcloudClient:
             root = _xml_fromstring(data)
         except _xml_ParseError:
             return []
+        except Exception:
+            # defusedxml rejects a hostile document by raising its own
+            # exceptions (EntitiesForbidden, DTDForbidden, …), none of which
+            # are ParseError — so catching only ParseError let those escape
+            # into the scan thread and abort the whole sync with a generic
+            # "could not connect". An unparsable listing means no files, the
+            # same as any other malformed response.
+            LOGGER.warning(
+                "Rejected a malformed or hostile PROPFIND response from %s",
+                self.host, exc_info=True,
+            )
+            return []
         results: list[dict] = []
         for response in root.findall("D:response", ns):
             href = unquote(response.findtext("D:href", "", ns))

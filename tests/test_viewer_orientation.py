@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import requires_display
+
 import yaga
 from yaga.camera_orientation import ALL_ORIENTATIONS
 from yaga.viewer import _SENSOR_ROTATION_DEG
@@ -66,16 +68,18 @@ def test_viewer_and_camera_rotation_maps_agree() -> None:
     assert viewer_map == camera_map
 
 
+@requires_display
 def test_rotated_container_snaps_to_quarter_turns() -> None:
     """RotatedContainer normalises any angle to {0,90,180,270}; off-axis values
-    snap to 0 so the layout never skews."""
-    pytest.importorskip("gi.repository.Gtk")
-    try:
-        from yaga.rotated_container import RotatedContainer
+    snap to 0 so the layout never skews.
 
-        rc = RotatedContainer()
-    except Exception as exc:  # pragma: no cover - headless GTK without a display
-        pytest.skip(f"GTK widget construction unavailable: {exc}")
+    Marked rather than guarded: constructing a GTK widget without a display
+    aborts the process, and the try/except this replaces could never catch
+    that — running the suite headless took the whole run down here.
+    """
+    from yaga.rotated_container import RotatedContainer
+
+    rc = RotatedContainer()
     assert rc.get_rotation() == 0
     for given, expected in [
         (0, 0), (90, 90), (180, 180), (270, 270),
