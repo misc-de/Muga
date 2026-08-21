@@ -21,6 +21,18 @@ echo "  Source:  ${SCRIPT_DIR}"
 echo "  Prefix:  ${LOCAL}"
 echo ""
 
+# ── Translations ────────────────────────────────────────────────────────────
+# Compile po/*.po into the catalogues the app loads. Not fatal if gettext is
+# missing: yaga/i18n.py falls back to reading the .po files directly, just a
+# little slower at startup.
+if command -v msgfmt >/dev/null 2>&1; then
+    python3 "${SCRIPT_DIR}/tools/i18n.py" compile >/dev/null \
+        && echo "  ✓ locales   compiled" \
+        || echo "  ! locales   compile failed — falling back to po/*.po at runtime"
+else
+    echo "  ! locales   msgfmt not found — falling back to po/*.po at runtime"
+fi
+
 # ── Launcher script ─────────────────────────────────────────────────────────
 mkdir -p "${LOCAL}/bin"
 cat > "${LOCAL}/bin/yaga" <<EOF

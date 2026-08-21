@@ -39,6 +39,9 @@ yaga = [
     "data/icons/hicolor/symbolic/apps/*.svg",
     "data/icons/*.png",
     "data/*.css",
+    # Compiled gettext catalogues. Built by `tools/i18n.py compile`; when they
+    # are absent the app reads po/*.po directly (see yaga/i18n.py).
+    "data/locale/*/LC_MESSAGES/*.mo",
 ]
 
 [tool.setuptools.data-files]
