@@ -58,8 +58,16 @@ pythonpath = ["."]
 target-version = "py311"
 
 [tool.ruff.lint]
-# Defaults (E, F) plus a few useful extras, minus rules that fight this
-# project's deliberate GTK/PyGObject idioms.
+# Pinned explicitly rather than left to ruff's defaults. Those defaults widen
+# between releases — 0.16 added BLE, UP, C4, RUF and TRY to them, which turned
+# a green tree into 321 findings on a CI runner that happened to install a
+# newer ruff than the one on the developer's machine. What the project lints
+# for should be a decision in this file, not a function of when you last
+# upgraded. E4/E7/E9 + F is what ruff's default set was when this project
+# adopted it — not all of E, which would add line-length and whitespace rules
+# the codebase does not follow.
+select = ["E4", "E7", "E9", "F"]
+# Minus the rules that fight this project's deliberate GTK/PyGObject idioms.
 ignore = [
     # gi.require_version("Gtk", "4.0") must run BEFORE `from gi.repository
     # import ...`, so module-level imports legitimately can't all sit at the
