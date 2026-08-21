@@ -79,3 +79,22 @@ python_version = "3.11"
 # PyGObject ships no type stubs; gi.* is dynamically generated. Don't drown
 # real type errors in "module is untyped" noise from the GTK bindings.
 ignore_missing_imports = true
+files = ["yaga"]
+# Untyped defs still get checked internally; without this a function missing
+# an annotation is skipped whole, which is most of what we want to catch.
+check_untyped_defs = true
+warn_redundant_casts = true
+# NOT warn_unused_ignores: gi.* has no stubs here, so every GTK expression is
+# Any and the `type: ignore`s on PyGObject attributes read as unused. They are
+# not — they carry a setup that has PyGObject stubs installed. Enabling this
+# would flag 37 comments that are load-bearing elsewhere.
+warn_unused_ignores = false
+
+# Yaga never imports numpy — it arrives through Pillow's stubs. Those stubs
+# use `type X = ...` (3.12+ syntax), which is a hard parse error under
+# python_version 3.11 and aborts the whole run before a single Yaga file is
+# checked. Skipping the module keeps the 3.11 target honest.
+[[tool.mypy.overrides]]
+module = "numpy.*"
+follow_imports = "skip"
+follow_imports_for_stubs = true
