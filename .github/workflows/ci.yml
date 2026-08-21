@@ -44,9 +44,17 @@ jobs:
         # The Pillow floor in pyproject.toml is pinned against specific decoder
         # advisories and says "re-check with pip-audit" — this is that re-check,
         # running on every PR instead of whenever someone remembers.
+        #
+        # Its own clean venv, deliberately: the lint venv has
+        # --system-site-packages for PyGObject, which drags in every apt
+        # python3-* on the runner. --strict then fails on the first one that
+        # is not on PyPI (bcc, in practice) — a fact about the runner image,
+        # not about Yaga's dependencies.
         run: |
-          .venv/bin/pip install pip-audit
-          .venv/bin/pip-audit --strict
+          python3 -m venv .audit
+          .audit/bin/pip install --upgrade pip pip-audit
+          .audit/bin/pip install 'Pillow>=12.3' defusedxml
+          .audit/bin/pip-audit --strict
 
   test:
     name: pytest (${{ matrix.python }})

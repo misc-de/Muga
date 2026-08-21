@@ -92,7 +92,13 @@ def _render(gtk, node, width, height):
     try:
         texture = renderer.render_texture(
             node, Graphene.Rect().init(0, 0, width, height))
-        data, stride = Gdk.TextureDownloader.new(texture).download_bytes()
+        downloader = Gdk.TextureDownloader.new(texture)
+        # Pin the byte order. Without this the downloader hands back the
+        # texture's preferred format, which is not the same on every GTK
+        # version — and the unpacking below would then read red out of the
+        # blue channel and conclude that nothing was painted.
+        downloader.set_format(Gdk.MemoryFormat.B8G8R8A8)
+        data, stride = downloader.download_bytes()
         buf = data.get_data()
     finally:
         renderer.unrealize()
@@ -637,9 +643,16 @@ def test_a_rotated_switch_pivots_about_its_centre(gtk, degrees) -> None:
     try:
         if switch.get_width() <= 0:
             pytest.skip("the switch was never allocated in this environment")
+        # Read the pivot back from the allocation rather than assuming the
+        # requested 80x80 was honoured: a GtkSwitch has its own size request,
+        # and how much of the 80x80 it takes differs between GTK versions.
+        # What must hold is that the pivot is the centre of whatever size it
+        # ended up with.
+        cx = switch.get_width() / 2
+        cy = switch.get_height() / 2
         assert _recorded_calls(gtk, switch) == [
-            "save", "translate(40,40)", f"rotate({degrees})",
-            "translate(-40,-40)", "restore",
+            "save", f"translate({cx:g},{cy:g})", f"rotate({degrees})",
+            f"translate({-cx:g},{-cy:g})", "restore",
         ]
     finally:
         window.destroy()

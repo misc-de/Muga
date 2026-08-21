@@ -899,11 +899,17 @@ class GalleryGrid(Gtk.Overlay):
             else:
                 self._bind_empty_tile(btn)
 
+    # Gtk.IconLookupFlags.NONE is synthesised by newer PyGObject for flag
+    # enums; the bindings on Debian bookworm — which is what Droidian and
+    # FuriOS run — do not have it, and the attribute access raises there.
+    # The zero value is the same thing and exists everywhere.
+    _ICON_LOOKUP_NONE = Gtk.IconLookupFlags(0)
+
     def _generic_placeholder(self, icon_theme) -> Gdk.Paintable | None:
         if self._placeholder_generic is None:
             self._placeholder_generic = icon_theme.lookup_icon(
                 "image-x-generic-symbolic", None, 96, 1,
-                Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
+                Gtk.TextDirection.NONE, self._ICON_LOOKUP_NONE,
             )
         return self._placeholder_generic
 
@@ -911,7 +917,7 @@ class GalleryGrid(Gtk.Overlay):
         if self._placeholder_folder is None:
             self._placeholder_folder = icon_theme.lookup_icon(
                 "folder-pictures-symbolic", None, 96, 1,
-                Gtk.TextDirection.NONE, Gtk.IconLookupFlags.NONE,
+                Gtk.TextDirection.NONE, self._ICON_LOOKUP_NONE,
             )
         return self._placeholder_folder
 
