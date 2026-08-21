@@ -199,19 +199,37 @@ class RotatableSwitch(Gtk.Switch):
         old = self._rotation_deg
         self._rotation_deg = deg
         if (int(old) % 180 == 90) != (int(deg) % 180 == 90):
+            self._request_rotated_size()
             self.queue_resize()
         else:
             self.queue_draw()
 
-    def do_measure(self, orientation, for_size):  # type: ignore[override]
-        if int(self._rotation_deg) % 180 == 90:
-            opp = (
-                Gtk.Orientation.VERTICAL
-                if orientation == Gtk.Orientation.HORIZONTAL
-                else Gtk.Orientation.HORIZONTAL
-            )
-            return Gtk.Switch.do_measure(self, opp, for_size)
-        return Gtk.Switch.do_measure(self, orientation, for_size)
+    def _request_rotated_size(self) -> None:
+        """Ask for transposed bounds on a quarter turn.
+
+        RotatableLabel does this with a do_measure override, which cannot work
+        here: GtkSwitch installs a GtkCustomLayout, and gtk_widget_measure()
+        delegates to the layout manager whenever one is set, so a measure
+        override on the widget vtable is never called. (GtkLabel has no layout
+        manager, which is why the same trick does work there.) An explicit size
+        request goes around the layout manager and has the same effect.
+
+        Without it a switch rotated 90° keeps its 52x24 slot while painting
+        24x52, and overhangs its neighbours in the options row.
+
+        This buys the height, not the width: a size request is a *minimum*, so
+        the switch cannot be asked for less than its natural 52 px across. The
+        rotated slot therefore comes out square (52x52) rather than the exact
+        24x52 — no longer clipped, just a little roomy. Getting it exact would
+        mean replacing GtkSwitch's layout manager, which is far more surgery
+        than the remaining 28 px of slack is worth.
+        """
+        self.set_size_request(-1, -1)
+        if int(self._rotation_deg) % 180 != 90:
+            return
+        width = self.measure(Gtk.Orientation.HORIZONTAL, -1).natural
+        height = self.measure(Gtk.Orientation.VERTICAL, -1).natural
+        self.set_size_request(height, width)
 
     def do_snapshot(self, snapshot: Gtk.Snapshot) -> None:  # type: ignore[override]
         if self._rotation_deg == 0:
