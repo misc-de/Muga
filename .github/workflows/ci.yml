@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch cancels the first — no point burning
+# minutes on a diff nobody will look at any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # PyGObject comes from apt (python3-gi), so every job builds its venv with
+  # --system-site-packages rather than trying to compile the bindings.
+  GI_APT: >-
+    python3-gi python3-gi-cairo
+    gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-secret-1
+    gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+
+jobs:
+  lint:
+    name: ruff + mypy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK introspection data
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $GI_APT
+      - name: Create venv
+        run: |
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install ruff mypy 'Pillow>=12.3' defusedxml
+      - name: ruff
+        run: .venv/bin/ruff check .
+      - name: mypy
+        run: .venv/bin/mypy
+      - name: pip-audit
+        # The Pillow floor in pyproject.toml is pinned against specific decoder
+        # advisories and says "re-check with pip-audit" — this is that re-check,
+        # running on every PR instead of whenever someone remembers.
+        run: |
+          .venv/bin/pip install pip-audit
+          .venv/bin/pip-audit --strict
+
+  test:
+    name: pytest (${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is what ubuntu-24.04 ships, so it gets the apt PyGObject and
+        # runs the full suite. requires-python is >=3.11; anything below the
+        # system version would need PyGObject built from source, which buys
+        # little for the cost.
+        python: ['3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK, GStreamer, gettext and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $GI_APT xvfb gettext
+      - name: Create venv
+        run: |
+          python3 -m venv --system-site-packages .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install pytest pytest-cov 'Pillow>=12.3' defusedxml
+      - name: Compile translation catalogues
+        # Exercises the .mo path in yaga/i18n.py; without this the suite would
+        # only ever see the po/*.po fallback.
+        run: python3 tools/i18n.py compile
+      - name: Run tests under Xvfb
+        # Without a display the ~171 requires_display tests skip themselves,
+        # which would quietly halve the suite's reach. Xvfb keeps them honest.
+        # The floor sits a little under the current ~70% so a large untested
+        # addition shows up in the PR instead of months later.
+        run: xvfb-run -a .venv/bin/pytest -q --cov=yaga --cov-report=term --cov-fail-under=65
+
