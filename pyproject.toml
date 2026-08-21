@@ -1,3 +1,10 @@
+# Declared explicitly: without a [build-system] table, `pip install .` falls
+# back to legacy setuptools behaviour, which breaks under the
+# --no-build-isolation used by the Flatpak manifest.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "yaga-gallery"
 version = "0.3.0"
