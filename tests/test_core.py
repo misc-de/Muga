@@ -11,6 +11,27 @@ from yaga.config import Settings
 from yaga.thumbnails import Thumbnailer
 
 
+def gallery_source() -> str:
+    """The gallery window's implementation, across every module it lives in.
+
+    GalleryWindow was split into mixins (thumbnails, selection, styling and
+    gestures), so a test that greps for "how the gallery does X" has to look
+    at all of them or it starts failing for the wrong reason — a moved method
+    rather than a lost behaviour.
+    """
+    root = Path(__file__).resolve().parent.parent / "yaga"
+    return "\n".join(
+        (root / name).read_text(encoding="utf-8")
+        for name in (
+            "app.py",
+            "gallery_thumbnails.py",
+            "gallery_selection.py",
+            "gallery_style.py",
+            "gallery_render.py",
+        )
+    )
+
+
 class FakeThumbnailer:
     def thumb_path_for(self, path: Path) -> Path:
         # Real Thumbnailer returns a path under the cache dir; the scanner only
@@ -392,7 +413,7 @@ def test_thumbnailer_clear_recreates_cache_dir(tmp_path: Path, monkeypatch) -> N
 
 
 def test_gallery_media_area_is_configured_to_expand() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
 
     assert "self.grid_view.set_vexpand(True)" in grid_source
@@ -402,7 +423,7 @@ def test_gallery_media_area_is_configured_to_expand() -> None:
 
 def test_gallery_grid_defaults_to_four_compact_media_columns() -> None:
     settings = Settings()
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
     settings_source = Path("yaga/settings_window.py").read_text(encoding="utf-8")
 
@@ -416,7 +437,7 @@ def test_gallery_grid_defaults_to_four_compact_media_columns() -> None:
 
 
 def test_gallery_tiles_are_sized_from_available_width() -> None:
-    source = Path("yaga/app.py").read_text(encoding="utf-8")
+    source = gallery_source()
 
     assert "def _update_tile_size" in source
     assert "cell_size = max(32, scroller_width // columns)" in source  # height only; width handled by homogeneous Box
@@ -425,7 +446,7 @@ def test_gallery_tiles_are_sized_from_available_width() -> None:
 
 
 def test_gallery_folder_navigation_uses_swipe_without_visible_back_button() -> None:
-    source = Path("yaga/app.py").read_text(encoding="utf-8")
+    source = gallery_source()
     grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
 
     assert "folder_swipe = Gtk.GestureSwipe()" in source
@@ -444,7 +465,8 @@ def test_nextcloud_folder_open_uses_on_demand_thumbnails() -> None:
     tiles request their own thumbnail lazily when they scroll into view.
     Bulk sync (scan_nc_structure) is reserved for the initial structure scan,
     not per-folder navigation."""
-    source = Path("yaga/app.py").read_text(encoding="utf-8")
+    # The thumbnail path was split out of GalleryWindow into a mixin module.
+    source = Path("yaga/gallery_thumbnails.py").read_text(encoding="utf-8")
     grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
 
     # Public entry point the grid calls when it needs a tile's thumbnail.
@@ -458,7 +480,7 @@ def test_nextcloud_folder_open_uses_on_demand_thumbnails() -> None:
 
 
 def test_gallery_grid_is_split_out_of_app_module() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
 
     assert "from .gallery_grid import GalleryGrid" in app_source
@@ -527,7 +549,7 @@ def test_viewer_disables_own_gestures_in_editor_mode() -> None:
 
 
 def test_navigation_uses_spinner_broken_icon_and_pull_refresh() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     config_source = Path("yaga/config.py").read_text(encoding="utf-8")
 
     assert "DEBUG_LOG_PATH" in config_source
@@ -555,7 +577,7 @@ def test_settings_search_is_disabled() -> None:
 
 
 def test_gallery_supports_date_group_sorting_headers() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
 
     # "date" is a first-class sort key in the dropdown, paired with the
@@ -605,7 +627,7 @@ def test_viewer_delete_uses_confirmation_and_cleans_index_and_thumbnail() -> Non
 
 
 def test_editor_is_split_out_of_app_module() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     # The editor became a package; the GTK widget lives in editor/view.py.
     view_source = Path("yaga/editor/view.py").read_text(encoding="utf-8")
 
@@ -652,7 +674,7 @@ def test_editor_has_resettable_sliders_color_picker_and_multiple_stickers() -> N
 
 
 def test_settings_window_is_split_out_of_app_module() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     settings_source = Path("yaga/settings_window.py").read_text(encoding="utf-8")
 
     assert "from .settings_window import SettingsWindow" in app_source
@@ -661,7 +683,7 @@ def test_settings_window_is_split_out_of_app_module() -> None:
 
 
 def test_viewer_is_split_out_of_app_module() -> None:
-    app_source = Path("yaga/app.py").read_text(encoding="utf-8")
+    app_source = gallery_source()
     viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
 
     assert "from .viewer import ViewerWindow" in app_source

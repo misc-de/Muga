@@ -20,6 +20,8 @@ import pytest
 from tests.camera_fakes import FakeElement, FakeGst, FakePad, gst_win
 
 camera = pytest.importorskip("yaga.camera")
+# The recording pipeline lives in its own module now.
+camera_video = pytest.importorskip("yaga.camera_video")
 
 
 def _droid_pads(with_vfsrc=True):
@@ -157,7 +159,7 @@ def test_halium_recorder_reports_a_refused_viewfinder_link(tmp_path) -> None:
 
 def test_halium_recorder_maps_bitrate_to_quality(tmp_path) -> None:
     gst = FakeGst(element_pads=_droid_pads())
-    kbps, quality = next(iter(camera._VIDEO_BITRATE_TO_QUALITY.items()))
+    kbps, quality = next(iter(camera_video._VIDEO_BITRATE_TO_QUALITY.items()))
     win = _rec_win(gst, tmp_path, _video_bitrate_kbps=kbps)
     camera.CameraWindow._video_pipeline_build(win, 0)
     assert gst.element("jpegenc").props["quality"] == quality

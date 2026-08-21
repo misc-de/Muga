@@ -34,6 +34,10 @@ PILImage = pytest.importorskip("PIL.Image")
 camera = pytest.importorskip(
     "yaga.camera", reason="camera module needs the GStreamer bindings"
 )
+# Frame->file, EXIF and the rotation tables moved into their own module.
+capture_io = pytest.importorskip(
+    "yaga.camera_capture_io", reason="camera module needs the GStreamer bindings"
+)
 
 
 # --------------------------------------------------------------------
@@ -112,16 +116,16 @@ def _run(orientation: str, data: bytes, **kwargs):
 def test_every_orientation_has_a_rotation() -> None:
     """A real device transition must never fall through to the default —
     an unmapped lay would silently save that photo unrotated."""
-    assert set(camera._CAPTURE_ROTATION_CW) == set(ALL_ORIENTATIONS)
-    assert all(v in (0, 90, 180, 270) for v in camera._CAPTURE_ROTATION_CW.values())
+    assert set(capture_io._CAPTURE_ROTATION_CW) == set(ALL_ORIENTATIONS)
+    assert all(v in (0, 90, 180, 270) for v in capture_io._CAPTURE_ROTATION_CW.values())
 
 
 def test_landscape_lays_rotate_opposite_ways() -> None:
     """The regression that started this: left-up and right-up were mapped
     to the same-signed quarter turn family as the EXIF cookbook suggests,
     which is mirrored from what this HAL's accelerometer reports."""
-    assert camera._CAPTURE_ROTATION_CW[ORIENT_LEFT_UP] == 270
-    assert camera._CAPTURE_ROTATION_CW[ORIENT_RIGHT_UP] == 90
+    assert capture_io._CAPTURE_ROTATION_CW[ORIENT_LEFT_UP] == 270
+    assert capture_io._CAPTURE_ROTATION_CW[ORIENT_RIGHT_UP] == 90
 
 
 # --------------------------------------------------------------------
@@ -252,8 +256,8 @@ def test_broken_jpeg_falls_back_to_the_exif_tag() -> None:
     assert out == b"not a jpeg at all"
     # 270° CW outstanding == EXIF 8.
     assert tag == 8
-    assert camera._CW_TO_EXIF_ORIENTATION[90] == 6
-    assert camera._CW_TO_EXIF_ORIENTATION[180] == 3
+    assert capture_io._CW_TO_EXIF_ORIENTATION[90] == 6
+    assert capture_io._CW_TO_EXIF_ORIENTATION[180] == 3
 
 
 # --------------------------------------------------------------------
@@ -275,8 +279,11 @@ def test_capture_latches_the_orientation_at_shutter_time() -> None:
     pipeline is rebuilt in between). If the save path read the live
     orientation, turning the phone while the photo was being written
     would rotate it by however far it had drifted."""
-    source = (camera.__file__ or "").replace(".pyc", ".py")
-    body = open(source, encoding="utf-8").read()
+    # The shutter lives in camera.py, the save path in camera_capture_io.py.
+    body = "\n".join(
+        open((mod.__file__ or "").replace(".pyc", ".py"), encoding="utf-8").read()
+        for mod in (camera, capture_io)
+    )
     capture = body.split("def _capture(self) -> None:", 1)[1]
     capture = capture.split("\n    def ", 1)[0]
     assert "self._capture_orientation = self._device_orientation" in capture

@@ -211,7 +211,8 @@ def enumerate_devices(gst: Any) -> list[dict[str, Any]]:
             try:
                 caps = dev.get_caps()
             except Exception:
-                pass
+                # Caps are optional metadata; the device stays usable without them.
+                LOGGER.debug("get_caps failed for %s", path, exc_info=True)
             devices.append({
                 "name": display,
                 "path": path,
@@ -231,10 +232,10 @@ def enumerate_devices(gst: Any) -> list[dict[str, Any]]:
         LOGGER.debug("DeviceMonitor failed, falling back to /dev scan", exc_info=True)
 
     if not devices:
-        for path in sorted(Path("/dev").glob("video*")):
+        for dev in sorted(Path("/dev").glob("video*")):
             devices.append({
-                "name": path.name,
-                "path": str(path),
+                "name": dev.name,
+                "path": str(dev),
                 "source_factory": "v4l2src",
                 "location": "unknown",
                 "caps": None,
@@ -287,10 +288,10 @@ def enumerate_devices(gst: Any) -> list[dict[str, Any]]:
     # capture device.
     if not result:
         LOGGER.debug("No usable devices from monitor — scanning /dev")
-        for path in sorted(Path("/dev").glob("video*")):
+        for dev in sorted(Path("/dev").glob("video*")):
             result.append({
-                "name": path.name,
-                "path": str(path),
+                "name": dev.name,
+                "path": str(dev),
                 "source_factory": "v4l2src",
                 "location": "unknown",
                 "caps": None,
@@ -383,3 +384,12 @@ def device_kinds(caps: Any) -> set[str]:
         elif name == "image/jpeg":
             kinds.add("jpeg")
     return kinds
+
+
+def _is_halium_device(device: dict | None) -> bool:
+    """True when the active source is gst-droid's droidcamsrc — the
+    primary signal for the Halium/Hybris quirks path. Tolerant of None
+    so callers can pass a possibly-unset current device."""
+    if device is None:
+        return False
+    return device.get("source_factory") == "droidcamsrc"
