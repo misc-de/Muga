@@ -15,6 +15,8 @@ import importlib
 import pkgutil
 from pathlib import Path
 
+import pytest
+
 import yaga
 
 
@@ -227,4 +229,66 @@ def test_every_literal_passed_to_translate_is_in_the_template() -> None:
     assert not missing, (
         "strings passed to _() but absent from po/yaga.pot — run "
         "`tools/i18n.py extract && tools/i18n.py update`:\n" + "\n".join(missing)
+    )
+
+
+def test_the_builtin_mo_writer_matches_msgfmt() -> None:
+    """`pip install .` compiles catalogues, and cannot assume gettext is there.
+
+    Most build environments have no msgfmt, so tools/i18n.py carries its own
+    MO writer. It has one job: produce a file gettext reads back the same way
+    it reads msgfmt's. Compared entry by entry against the real thing —
+    skipped where msgfmt is unavailable, since then there is nothing to
+    compare against.
+    """
+    import gettext
+    import importlib.util
+    import shutil
+    import subprocess
+    import tempfile
+
+    if shutil.which("msgfmt") is None:
+        pytest.skip("msgfmt not installed — nothing to compare against")
+
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("_i18n_tool", root / "tools" / "i18n.py")
+    assert spec is not None and spec.loader is not None
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    for po in sorted((root / "po").glob("*.po")):
+        catalogue = tool._parse_po(po.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            ours, theirs = Path(tmp) / "ours.mo", Path(tmp) / "theirs.mo"
+            tool._write_mo(catalogue, ours)
+            subprocess.run(["msgfmt", "-o", str(theirs), str(po)], check=True)
+
+            with open(ours, "rb") as fh:
+                mine = gettext.GNUTranslations(fh)
+            with open(theirs, "rb") as fh:
+                reference = gettext.GNUTranslations(fh)
+
+            translated = [k for k, v in catalogue.items() if k and v]
+            assert translated, f"{po.name} has no translations to check"
+            differing = [k for k in translated if mine.gettext(k) != reference.gettext(k)]
+            assert not differing, f"{po.name}: {len(differing)} entries differ, e.g. {differing[:3]}"
+
+
+def test_only_the_yaga_package_is_installed() -> None:
+    """setuptools' auto-discovery must not treat every top-level dir as a package.
+
+    Without an include filter, `pip install .` put tests/, data/, tools/, po/
+    and any stale build/ into site-packages as importable top-level names —
+    so `import tests` from an unrelated project would have found this one's
+    suite.
+    """
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    with open(root / "pyproject.toml", "rb") as fh:
+        config = tomllib.load(fh)
+    find = config["tool"]["setuptools"]["packages"]["find"]
+    assert find.get("include") == ["yaga*"], (
+        "packages.find must be restricted to the yaga package; "
+        f"got {find.get('include')!r}"
     )

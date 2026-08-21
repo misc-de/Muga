@@ -91,9 +91,14 @@ the GTK/libadwaita versions Yaga targets, [docs/compatibility.md](docs/compatibi
 ## Translating
 
 Catalogues are standard gettext, in [po/](po/) — usable with Poedit, Weblate or
-`msgmerge`. To add a language, copy `po/yaga.pot` to `po/<code>.po`, translate,
-and run `tools/i18n.py compile`. Yaga reads `po/*.po` directly when no compiled
-catalogue is present, so a checkout is translated without a build step.
+`msgmerge`. To add a language, copy `po/yaga.pot` to `po/<code>.po` and
+translate it; it is selectable in Settings as soon as the file exists.
+
+Compiling is handled for you: `pip install .` builds the catalogues during the
+install, and `install.sh` does the same. Running from a checkout needs no build
+step at all — Yaga reads `po/*.po` directly when no compiled catalogue is
+present. `tools/i18n.py` carries its own MO writer, so none of this requires
+gettext to be installed.
 
 ```bash
 tools/i18n.py extract    # rebuild po/yaga.pot from the sources

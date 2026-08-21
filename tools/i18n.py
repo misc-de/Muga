@@ -14,7 +14,10 @@ Needs gettext (xgettext, msgmerge, msgfmt) for everything except `stat`.
 
 from __future__ import annotations
 
+import array
 import re
+import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -80,12 +83,93 @@ def update() -> int:
     return 0
 
 
+def _parse_po(text: str) -> dict[str, str]:
+    """msgid -> msgstr, header entry included (gettext reads the charset there)."""
+    out: dict[str, str] = {}
+    pairs = re.findall(
+        r'^msgid((?:[ \t]*"(?:[^"\\]|\\.)*"[ \t]*\n?)+)'
+        r'^msgstr((?:[ \t]*"(?:[^"\\]|\\.)*"[ \t]*\n?)+)', text, re.M)
+    for mid, mstr in pairs:
+        out[_unquote(mid)] = _unquote(mstr)
+    return out
+
+
+def _unquote(chunk: str) -> str:
+    """Same reading as yaga/i18n.py — one left-to-right pass, no unicode_escape."""
+    joined = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', chunk))
+    escapes = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
+    out: list[str] = []
+    i = 0
+    while i < len(joined):
+        char = joined[i]
+        if char == "\\" and i + 1 < len(joined):
+            out.append(escapes.get(joined[i + 1], "\\" + joined[i + 1]))
+            i += 2
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+def _write_mo(catalog: dict[str, str], target: Path) -> None:
+    """Write a binary catalogue without needing msgfmt on the machine.
+
+    The MO layout is small and stable (GNU gettext manual, "The Format of GNU
+    MO Files"), and having a pure-Python writer means `pip install .` can
+    build catalogues on a box with no gettext installed — which is most
+    build environments.
+
+    Untranslated entries are dropped: gettext falls back to the msgid, which
+    is the English source string, so shipping them would only make the file
+    bigger.
+    """
+    entries = {k: v for k, v in catalog.items() if v or k == ""}
+    keys = sorted(entries)
+    ids = strs = b""
+    offsets: list[tuple[int, int, int, int]] = []
+    for key in keys:
+        encoded_id = key.encode("utf-8")
+        encoded_str = entries[key].encode("utf-8")
+        offsets.append((len(ids), len(encoded_id), len(strs), len(encoded_str)))
+        ids += encoded_id + b"\0"
+        strs += encoded_str + b"\0"
+
+    keystart = 7 * 4 + 16 * len(keys)
+    valuestart = keystart + len(ids)
+    koffsets: list[int] = []
+    voffsets: list[int] = []
+    for id_off, id_len, str_off, str_len in offsets:
+        koffsets += [id_len, id_off + keystart]
+        voffsets += [str_len, str_off + valuestart]
+
+    output = struct.pack(
+        "Iiiiiii",
+        0x950412DE,          # magic
+        0,                   # version
+        len(keys),
+        7 * 4,               # offset of the key table
+        7 * 4 + len(keys) * 8,
+        0, 0,                # hash table: size, offset (unused)
+    )
+    output += array.array("i", koffsets + voffsets).tobytes()
+    output += ids + strs
+    target.write_bytes(output)
+
+
 def compile_all() -> int:
+    have_msgfmt = shutil.which("msgfmt") is not None
     for po in sorted(PO_DIR.glob("*.po")):
         target = LOCALE_DIR / po.stem / "LC_MESSAGES" / f"{DOMAIN}.mo"
         target.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["msgfmt", "--check-format", "-o", str(target), str(po)], check=True)
-        print(f"{target.relative_to(ROOT)}")
+        if have_msgfmt:
+            # Preferred when available: it also validates the format strings.
+            subprocess.run(
+                ["msgfmt", "--check-format", "-o", str(target), str(po)], check=True)
+            how = ""
+        else:
+            _write_mo(_parse_po(po.read_text(encoding="utf-8")), target)
+            how = "  (no msgfmt — used the built-in writer)"
+        print(f"{target.relative_to(ROOT)}{how}")
     return 0
 
 

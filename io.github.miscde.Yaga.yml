@@ -83,9 +83,8 @@ modules:
   - name: yaga
     buildsystem: simple
     build-commands:
-      # Compile the gettext catalogues before the install so they are picked
-      # up as package data (see [tool.setuptools.package-data]).
-      - python3 tools/i18n.py compile
+      # The gettext catalogues are compiled by setup.py during the install
+      # (it carries its own MO writer, so the SDK needs no gettext).
       - pip3 install --exists-action=i --no-index --no-build-isolation
         --prefix=${FLATPAK_DEST} .
       - install -Dm644 data/io.github.miscde.Yaga.desktop

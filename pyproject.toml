@@ -31,6 +31,12 @@ yaga = "yaga.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
+# Without this filter setuptools' auto-discovery treats every top-level
+# directory as a package: `pip install .` was putting tests/, data/, tools/,
+# po/ — and any stale build/ — into site-packages as importable top-level
+# names. `import tests` from an unrelated project would then have found this
+# one's suite.
+include = ["yaga*"]
 
 [tool.setuptools.package-data]
 yaga = [

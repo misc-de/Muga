@@ -1,0 +1,6 @@
+# The catalogue sources and the tool that compiles them have to reach an
+# sdist: setup.py builds the .mo files at install time, and without these
+# the build silently produces an English-only install.
+include po/*.po po/*.pot
+include tools/i18n.py
+include data/*.desktop data/*.xml
