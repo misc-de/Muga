@@ -32,6 +32,18 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.3.0" date="2026-08-21">
+      <description>
+        <p>Reliability: rotating or moving a photo can no longer damage or
+        overwrite it, a hand-edited settings file or a damaged media index no
+        longer stops the app from starting, and an interrupted update rolls
+        itself back.</p>
+        <p>Fixes: cameras reporting a resolution range (libcamera) are found
+        again, large libraries no longer load in full before the first frame,
+        oversized images are refused before they exhaust memory, and rotated
+        controls are laid out correctly.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-06-04">
       <description>
         <p>Performance: off-thread thumbnail and image decoding, smoother

@@ -628,3 +628,60 @@ def test_non_busy_errors_are_not_retried(tmp_path: Path) -> None:
     with pytest.raises(sqlite3.OperationalError):
         db._run_write(broken)
     assert attempts["n"] == 1, "a genuine SQL error must fail immediately"
+
+
+# ---------------------------------------------------------------------------
+# The version is stated in three places
+# ---------------------------------------------------------------------------
+
+def _declared_versions() -> dict[str, str]:
+    import re
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    xml = (root / "data" / "io.github.miscde.Yaga.metainfo.xml").read_text()
+    return {
+        "yaga.VERSION": __import__("yaga").VERSION,
+        "pyproject": tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"],
+        "metainfo": re.search(r'<release version="([^"]+)"', xml).group(1),
+    }
+
+
+def test_the_version_is_the_same_everywhere() -> None:
+    """Three files carry it and each drives something different: the updater
+    compares yaga.VERSION against the remote, pip resolves pyproject, and the
+    software centre reads the metainfo. A bump that misses one means the
+    in-app update check disagrees with what is installed."""
+    versions = _declared_versions()
+    assert len(set(versions.values())) == 1, f"version drift: {versions}"
+
+
+def test_the_newest_metainfo_release_is_the_current_version() -> None:
+    """AppStream lists releases newest-first, so the top entry is what the
+    software centre shows as installed."""
+    versions = _declared_versions()
+    assert versions["metainfo"] == versions["yaga.VERSION"]
+
+
+def test_the_version_parses_as_a_release() -> None:
+    """_is_newer compares it numerically; a non-numeric version silently falls
+    back to "different means newer", which is how a downgrade slips through."""
+    from yaga.updater import _version_tuple
+
+    version = _declared_versions()["yaga.VERSION"]
+    parts = _version_tuple(version)
+    assert all(part[0] >= 0 for part in parts), f"{version} has non-numeric parts"
+
+
+def test_the_version_is_newer_than_the_previous_release() -> None:
+    """Otherwise the update check offers nothing, or worse, offers a
+    downgrade to whoever is already on the newer one."""
+    import re
+
+    from yaga.updater import _is_newer
+
+    root = Path(__file__).resolve().parent.parent
+    xml = (root / "data" / "io.github.miscde.Yaga.metainfo.xml").read_text()
+    listed = re.findall(r'<release version="([^"]+)"', xml)
+    assert len(listed) >= 2, "only one release listed"
+    assert _is_newer(listed[0], listed[1]), f"{listed[0]} is not newer than {listed[1]}"
