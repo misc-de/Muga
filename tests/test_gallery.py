@@ -22,6 +22,8 @@ import pytest
 from tests.conftest import requires_display
 
 app_mod = pytest.importorskip("yaga.app")
+# The cache budget and thumbnail workers live in the mixin module now.
+thumbs_mod = pytest.importorskip("yaga.gallery_thumbnails")
 
 from yaga.models import MediaItem  # noqa: E402
 
@@ -443,14 +445,14 @@ def test_cache_size_counts_both_stores(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 0)
     _fill(thumbs, "a.jpg", 1000, 1)
     _fill(nc_cache, "b.jpg", 2000, 1)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.cache_size_bytes(win) == 3000
 
 
 def test_cache_size_of_an_empty_cache(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 0)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", tmp_path / "missing")
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", tmp_path / "missing")
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.cache_size_bytes(win) == 0
 
@@ -458,7 +460,7 @@ def test_cache_size_of_an_empty_cache(tmp_path, monkeypatch) -> None:
 def test_eviction_is_off_at_an_unlimited_budget(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 0)
     _fill(thumbs, "a.jpg", 5_000_000, 1)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.evict_cache(win) == 0
     assert (thumbs / "a.jpg").exists()
@@ -467,7 +469,7 @@ def test_eviction_is_off_at_an_unlimited_budget(tmp_path, monkeypatch) -> None:
 def test_eviction_leaves_a_cache_under_budget_alone(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 10)
     _fill(thumbs, "a.jpg", 1000, 1)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.evict_cache(win) == 0
     assert (thumbs / "a.jpg").exists()
@@ -479,7 +481,7 @@ def test_eviction_drops_the_least_recently_used_first(tmp_path, monkeypatch) -> 
     win, thumbs, nc_cache = _cache_win(tmp_path, 1)   # 1 MB budget
     old = _fill(thumbs, "old.jpg", 700_000, atime=1_000_000)
     recent = _fill(thumbs, "recent.jpg", 700_000, atime=2_000_000)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
 
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         freed = GalleryWindow.evict_cache(win)
@@ -493,7 +495,7 @@ def test_eviction_stops_once_under_budget(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 1)
     for i in range(5):
         _fill(thumbs, f"{i}.jpg", 300_000, atime=1_000_000 + i)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
 
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         GalleryWindow.evict_cache(win)
@@ -507,7 +509,7 @@ def test_eviction_covers_the_nextcloud_cache(tmp_path, monkeypatch) -> None:
     """Downloaded originals are the part that actually grows."""
     win, thumbs, nc_cache = _cache_win(tmp_path, 1)
     big = _fill(nc_cache, "download.jpg", 2_000_000, atime=1_000_000)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
     with patch("yaga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.evict_cache(win) > 0
     assert not big.exists()
@@ -517,7 +519,7 @@ def test_eviction_survives_a_vanishing_file(tmp_path, monkeypatch) -> None:
     """The scanner's thumbnail pool writes into the same directory."""
     win, thumbs, nc_cache = _cache_win(tmp_path, 1)
     _fill(thumbs, "a.jpg", 2_000_000, atime=1_000_000)
-    monkeypatch.setattr(app_mod, "THUMB_DIR", thumbs)
+    monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
 
     real_unlink = Path.unlink
     calls = {"n": 0}

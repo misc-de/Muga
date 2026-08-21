@@ -161,9 +161,9 @@ class Database:
                 try:
                     existing.close()
                 except Exception:
-                    pass
+                    LOGGER.debug("existing.close failed", exc_info=True)
         self._tls.conn = None
-        self._wconn = None
+        self._wconn: "sqlite3.Connection | None" = None
         for suffix in ("", "-wal", "-shm"):
             broken = Path(str(self._db_path) + suffix)
             try:
@@ -216,7 +216,7 @@ class Database:
         this process. Readers keep their own connections and still run
         concurrently, which is what WAL is for.
         """
-        conn = getattr(self, "_wconn", None)
+        conn: sqlite3.Connection | None = getattr(self, "_wconn", None)
         if conn is None:
             conn = self._new_conn()
             self._wconn = conn
@@ -314,7 +314,7 @@ class Database:
                 )
                 self.wconn.commit()
             except sqlite3.OperationalError:
-                pass
+                LOGGER.debug("wconn.commit failed", exc_info=True)
         # FTS5 trigram index for substring search on `name` + `exif_data`.
         # Behind a try/except because older SQLite builds (or builds compiled
         # without FTS5/trigram) would otherwise refuse to open the DB.
@@ -365,7 +365,7 @@ class Database:
                 self.wconn.execute("PRAGMA user_version = 4")
                 self.wconn.commit()
             except sqlite3.OperationalError:
-                pass
+                LOGGER.debug("wconn.commit failed", exc_info=True)
         if version < 5:
             try:
                 self.wconn.executescript(_MIGRATION_V5)
@@ -500,7 +500,7 @@ class Database:
                 try:
                     Path(thumb).unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    LOGGER.debug("Path failed", exc_info=True)
         return len(stale)
 
     def set_thumb(self, path: str, thumb_path: str, category: str | None = None) -> None:
@@ -900,7 +900,7 @@ class Database:
                 try:
                     Path(row["thumb_path"]).unlink(missing_ok=True)
                 except OSError:
-                    pass
+                    LOGGER.debug("Path failed", exc_info=True)
         def _clear() -> None:
             self.wconn.execute("DELETE FROM media WHERE category = ?", (category,))
             self.wconn.commit()

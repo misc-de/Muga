@@ -19,6 +19,7 @@ LOGGER = logging.getLogger(__name__)
 
 from .models import MediaItem
 from .nextcloud import is_nc_path
+from .gtk_util import texture_from_pixbuf
 
 if TYPE_CHECKING:
     from .app import GalleryWindow
@@ -400,7 +401,7 @@ class GalleryGrid(Gtk.Overlay):
             # runs here, off the main loop. Pixbuf decode is thread-safe and a
             # memory texture is display-independent, so wrapping it is too.
             pixbuf = GdkPixbuf.Pixbuf.new_from_file(thumb_path)
-            texture = Gdk.Texture.new_for_pixbuf(pixbuf)
+            texture = texture_from_pixbuf(pixbuf)
         except Exception:
             LOGGER.debug("thumbnail decode failed for %s", thumb_path, exc_info=True)
         GLib.idle_add(self._on_texture_decoded, thumb_path, texture,
@@ -814,7 +815,7 @@ class GalleryGrid(Gtk.Overlay):
         button._folder_label = folder_label    # type: ignore[attr-defined]
         button._check = check                  # type: ignore[attr-defined]
         button._tile_index = tile_index        # type: ignore[attr-defined]
-        button._current_item: MediaRow | None = None  # type: ignore[attr-defined]
+        button._current_item = None            # type: ignore[attr-defined]
 
         button.connect("clicked", self._on_tile_clicked, list_item)
 
@@ -1156,7 +1157,7 @@ class GalleryGrid(Gtk.Overlay):
         try:
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
         except Exception:
-            pass
+            LOGGER.debug("gesture.set_state failed", exc_info=True)
         if not self.owner._selection_mode:
             self.owner._enter_selection_mode()
         self.owner._toggle_selection(row.media_item.path)

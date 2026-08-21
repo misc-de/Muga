@@ -23,6 +23,8 @@ import pytest
 from tests.camera_fakes import FakeElement, FakeGst, FakePad, FakePipeline, bind
 
 camera = pytest.importorskip("yaga.camera")
+# The recording pipeline lives in its own module now.
+camera_video = pytest.importorskip("yaga.camera_video")
 
 
 def _win(gst: FakeGst, **attrs) -> SimpleNamespace:
@@ -389,7 +391,7 @@ def test_video_pipeline_reaches_playing_and_flips_the_recording_flag(tmp_path) -
 
 @pytest.mark.parametrize(
     ("kbps", "expected_quality"),
-    list(camera._VIDEO_BITRATE_TO_QUALITY.items()),
+    list(camera_video._VIDEO_BITRATE_TO_QUALITY.items()),
 )
 def test_video_pipeline_maps_bitrate_to_jpeg_quality(tmp_path, kbps, expected_quality) -> None:
     gst = FakeGst()
@@ -403,7 +405,7 @@ def test_video_pipeline_clamps_the_bitrate(tmp_path, given, clamped) -> None:
     gst = FakeGst()
     win = _video_win(gst, tmp_path, _video_bitrate_kbps=given)
     camera.CameraWindow._video_pipeline_build_generic(win, {})
-    assert gst.element("jpegenc").props["quality"] == camera._VIDEO_BITRATE_TO_QUALITY[clamped]
+    assert gst.element("jpegenc").props["quality"] == camera_video._VIDEO_BITRATE_TO_QUALITY[clamped]
 
 
 def test_video_pipeline_adds_a_capsfilter_for_a_chosen_resolution(tmp_path) -> None:

@@ -18,6 +18,8 @@ from unittest.mock import MagicMock
 import pytest
 
 camera = pytest.importorskip("yaga.camera")
+# Frame->file, EXIF and the rotation tables moved into their own module.
+capture_io = pytest.importorskip("yaga.camera_capture_io")
 
 from yaga.camera_orientation import (  # noqa: E402
     ORIENT_BOTTOM_UP,
@@ -207,8 +209,8 @@ def test_orient_seq(orientation, reversed_) -> None:
 def test_capture_rotation_and_exif_tables_agree() -> None:
     """Every rotation the capture path can produce needs an EXIF equivalent
     for the no-Pillow fallback, or the photo is saved with no orientation."""
-    for deg in camera._CAPTURE_ROTATION_CW.values():
-        assert deg in camera._CW_TO_EXIF_ORIENTATION
+    for deg in capture_io._CAPTURE_ROTATION_CW.values():
+        assert deg in capture_io._CW_TO_EXIF_ORIENTATION
 
 
 def test_icon_rotation_covers_every_orientation() -> None:
@@ -472,7 +474,7 @@ def _app_segment(marker: int, payload: bytes) -> bytes:
 def test_exif_patch_inserts_an_app1_segment(tmp_path: Path) -> None:
     path = tmp_path / "photo.jpg"
     path.write_bytes(_minimal_jpeg())
-    camera._write_exif_app1_inplace(path, b"II*\x00TIFFDATA")
+    capture_io._write_exif_app1_inplace(path, b"II*\x00TIFFDATA")
 
     out = path.read_bytes()
     assert out[:2] == b"\xff\xd8"
@@ -486,7 +488,7 @@ def test_exif_patch_inserts_an_app1_segment(tmp_path: Path) -> None:
 def test_exif_patch_replaces_an_existing_exif_segment(tmp_path: Path) -> None:
     path = tmp_path / "photo.jpg"
     path.write_bytes(_minimal_jpeg(_app_segment(0xE1, b"Exif\x00\x00OLDDATA")))
-    camera._write_exif_app1_inplace(path, b"NEWDATA")
+    capture_io._write_exif_app1_inplace(path, b"NEWDATA")
 
     out = path.read_bytes()
     assert b"OLDDATA" not in out, "the old EXIF block was kept as well"
@@ -499,7 +501,7 @@ def test_exif_patch_keeps_xmp(tmp_path: Path) -> None:
     xmp = _app_segment(0xE1, b"http://ns.adobe.com/xap/1.0/\x00<x:xmpmeta/>")
     path = tmp_path / "photo.jpg"
     path.write_bytes(_minimal_jpeg(xmp))
-    camera._write_exif_app1_inplace(path, b"NEWDATA")
+    capture_io._write_exif_app1_inplace(path, b"NEWDATA")
     assert b"<x:xmpmeta/>" in path.read_bytes()
 
 
@@ -508,7 +510,7 @@ def test_exif_patch_keeps_other_app_segments(tmp_path: Path) -> None:
     comment = _app_segment(0xFE, b"a comment")
     path = tmp_path / "photo.jpg"
     path.write_bytes(_minimal_jpeg(jfif + comment))
-    camera._write_exif_app1_inplace(path, b"NEWDATA")
+    capture_io._write_exif_app1_inplace(path, b"NEWDATA")
     out = path.read_bytes()
     assert b"JFIF" in out
     assert b"a comment" in out
@@ -517,14 +519,14 @@ def test_exif_patch_keeps_other_app_segments(tmp_path: Path) -> None:
 def test_exif_patch_ignores_a_non_jpeg(tmp_path: Path) -> None:
     path = tmp_path / "notes.txt"
     path.write_bytes(b"just text")
-    camera._write_exif_app1_inplace(path, b"NEWDATA")
+    capture_io._write_exif_app1_inplace(path, b"NEWDATA")
     assert path.read_bytes() == b"just text"
 
 
 def test_exif_patch_ignores_an_empty_file(tmp_path: Path) -> None:
     path = tmp_path / "empty.jpg"
     path.write_bytes(b"")
-    camera._write_exif_app1_inplace(path, b"NEWDATA")
+    capture_io._write_exif_app1_inplace(path, b"NEWDATA")
     assert path.read_bytes() == b""
 
 
@@ -533,14 +535,14 @@ def test_exif_patch_refuses_an_oversized_payload(tmp_path: Path) -> None:
     path = tmp_path / "photo.jpg"
     original = _minimal_jpeg()
     path.write_bytes(original)
-    camera._write_exif_app1_inplace(path, b"x" * 0xFFFF)
+    capture_io._write_exif_app1_inplace(path, b"x" * 0xFFFF)
     assert path.read_bytes() == original, "an unsupported payload must change nothing"
 
 
 def test_exif_patch_leaves_no_temp_file(tmp_path: Path) -> None:
     path = tmp_path / "photo.jpg"
     path.write_bytes(_minimal_jpeg())
-    camera._write_exif_app1_inplace(path, b"DATA")
+    capture_io._write_exif_app1_inplace(path, b"DATA")
     assert list(tmp_path.iterdir()) == [path]
 
 
@@ -554,7 +556,7 @@ def test_exif_patch_result_is_readable_by_pillow(tmp_path: Path) -> None:
     exif = PILImage.Exif()
     exif[274] = 6           # Orientation
     exif[271] = "Yaga"      # Make
-    camera._write_exif_app1_inplace(path, exif.tobytes())
+    capture_io._write_exif_app1_inplace(path, exif.tobytes())
 
     with PILImage.open(path) as img:
         assert img.size == (32, 24), "pixel data was disturbed"

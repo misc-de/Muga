@@ -114,7 +114,7 @@ def test_rotation_preserves_file_mode(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_move_does_not_clobber_a_same_named_file(tmp_path: Path) -> None:
-    from yaga.app import _move_file_no_clobber
+    from yaga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "album"
     src.mkdir(), dst.mkdir()
@@ -130,7 +130,7 @@ def test_move_does_not_clobber_a_same_named_file(tmp_path: Path) -> None:
 
 
 def test_move_keeps_finding_free_names(tmp_path: Path) -> None:
-    from yaga.app import _move_file_no_clobber
+    from yaga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "album"
     src.mkdir(), dst.mkdir()
@@ -144,7 +144,7 @@ def test_move_keeps_finding_free_names(tmp_path: Path) -> None:
 
 def test_move_crosses_a_filesystem_boundary(tmp_path: Path) -> None:
     """EXDEV used to fail every single file — moving to an SD card never worked."""
-    from yaga.app import _move_file_no_clobber
+    from yaga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "card"
     src.mkdir(), dst.mkdir()
@@ -164,7 +164,7 @@ def test_move_crosses_a_filesystem_boundary(tmp_path: Path) -> None:
 
 
 def test_move_keeps_the_source_when_the_copy_fails(tmp_path: Path) -> None:
-    from yaga.app import _move_file_no_clobber
+    from yaga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "card"
     src.mkdir(), dst.mkdir()

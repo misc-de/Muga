@@ -363,14 +363,14 @@ class EditorView(Gtk.Box):
         resized to the requested edge for each caller."""
         if self._panel_base is None:
             big = self._working.copy()
-            big.thumbnail((256, 256), PILImage.BILINEAR)
+            big.thumbnail((256, 256), PILImage.Resampling.BILINEAR)
             bw, bh = big.size
             side = min(bw, bh)
             self._panel_base = big.crop(
                 ((bw - side) // 2, (bh - side) // 2,
                  (bw + side) // 2, (bh + side) // 2)
             ).convert("RGB")
-        return self._panel_base.resize((px, px), PILImage.BILINEAR)
+        return self._panel_base.resize((px, px), PILImage.Resampling.BILINEAR)
 
     def _build_panel_filter(self) -> Gtk.Widget:
         # Square thumbnail shared with the frame panel — cheap downscale, not a
@@ -678,7 +678,7 @@ class EditorView(Gtk.Box):
             pil = _make_text_pil(text, 60, self._text_color)
             self._set_sticker(pil)
         except Exception:
-            pass
+            LOGGER.debug("_set_sticker failed", exc_info=True)
 
     def _build_panel_crop(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -1229,7 +1229,7 @@ class EditorView(Gtk.Box):
                 if isinstance(source, str):
                     si = _get_emoji_pil(source, px)
                 else:
-                    si = source.resize((px, int(px * source.height / max(1, source.width))), PILImage.LANCZOS)
+                    si = source.resize((px, int(px * source.height / max(1, source.width))), PILImage.Resampling.LANCZOS)
                 rel = sticker["rel"]
                 sx = int(rel[0] * iw - si.width / 2)
                 sy = int(rel[1] * ih - si.height / 2)
@@ -1243,8 +1243,10 @@ class EditorView(Gtk.Box):
             for rel_x, rel_y, rel_r, _color in self._obfuscate_strokes:  # Ignore color tuple in processing
                 cx = int(rel_x * iw2)
                 cy = int(rel_y * ih2)
-                r = max(4, int(rel_r * min(iw2, ih2)))
-                obf_draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
+                radius = max(4, int(rel_r * min(iw2, ih2)))
+                obf_draw.ellipse(
+                    [cx - radius, cy - radius, cx + radius, cy + radius], fill=255
+                )
             obf_mask = obf_mask.filter(ImageFilter.GaussianBlur(radius=6))
             # blurred and result are both already RGB here — no convert needed.
             result = PILImage.composite(blurred, result, obf_mask)
@@ -1289,7 +1291,7 @@ class EditorView(Gtk.Box):
         # re-thumbnailing the full-resolution working image.
         if self._preview_base_src is not self._working or self._preview_base_dims != (tw, th):
             base = self._working.copy()
-            base.thumbnail((tw, th), PILImage.BILINEAR)
+            base.thumbnail((tw, th), PILImage.Resampling.BILINEAR)
             self._preview_base = base
             self._preview_base_src = self._working
             self._preview_base_dims = (tw, th)

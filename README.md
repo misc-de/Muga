@@ -72,8 +72,35 @@ python3 -m yaga
 bash uninstall.sh
 ```
 
+**Flatpak** — sandboxed, no Python dependencies on the host:
+```bash
+flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
+flatpak-builder --user --install --force-clean build-dir io.github.miscde.Yaga.yml
+flatpak run io.github.miscde.Yaga
+```
+The Flatpak covers desktops and v4l2 webcams. The Halium / gst-droid camera
+path (FuriOS, Droidian) needs the Android HAL and sysfs torch nodes, which a
+sandbox cannot reach — on those phones use `install.sh` above. See
+[docs/compatibility.md](docs/compatibility.md).
+
 For camera release checks on phones and desktops, see
 [docs/camera-validation.md](docs/camera-validation.md).
+For the module layout, see [docs/architecture.md](docs/architecture.md); for
+the GTK/libadwaita versions Yaga targets, [docs/compatibility.md](docs/compatibility.md).
+
+## Translating
+
+Catalogues are standard gettext, in [po/](po/) — usable with Poedit, Weblate or
+`msgmerge`. To add a language, copy `po/yaga.pot` to `po/<code>.po`, translate,
+and run `tools/i18n.py compile`. Yaga reads `po/*.po` directly when no compiled
+catalogue is present, so a checkout is translated without a build step.
+
+```bash
+tools/i18n.py extract    # rebuild po/yaga.pot from the sources
+tools/i18n.py update     # merge the template into every po/*.po
+tools/i18n.py compile    # build the .mo files an install ships
+tools/i18n.py stat       # coverage per language
+```
 
 ---
 

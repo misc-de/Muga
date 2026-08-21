@@ -1,7 +1,10 @@
 """GStreamer-based QR code scanner — no zbar required."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
+
+LOGGER = logging.getLogger(__name__)
 
 
 class QRScanError(RuntimeError):
@@ -188,11 +191,11 @@ class WebcamQRScanner:
             try:
                 self._bus.remove_signal_watch()
             except Exception:
-                pass
+                LOGGER.debug("_bus.remove_signal_watch failed", exc_info=True)
             self._bus = None
         if self._pipeline is not None:
             try:
                 self._pipeline.set_state(self._Gst.State.NULL)
             except Exception:
-                pass
+                LOGGER.debug("_pipeline.set_state failed", exc_info=True)
             self._pipeline = None

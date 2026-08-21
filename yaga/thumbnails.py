@@ -34,7 +34,7 @@ def _save_atomic(target: Path, write) -> None:
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
-            pass
+            LOGGER.debug("tmp.unlink failed", exc_info=True)
         raise
 
 # Sync the decompression-bomb cap with editor/_pil.py at import time so the
@@ -69,7 +69,7 @@ try:
         "error", category=_PILImageInit.DecompressionBombWarning,
     )
 except ImportError:
-    pass
+    LOGGER.debug("warnings.filterwarnings failed", exc_info=True)
 
 
 def pillow_version_warning() -> str:
@@ -272,18 +272,20 @@ class Thumbnailer:
             # Context manager closes the source file descriptor promptly — the
             # scanner runs this across thousands of files per sweep, so we don't
             # want to lean on GC timing to release handles.
-            with PILImage.open(str(path)) as img:
+            with PILImage.open(str(path)) as opened:
                 # Apply EXIF orientation so portrait photos from phones aren't sideways.
+                pic: PILImage.Image = opened
                 try:
-                    img = ImageOps.exif_transpose(img)
+                    pic = ImageOps.exif_transpose(opened) or opened
                 except Exception:
-                    pass
+                    # No or broken EXIF: keep the pixels as they were stored.
+                    LOGGER.debug("exif_transpose failed for %s", path, exc_info=True)
                 # Resize to thumbnail size
-                img.thumbnail((320, 320), PILImage.LANCZOS)
+                pic.thumbnail((320, 320), PILImage.Resampling.LANCZOS)
                 # JPEG cannot store alpha — flatten anything non-RGB (RGBA, P, LA, ...)
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                _save_atomic(target, lambda t: img.save(str(t), "JPEG", quality=85))
+                if pic.mode != "RGB":
+                    pic = pic.convert("RGB")
+                _save_atomic(target, lambda t: pic.save(str(t), "JPEG", quality=85))
                 return str(target)
         except (PILImage.DecompressionBombError, PILImage.DecompressionBombWarning):
             # Refuse oversized images explicitly — a debug-level log buries
@@ -311,7 +313,9 @@ class Thumbnailer:
                 _save_atomic(target, lambda t: pixbuf.savev(str(t), "jpeg", ["quality"], ["85"]))
                 return str(target)
         except Exception:
-            pass
+            # GdkPixbuf fallback for what Pillow could not decode; the RAW
+            # branch below is the last attempt.
+            LOGGER.debug("GdkPixbuf thumbnail failed for %s", path, exc_info=True)
         
         # Optional: Try rawpy for RAW image support
         if path.suffix.lower() in {".raw", ".dng", ".cr2", ".nef", ".arw", ".raf", ".rw2", ".orf", ".x3f", ".dcr", ".crw"}:
@@ -321,11 +325,13 @@ class Thumbnailer:
                     rgb = raw.postprocess()
                 from PIL import Image as PILImage
                 with PILImage.fromarray(rgb) as img:
-                    img.thumbnail((320, 320), PILImage.LANCZOS)
+                    img.thumbnail((320, 320), PILImage.Resampling.LANCZOS)
                     _save_atomic(target, lambda t: img.save(str(t), "JPEG", quality=85))
                 return str(target)
             except Exception:
-                pass
+                # rawpy is optional and RAW formats vary wildly — give up on a
+                # thumbnail for this file rather than failing the whole scan.
+                LOGGER.debug("RAW thumbnail failed for %s", path, exc_info=True)
         
         return None
 

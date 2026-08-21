@@ -18,6 +18,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 camera = pytest.importorskip("yaga.camera")
+# Frame->file, EXIF and the rotation tables moved into their own module.
+capture_io = pytest.importorskip("yaga.camera_capture_io")
 
 
 class _MapInfo:
@@ -376,7 +378,7 @@ def test_gps_uses_ifd_rationals() -> None:
 
 def test_write_exif_prefers_gexiv2_when_present(tmp_path: Path) -> None:
     win = _win(tmp_path, _write_exif_gexiv2=MagicMock(), _write_exif_pillow=MagicMock())
-    with patch.object(camera, "_HAS_GEXIV2", True):
+    with patch.object(capture_io, "_HAS_GEXIV2", True):
         camera.CameraWindow._write_exif(win, tmp_path / "x.jpg", 3)
     win._write_exif_gexiv2.assert_called_once_with(tmp_path / "x.jpg", 3)
     win._write_exif_pillow.assert_not_called()
@@ -384,7 +386,7 @@ def test_write_exif_prefers_gexiv2_when_present(tmp_path: Path) -> None:
 
 def test_write_exif_falls_back_to_pillow(tmp_path: Path) -> None:
     win = _win(tmp_path, _write_exif_gexiv2=MagicMock(), _write_exif_pillow=MagicMock())
-    with patch.object(camera, "_HAS_GEXIV2", False):
+    with patch.object(capture_io, "_HAS_GEXIV2", False):
         camera.CameraWindow._write_exif(win, tmp_path / "x.jpg", 1)
     win._write_exif_pillow.assert_called_once_with(tmp_path / "x.jpg", 1)
     win._write_exif_gexiv2.assert_not_called()

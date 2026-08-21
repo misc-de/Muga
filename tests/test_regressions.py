@@ -16,7 +16,7 @@ import pkgutil
 from pathlib import Path
 
 import yaga
-from yaga.i18n import TRANSLATIONS
+
 
 _PKG_ROOT = Path(yaga.__file__).parent
 
@@ -72,22 +72,159 @@ def test_no_duplicate_dict_keys_in_package() -> None:
     assert not offenders, "duplicate dict keys found:\n" + "\n".join(offenders)
 
 
-def test_translation_tables_have_matching_keys() -> None:
-    """Every non-English table must define exactly the same keys as "en".
+def _po_entries(text: str) -> dict[str, str]:
+    """msgid -> msgstr for a .po/.pot file, header entry excluded.
 
-    A missing key leaks the English source string into a localised UI; a stray
-    key is dead weight (and often a sign a real translation was lost during an
-    edit). Keeping the tables symmetric also catches accidental key drops like
-    the one that could have happened while de-duplicating the editor block."""
-    en_keys = set(TRANSLATIONS["en"])
+    Unescaping goes through the app's own _po_unquote, so these tests compare
+    the same strings the running app compares — and exercise that parser on
+    every catalogue as a side effect.
+    """
+    import re
+
+    from yaga.i18n import _po_unquote
+
+    pairs = re.findall(
+        r'^msgid((?:[ \t]*"(?:[^"\\]|\\.)*"[ \t]*\n?)+)'
+        r'^msgstr((?:[ \t]*"(?:[^"\\]|\\.)*"[ \t]*\n?)+)', text, re.M)
+    out = {}
+    for mid, mstr in pairs:
+        key = _po_unquote(mid)
+        if key:
+            out[key] = _po_unquote(mstr)
+    return out
+
+
+def test_catalogues_cover_exactly_the_template() -> None:
+    """Every po/*.po must carry the same msgids as po/yaga.pot.
+
+    A missing msgid leaks the English source string into a localised UI; a
+    stray one is dead weight, and usually means a real translation was lost
+    when the template was regenerated. `tools/i18n.py update` keeps them in
+    step — this is the guard that says whether someone forgot to run it.
+    """
+    po_dir = Path(__file__).resolve().parent.parent / "po"
+    template = set(_po_entries((po_dir / "yaga.pot").read_text(encoding="utf-8")))
+    assert template, "po/yaga.pot is empty — run tools/i18n.py extract"
+
     problems: list[str] = []
-    for lang, table in TRANSLATIONS.items():
-        if lang == "en":
-            continue
-        missing = en_keys - set(table)
-        extra = set(table) - en_keys
+    for po in sorted(po_dir.glob("*.po")):
+        entries = set(_po_entries(po.read_text(encoding="utf-8")))
+        missing, extra = template - entries, entries - template
         if missing:
-            problems.append(f"{lang!r} missing {len(missing)}: {sorted(missing)}")
+            problems.append(f"{po.name} missing {len(missing)}: {sorted(missing)[:5]}")
         if extra:
-            problems.append(f"{lang!r} has {len(extra)} unknown: {sorted(extra)}")
-    assert not problems, "translation tables out of sync:\n" + "\n".join(problems)
+            problems.append(f"{po.name} has {len(extra)} unknown: {sorted(extra)[:5]}")
+    assert not problems, "catalogues out of sync with the template:\n" + "\n".join(problems)
+
+
+def test_translations_keep_their_format_placeholders() -> None:
+    """A translated string must take the same %-arguments as its source.
+
+    This is the one translation bug that crashes rather than looks wrong:
+    "%d items" translated without the %d raises at format time, inside
+    whatever UI callback happened to build the label.
+    """
+    import re
+    po_dir = Path(__file__).resolve().parent.parent / "po"
+    spec = re.compile(r"%(?:\((\w+)\))?[-#0 +]*\d*(?:\.\d+)?([diouxXeEfFgGcrsa%])")
+
+    problems: list[str] = []
+    for po in sorted(po_dir.glob("*.po")):
+        for msgid, msgstr in _po_entries(po.read_text(encoding="utf-8")).items():
+            if not msgstr:
+                continue          # untranslated falls back to the msgid
+            want = sorted(m for m in spec.findall(msgid) if m[1] != "%")
+            got = sorted(m for m in spec.findall(msgstr) if m[1] != "%")
+            if want != got:
+                problems.append(f"{po.name}: {msgid!r} takes {want}, translation takes {got}")
+    assert not problems, "placeholder mismatch:\n" + "\n".join(problems)
+
+
+def test_every_catalogue_language_is_offered_and_loadable() -> None:
+    """A shipped catalogue the user cannot select is invisible work."""
+    from yaga.i18n import SOURCE_LANGUAGE, Translator, available_languages
+
+    langs = available_languages()
+    assert SOURCE_LANGUAGE in langs
+    for lang in langs:
+        # Must not raise, and must return a str for an unknown key.
+        assert Translator(lang).gettext("__definitely not a real msgid__") == \
+            "__definitely not a real msgid__"
+
+
+def test_po_unquote_handles_escapes_and_non_ascii() -> None:
+    """The .po fallback parser must not decode text a second time.
+
+    Two ways to get this wrong, both of which happened while the catalogues
+    were first generated:
+
+      * ``unicode_escape`` on an already-decoded string turns "—" into
+        "â\\x80\\x94", so every msgid carrying a dash, arrow or ellipsis stops
+        matching what the code passes to ``_()`` — silently untranslated.
+      * Chained ``str.replace`` calls unescape ``\\\\`` last, so a literal
+        backslash-n arrives as a newline.
+    """
+    from yaga.i18n import _po_unquote
+
+    assert _po_unquote('"ab"') == "ab"
+    assert _po_unquote('"a\\nb"') == "a\nb"          # \n is a newline
+    assert _po_unquote('"a\\\\nb"') == "a\\nb"       # \\n is backslash + n
+    assert _po_unquote('"x\\"y"') == 'x"y'
+    assert _po_unquote('"—"') == "—"
+    assert _po_unquote('"→ ✓ …"') == "→ ✓ …"
+    assert _po_unquote('"a"\n"b"') == "ab"           # continuation lines
+
+
+def test_catalogues_carry_no_double_encoded_text() -> None:
+    """A msgid that went through a bad decode never matches the source string.
+
+    "â" plus a control byte is the fingerprint of UTF-8 read as Latin-1; it
+    cannot occur in Yaga's real UI strings, so its presence means a catalogue
+    was written by a broken tool.
+    """
+    po_dir = Path(__file__).resolve().parent.parent / "po"
+    suspects: list[str] = []
+    for cat in sorted(list(po_dir.glob("*.po")) + list(po_dir.glob("*.pot"))):
+        text = cat.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if "â\x80" in line or "Ã¤" in line or "Ã¼" in line or "Ã¶" in line:
+                suspects.append(f"{cat.name}: {line[:80]}")
+    assert not suspects, "double-encoded text in catalogues:\n" + "\n".join(suspects)
+
+
+def test_every_literal_passed_to_translate_is_in_the_template() -> None:
+    """A string literal handed to _() must exist in po/yaga.pot.
+
+    Without this the failure is invisible: an untemplated string simply shows
+    up in English, in an otherwise German UI, and nobody notices until a user
+    reports it. Catching it here means `tools/i18n.py extract` gets run as
+    part of the change that introduced the string.
+
+    Only literals are checked — `self._(label)` with a variable cannot be
+    resolved statically, and those msgids are carried in the template with a
+    "referenced indirectly" comment instead.
+    """
+    root = Path(__file__).resolve().parent.parent
+    template = set(_po_entries((root / "po" / "yaga.pot").read_text(encoding="utf-8")))
+
+    missing: list[str] = []
+    for path in sorted((root / "yaga").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            is_translate = (
+                (isinstance(fn, ast.Name) and fn.id == "_")
+                or (isinstance(fn, ast.Attribute) and fn.attr == "_")
+            )
+            if not is_translate or not node.args:
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                if arg.value and arg.value not in template:
+                    missing.append(f"{path.relative_to(root)}:{arg.lineno}: {arg.value!r}")
+    assert not missing, (
+        "strings passed to _() but absent from po/yaga.pot — run "
+        "`tools/i18n.py extract && tools/i18n.py update`:\n" + "\n".join(missing)
+    )

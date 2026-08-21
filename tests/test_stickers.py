@@ -29,7 +29,7 @@ def _alpha_bounds(img):
 def _coverage(img) -> float:
     """Fraction of pixels carrying any alpha."""
     alpha = img.split()[3]
-    opaque = sum(1 for value in alpha.getdata() if value > 0)
+    opaque = sum(1 for value in alpha.get_flattened_data() if value > 0)
     return opaque / (img.width * img.height)
 
 
@@ -116,7 +116,7 @@ def test_the_heart_is_wider_than_it_is_tall_at_the_top() -> None:
 def test_a_shape_is_deterministic(name, fn) -> None:
     first = getattr(stickers, fn)(64)
     second = getattr(stickers, fn)(64)
-    assert list(first.getdata()) == list(second.getdata())
+    assert list(first.get_flattened_data()) == list(second.get_flattened_data())
 
 
 @pytest.mark.parametrize(("name", "fn"), SHAPES)

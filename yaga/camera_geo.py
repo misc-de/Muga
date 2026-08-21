@@ -126,7 +126,7 @@ class GeoClient:
                 try:
                     self._client_proxy.disconnect(self._signal_id)
                 except Exception:
-                    pass
+                    LOGGER.debug("_client_proxy.disconnect failed", exc_info=True)
                 self._signal_id = None
             try:
                 # Teardown — we ignore the result, so don't let a wedged bus
@@ -135,7 +135,7 @@ class GeoClient:
                     "Stop", None, Gio.DBusCallFlags.NONE, 500, None
                 )
             except Exception:
-                pass
+                LOGGER.debug("_client_proxy.call_sync failed", exc_info=True)
         self._client_proxy = None
         self._client_path = None
 

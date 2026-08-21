@@ -11,3 +11,8 @@ venv/
 .claude/settings.json
 .coverage
 htmlcov/
+
+# Compiled translation catalogues — po/*.po is the source of truth,
+# tools/i18n.py compile regenerates these.
+yaga/data/locale/
+*.mo

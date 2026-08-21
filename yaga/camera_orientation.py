@@ -207,19 +207,19 @@ class _SensordBackend:
             try:
                 GLib.source_remove(self._reconnect_source)
             except Exception:
-                pass
+                LOGGER.debug("GLib.source_remove failed", exc_info=True)
             self._reconnect_source = None
         if self._watch_id is not None:
             try:
                 GLib.source_remove(self._watch_id)
             except Exception:
-                pass
+                LOGGER.debug("GLib.source_remove failed", exc_info=True)
             self._watch_id = None
         if self._sock is not None:
             try:
                 self._sock.close()
             except Exception:
-                pass
+                LOGGER.debug("_sock.close failed", exc_info=True)
             self._sock = None
         if self._bus is not None and self._session_id is not None:
             pid = os.getpid()
@@ -238,7 +238,7 @@ class _SensordBackend:
                 try:
                     self._call(path, iface, method, args)
                 except Exception:
-                    pass
+                    LOGGER.debug("_call failed", exc_info=True)
         self._bus = None
         self._session_id = None
         self._buf = b""
@@ -315,7 +315,7 @@ class _SensordBackend:
                     self._process_sample(x / 1000.0, y / 1000.0, z / 1000.0)
                 self._buf = self._buf[need:]
         except BlockingIOError:
-            pass
+            LOGGER.debug("while len(self._buf) > assignment failed", exc_info=True)
         except Exception as exc:
             LOGGER.debug("sensord socket error: %s", exc)
             self._watch_id = None
@@ -331,7 +331,7 @@ class _SensordBackend:
             try:
                 self._sock.close()
             except Exception:
-                pass
+                LOGGER.debug("_sock.close failed", exc_info=True)
             self._sock = None
         self._buf = b""
 
@@ -356,7 +356,7 @@ class _SensordBackend:
         try:
             self.stop_for_reconnect()
         except Exception:
-            pass
+            LOGGER.debug("stop_for_reconnect failed", exc_info=True)
         ok = self.start(cb)
         if not ok:
             LOGGER.debug("sensord reconnect failed; retrying")
@@ -450,7 +450,7 @@ class _IIOSensorProxyBackend:
             try:
                 self._proxy.disconnect(self._signal_id)
             except Exception:
-                pass
+                LOGGER.debug("_proxy.disconnect failed", exc_info=True)
             self._signal_id = None
         try:
             self._proxy.call_sync(
@@ -552,6 +552,17 @@ class OrientationClient:
         try:
             self._backend.stop()
         except Exception:
-            pass
+            LOGGER.debug("_backend.stop failed", exc_info=True)
         self._backend = None
         self._backend_name = ""
+
+
+# Maps the 4-state device orientation to the GSK rotation (in degrees)
+# that puts a glyph/label upright in the user's view. Used by every
+# rotatable widget — defined once here, referenced everywhere.
+_ICON_ROTATION_DEG = {
+    ORIENT_NORMAL:    0,
+    ORIENT_BOTTOM_UP: 180,
+    ORIENT_LEFT_UP:   270,
+    ORIENT_RIGHT_UP:  90,
+}

@@ -36,6 +36,27 @@ import pytest
 from gi.repository import GLib  # noqa: F401  — ensures the binding is up
 
 
+def gallery_source() -> str:
+    """The gallery window's implementation, across every module it lives in.
+
+    GalleryWindow was split into mixins (thumbnails, selection, styling and
+    gestures), so a test that greps for "how the gallery does X" has to look
+    at all of them or it starts failing for the wrong reason — a moved method
+    rather than a lost behaviour.
+    """
+    root = Path(__file__).resolve().parent.parent / "yaga"
+    return "\n".join(
+        (root / name).read_text(encoding="utf-8")
+        for name in (
+            "app.py",
+            "gallery_thumbnails.py",
+            "gallery_selection.py",
+            "gallery_style.py",
+            "gallery_render.py",
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1.  Stat-cache for thumbnail existence checks
 # ---------------------------------------------------------------------------
@@ -1443,7 +1464,7 @@ def test_migration_v5_to_v6_widens_fts_to_exif(tmp_path: Path) -> None:
 def test_selection_mode_trash_packed_start_close_packed_end() -> None:
     """User asked to swap positions so the header doesn't rearrange the
     user's reach when entering selection mode. Pin via source order."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     trash_pack = src.index("self.header.pack_start(self._sel_delete_btn)")
     close_pack = src.index("self.header.pack_end(self._sel_cancel_btn)")
     assert trash_pack < close_pack
@@ -1487,7 +1508,7 @@ def test_settings_nav_position_rejects_invalid_values_on_load(
 def test_app_build_ui_routes_nav_box_per_position() -> None:
     """Source-level pin: each position branch must wire the nav_box to the
     right ToolbarView slot. Catches accidental swaps (e.g. left → top_bar)."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     top_idx    = src.index('if nav_position == "top":')
     add_top    = src.index("self.toolbar.add_top_bar(self.nav_box)", top_idx)
     bottom_idx = src.index('elif nav_position == "bottom":', add_top)
@@ -1519,7 +1540,7 @@ def test_apply_settings_defers_rebuild_to_idle() -> None:
     combo notify::selected was observed to freeze the app when the rebuild
     changed the toolbar topology (top-bar nav → side-rail nav). The rebuild
     must be queued via GLib.idle_add so the signal stack unwinds first."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     apply_idx   = src.index("def apply_settings(self, settings: Settings)")
     rebuild_def = src.index("def _do_settings_rebuild", apply_idx)
     apply_body  = src[apply_idx:rebuild_def]
@@ -1565,7 +1586,7 @@ def test_nav_swipe_claims_sequence_at_press_not_at_motion() -> None:
     drag-begin (i.e. on press). Tap is then synthesised in drag-end by
     calling set_active(True) on the button under the press point — exactly
     the path a real button click would have followed."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     begin_fn = src.index("def _on_nav_drag_begin")
     begin_end = src.index("\n    def ", begin_fn + 1)
     begin_body = src[begin_fn:begin_end]
@@ -1939,7 +1960,7 @@ def test_date_header_arrow_buttons_are_subtle() -> None:
     """User asked for 'dezente farbe' — pinned via the .date-header-nav CSS
     rule's opacity. Hover bumps to full opacity so the affordance is
     discoverable without dominating the typography."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     rule_idx = src.index(".date-header-nav {")
     block = src[rule_idx:src.index("}", rule_idx)]
     assert "opacity:" in block
@@ -1956,7 +1977,7 @@ def test_date_header_arrow_buttons_have_touch_sized_hit_area() -> None:
     icon. Pin a hit area >= 44px (Apple HIG / Material minimum) on the
     button rule plus an explicit icon size cap on the descendant image so
     themes can't scale the glyph alongside the button."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     rule_idx = src.index(".date-header-nav {")
     block = src[rule_idx:src.index("}", rule_idx)]
     import re
@@ -1993,7 +2014,7 @@ def test_nav_drag_end_synthesises_px_per_second_velocity() -> None:
     offset/time into px/s and forwards it. Pin the conversion so a future
     refactor can't silently drop the time scaling and turn every drag
     into a 1-pixel/second non-event."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     end_fn  = src.index("def _on_nav_drag_end")
     end_body_end = src.index("\n    def ", end_fn + 1)
     body = src[end_fn:end_body_end]
@@ -2098,7 +2119,7 @@ def test_do_settings_rebuild_recreates_window_on_nav_position_change() -> None:
     window starts with a fresh layout pass, and persisted settings (saved
     by apply_settings before scheduling the rebuild) are picked up by the
     new window's __init__."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     rebuild_def  = src.index("def _do_settings_rebuild")
     rebuild_end  = src.index("def _recreate_window_for_layout_change", rebuild_def)
     rebuild_body = src[rebuild_def:rebuild_end]
@@ -2116,7 +2137,7 @@ def test_do_settings_rebuild_recreates_window_on_nav_position_change() -> None:
 def test_recreate_window_destroys_old_after_new_is_presented() -> None:
     """Adw quits the main loop when the last window goes away. self.destroy()
     must fire after new_window.present() so the app always has a window."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     fn_def = src.index("def _recreate_window_for_layout_change")
     fn_end = src.index("\n    def ", fn_def + 1)
     fn_body = src[fn_def:fn_end]
@@ -2133,7 +2154,7 @@ def test_recreate_destroys_tracked_settings_dialog_before_self() -> None:
     the loop never found the dialog and parent-destroy left it behind on
     some WMs — producing two visible dialogs after recreate. Fix: track the
     dialog explicitly via self._settings_dialog and destroy it directly."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     fn_def = src.index("def _recreate_window_for_layout_change")
     fn_end = src.index("\n    def ", fn_def + 1)
     fn_body = src[fn_def:fn_end]
@@ -2151,7 +2172,7 @@ def test_open_settings_is_idempotent() -> None:
     """Clicking the gear button twice must not stack two dialogs — the
     second click presents the existing one. Pin via source order: the
     existing-dialog branch returns before constructing a new SettingsWindow."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     fn_def = src.index("def _open_settings(self, _button")
     fn_end = src.index("\n    def ", fn_def + 1)
     fn_body = src[fn_def:fn_end]
@@ -2173,7 +2194,7 @@ def test_recreate_does_not_auto_reopen_settings() -> None:
     old dialog. The reopened dialog rendered and reacted visually but its
     action handlers silently no-opped. Pin the absence of the reopen path
     so a future "convenience" patch doesn't reintroduce the bug."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     # Neither the recreate path nor __init__ should write/read the hint.
     assert "_reopen_settings_page" not in src
     # And no timeout/idle path should auto-construct a SettingsWindow.
@@ -2209,7 +2230,7 @@ def test_settings_window_initial_page_argument() -> None:
 
 def test_apply_settings_coalesces_repeated_calls() -> None:
     """Rapid combo changes shouldn't queue N rebuilds — pin the dedupe flag."""
-    src = Path("yaga/app.py").read_text(encoding="utf-8")
+    src = gallery_source()
     apply_idx = src.index("def apply_settings(self, settings: Settings)")
     rebuild_def = src.index("def _do_settings_rebuild", apply_idx)
     apply_body = src[apply_idx:rebuild_def]

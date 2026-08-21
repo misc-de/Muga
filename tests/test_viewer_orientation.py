@@ -62,7 +62,8 @@ def test_viewer_and_camera_rotation_maps_agree() -> None:
     rotation orientation-for-orientation. Both dicts key off the same ORIENT_*
     names, so we compare them by name without importing either module's heavy
     runtime deps."""
-    camera_map = _extract_name_keyed_dict("camera.py", "_ICON_ROTATION_DEG")
+    # The table moved next to the rest of the orientation logic.
+    camera_map = _extract_name_keyed_dict("camera_orientation.py", "_ICON_ROTATION_DEG")
     viewer_map = _extract_name_keyed_dict("viewer.py", "_SENSOR_ROTATION_DEG")
     assert viewer_map == camera_map
 

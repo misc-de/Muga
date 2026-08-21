@@ -32,6 +32,12 @@ def default_path(name: str) -> str:
     return str(candidates[name][0])
 
 
+# Thumbnail/preview disk-cache ceiling in MB. Named rather than inlined so
+# the migration in load() can restore it without reaching into
+# __dataclass_fields__ for the literal.
+DEFAULT_CACHE_MAX_MB = 2048
+
+
 @dataclass
 class Settings:
     photos_dir: str = field(default_factory=lambda: default_path("photos"))
@@ -112,7 +118,7 @@ class Settings:
     # ~/.cache grow until the partition filled — on a phone that takes the
     # camera down with it. The eviction machinery was already there; nothing
     # ever switched it on.
-    cache_max_mb: int = 2048
+    cache_max_mb: int = DEFAULT_CACHE_MAX_MB
     # One-shot marker for the 0 → 2048 default change. Installs that predate
     # it have an explicit 0 in settings.json that was never a real choice;
     # this lifts them to the new default exactly once, while still honouring
@@ -215,7 +221,7 @@ class Settings:
             # Only rewrite an unlimited budget that was never a real choice.
             # Deliberately choosing 0 in Settings sets the flag there, so this
             # never second-guesses the user twice.
-            settings.cache_max_mb = cls.__dataclass_fields__["cache_max_mb"].default
+            settings.cache_max_mb = DEFAULT_CACHE_MAX_MB
             settings.cache_budget_migrated = True
             LOGGER.info(
                 "Cache budget was unlimited — defaulting to %d MB", settings.cache_max_mb,
@@ -272,7 +278,7 @@ class Settings:
                 try:
                     os.fsync(fh.fileno())
                 except OSError:
-                    pass
+                    LOGGER.debug("os.fsync failed", exc_info=True)
             os.replace(tmp, path)
             return True
         except (OSError, TypeError, ValueError):
@@ -280,7 +286,7 @@ class Settings:
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
-                pass
+                LOGGER.debug("tmp.unlink failed", exc_info=True)
             return False
 
     def get_sort_mode(self, category: str, folder: str | None = None) -> str:
@@ -426,7 +432,7 @@ class Settings:
             try:
                 parent.chmod(0o700)
             except OSError:
-                pass
+                LOGGER.debug("parent.chmod failed", exc_info=True)
             tmp = self._CRED_FILE.with_suffix(".tmp")
             # Create the tmp file 0600 BEFORE writing the password.
             # path.write_text() creates the file with umask-default
@@ -448,12 +454,12 @@ class Settings:
                         try:
                             os.fsync(fh.fileno())
                         except OSError:
-                            pass
+                            LOGGER.debug("os.fsync failed", exc_info=True)
                 except Exception:
                     try:
                         os.close(fd)
                     except OSError:
-                        pass
+                        LOGGER.debug("os.close failed", exc_info=True)
                     raise
                 os.replace(tmp, self._CRED_FILE)
             finally:
@@ -464,7 +470,7 @@ class Settings:
                     try:
                         tmp.unlink()
                     except OSError:
-                        pass
+                        LOGGER.debug("tmp.unlink failed", exc_info=True)
             return True
         except Exception:
             return False
@@ -513,4 +519,4 @@ class Settings:
         try:
             self._CRED_FILE.unlink(missing_ok=True)
         except OSError:
-            pass
+            LOGGER.debug("_CRED_FILE.unlink failed", exc_info=True)

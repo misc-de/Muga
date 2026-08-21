@@ -18,6 +18,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import updater
 from .camera_torch import TORCH_SYSFS_PATHS
+from .gtk_util import idle_once
 from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
 
 if TYPE_CHECKING:
@@ -26,7 +27,45 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
+# Endonyms for the languages Yaga ships a catalogue for. A language missing
+# from here still shows up — under its bare code — so a new po/xx.po is
+# selectable the moment it lands, without touching this file.
+_LANGUAGE_NAMES = {
+    "en": "English",
+    "de": "German",
+}
+
+
+def _language_choices() -> list[tuple[str, str]]:
+    """(value, label) pairs for the language combo, catalogues included."""
+    from .i18n import available_languages
+
+    return [("system", "Use system language")] + [
+        (code, _LANGUAGE_NAMES.get(code, code)) for code in available_languages()
+    ]
+
+
 class SettingsWindow(Adw.PreferencesWindow):
+    """Preferences UI.
+
+    Deliberately still an Adw.PreferencesWindow. libadwaita 1.6 deprecated it
+    in favour of Adw.PreferencesDialog, but:
+
+      * Adw.PreferencesDialog only exists from libadwaita 1.5, and the phone
+        targets Yaga cares about (Droidian and FuriOS, both Debian bookworm)
+        ship 1.2 — there the replacement is simply absent.
+      * The two are not drop-in: a dialog is not a Gtk.Window, so the
+        ``close-request`` and ``destroy`` signals the gallery hangs the
+        dialog's lifecycle on (see GalleryWindow._show_settings) become
+        ``closed``, and ``destroy()`` becomes ``force_close()``.
+
+    Supporting both would mean branching the base class and the teardown
+    contract at runtime — on a device this project cannot test against. The
+    deprecated API still works in GTK 4.22, so it stays until the phone
+    baseline moves. See docs/compatibility.md.
+    """
+
+
     def __init__(self, parent: GalleryWindow, initial_page: str | None = None) -> None:
         super().__init__(transient_for=parent, modal=True, title=parent._("Settings"))
         self.set_search_enabled(False)
@@ -49,10 +88,10 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 self.set_visible_page_name(initial_page)
             except Exception:
-                pass
+                LOGGER.debug("set_visible_page_name failed", exc_info=True)
         # Suppress GTK's default "focus the first focusable widget" so opening
         # settings doesn't pop up the on-screen keyboard on a SpinRow / Entry.
-        GLib.idle_add(lambda: (self.set_focus(None), GLib.SOURCE_REMOVE)[1])
+        idle_once(self.set_focus, None)
 
     def _(self, text: str) -> str:
         return self.parent_window._(text)
@@ -101,7 +140,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         theme_group = Adw.PreferencesGroup(title=self._("Appearance"))
         app.add(theme_group)
         theme_group.add(self._combo_row("theme", "Theme", [("system", "System"), ("light", "Light"), ("dark", "Dark")]))
-        theme_group.add(self._combo_row("language", "Language", [("system", "Use system language"), ("en", "English"), ("de", "German")]))
+        theme_group.add(self._combo_row("language", "Language", _language_choices()))
 
         grid_group = Adw.PreferencesGroup(title=self._("Grid"))
         app.add(grid_group)
@@ -246,7 +285,7 @@ class SettingsWindow(Adw.PreferencesWindow):
                 dt = datetime.fromisoformat(iso)
                 parts.append(self._("Last checked: ") + dt.strftime("%d.%m.%Y %H:%M"))
             except ValueError:
-                pass
+                LOGGER.debug("parts.append failed", exc_info=True)
         return "  ·  ".join(parts)
 
     def _cancel_no_update_reset(self) -> None:
@@ -295,7 +334,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 self._update_btn.disconnect_by_func(self._on_check_update)
             except TypeError:
-                pass
+                LOGGER.debug("_update_btn.disconnect_by_func failed", exc_info=True)
             self._update_btn.connect("clicked", self._on_apply_update)
         else:
             self._update_btn.set_label(self._("Up to date"))
@@ -333,7 +372,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 self._update_btn.disconnect_by_func(self._on_apply_update)
             except TypeError:
-                pass
+                LOGGER.debug("_update_btn.disconnect_by_func failed", exc_info=True)
             self._update_btn.connect("clicked", self._show_restart_dialog)
             self._show_restart_dialog(None)
         else:
@@ -632,7 +671,7 @@ class SettingsWindow(Adw.PreferencesWindow):
                 try:
                     old_client.close()
                 except Exception:
-                    pass
+                    LOGGER.debug("old_client.close failed", exc_info=True)
         self._nc_refresh_status()
         # Add or remove the Nextcloud entry from the gallery's category nav.
         self.parent_window._rebuild_categories()
@@ -664,7 +703,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 self._nc_status_row.remove(self._nc_status_icon)
             except Exception:
-                pass
+                LOGGER.debug("_nc_status_row.remove failed", exc_info=True)
             self._nc_status_icon = None
         color = "#2ec27e" if ok else "#e01b24"
         try:
@@ -673,7 +712,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 self._nc_status_row.set_property("title-use-markup", True)
             except Exception:
-                pass
+                LOGGER.debug("_nc_status_row.set_property failed", exc_info=True)
         safe = GLib.markup_escape_text(text)
         self._nc_status_row.set_title(f"<span color='{color}' weight='600'>{safe}</span>")
 
@@ -812,7 +851,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             try:
                 old_client.close()
             except Exception:
-                pass
+                LOGGER.debug("old_client.close failed", exc_info=True)
         self.parent_window._nc_session_active = False
         self.settings.nextcloud_session_active = False
         self.parent_window.settings.nextcloud_session_active = False
@@ -1131,7 +1170,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             paintable = Gtk.WidgetPaintable.new(row)
             src.set_icon(paintable, 0, 0)
         except Exception:
-            pass
+            LOGGER.debug("src.set_icon failed", exc_info=True)
 
     def _on_media_drop(self, _target, value, _x, _y, target_row):
         if not isinstance(value, Gtk.ListBoxRow) or value is target_row:
@@ -1235,7 +1274,7 @@ class SettingsWindow(Adw.PreferencesWindow):
 
         dialog.connect("response", _done)
         dialog.present(self)
-        GLib.idle_add(lambda: (entry.grab_focus(), GLib.SOURCE_REMOVE)[1])
+        idle_once(entry.grab_focus)
 
     def _on_destroy(self, _w) -> None:
         self._closing = True
@@ -1344,7 +1383,7 @@ class SettingsWindow(Adw.PreferencesWindow):
             home = Gio.File.new_for_path(str(Path.home()))
             chooser.set_current_folder(home)
         except Exception:
-            pass
+            LOGGER.debug("chooser.set_current_folder failed", exc_info=True)
         chooser.connect("response", self._add_location_response)
         chooser.show()
 
@@ -1575,7 +1614,7 @@ class SettingsWindow(Adw.PreferencesWindow):
                 home = Gio.File.new_for_path(str(Path.home()))
                 chooser.set_current_folder(home)
             except Exception:
-                pass
+                LOGGER.debug("chooser.set_current_folder failed", exc_info=True)
 
             def _picked(c, response):
                 try:

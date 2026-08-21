@@ -132,7 +132,7 @@ class NextcloudClient:
             try:
                 conn.close()
             except Exception:
-                pass
+                LOGGER.debug("conn.close failed", exc_info=True)
             self._tls_local.conn = None
 
     def close(self) -> None:
@@ -161,7 +161,9 @@ class NextcloudClient:
                         f"{what} response is {length} bytes (limit {max_bytes})"
                     )
             except ValueError:
-                pass
+                # Non-numeric Content-Length: fall through to the streaming
+                # read, which enforces the cap on the bytes themselves.
+                LOGGER.debug("Nextcloud sent a non-numeric Content-Length: %r", length)
         chunks: list[bytes] = []
         total = 0
         while True:
@@ -194,7 +196,9 @@ class NextcloudClient:
                     LOGGER.warning("Refusing oversized Nextcloud response for %s (%s bytes)", dest, length)
                     return False
             except ValueError:
-                pass
+                # Non-numeric Content-Length: fall through to the streaming
+                # read, which enforces the cap on the bytes themselves.
+                LOGGER.debug("Nextcloud sent a non-numeric Content-Length: %r", length)
 
         tmp = self._temp_path_for(dest)
         written = 0
@@ -213,7 +217,7 @@ class NextcloudClient:
                 try:
                     os.fsync(fh.fileno())
                 except OSError:
-                    pass
+                    LOGGER.debug("os.fsync failed", exc_info=True)
             os.replace(tmp, dest)
             return True
         except Exception:
@@ -224,7 +228,7 @@ class NextcloudClient:
                 try:
                     tmp.unlink()
                 except OSError:
-                    pass
+                    LOGGER.debug("tmp.unlink failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # WebDAV PROPFIND
