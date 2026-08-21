@@ -270,6 +270,8 @@ class GalleryWindow(Adw.ApplicationWindow):
         self._date_last_key: tuple[int, int] | None = None  # (year, month) of last date header
         self._lazy_loading_attached: bool = False
         self._lazy_loading_in_flight: bool = False
+        # Guards the retry loop in _maybe_fill_viewport.
+        self._fill_viewport_retries: int = 0
         # Sliding window: keep at most _MAX_LOADED_ITEMS items in memory
         # at once. When forward-loading pushes the total over the cap,
         # drop the oldest items from the front (aligned to a header
@@ -1423,6 +1425,11 @@ class GalleryWindow(Adw.ApplicationWindow):
         self.gallery_grid.get_vadjustment().connect("notify::value", self._on_scroll)
         self._lazy_loading_attached = True
 
+    # Attempts to wait for the scroller to be measured before deciding whether
+    # the viewport needs filling. 20 × 50 ms ≈ 1 s, after which the scroll
+    # handler takes over on the user's first scroll.
+    _FILL_VIEWPORT_MAX_RETRIES = 20
+
     def _maybe_fill_viewport(self) -> bool:
         """If the freshly rendered first page didn't fill the visible area, keep
         loading more pages so the user actually has something to scroll."""
@@ -1431,7 +1438,20 @@ class GalleryWindow(Adw.ApplicationWindow):
         if not self._has_more_items or self._lazy_loading_in_flight:
             return GLib.SOURCE_REMOVE
         vadj = self.gallery_grid.get_vadjustment()
-        if vadj.get_upper() <= vadj.get_page_size() + 1:
+        page = vadj.get_page_size()
+        if page <= 0:
+            # The scroller has not been allocated yet — at startup, or while
+            # the window is unmapped. "No size" is not "nothing fits": reading
+            # it as an empty viewport made this reload one page after another
+            # until the whole library had been through the grid (measured: 99
+            # rounds for a 20k library, all before the first frame). Wait for
+            # a real measurement instead.
+            self._fill_viewport_retries += 1
+            if self._fill_viewport_retries <= self._FILL_VIEWPORT_MAX_RETRIES:
+                GLib.timeout_add(50, self._maybe_fill_viewport)
+            return GLib.SOURCE_REMOVE
+        self._fill_viewport_retries = 0
+        if vadj.get_upper() <= page + 1:
             self._load_more_items()
         return GLib.SOURCE_REMOVE
 

@@ -84,3 +84,28 @@ def gallery_window(gtk_app):
     yield win
     win._closing = True
     win.destroy()
+
+
+@pytest.fixture
+def pump():
+    """Run pending GLib main-loop work to completion.
+
+    Several code paths finish on the main loop — a worker thread hands its
+    result back through ``GLib.idle_add``, or a handler defers the expensive
+    half with ``GLib.timeout_add``. Without a running loop those callbacks
+    never fire, so the test would only ever see the first half of the
+    operation. This drains whatever is pending, with a bound so a callback
+    that keeps rescheduling itself fails the test instead of hanging it.
+    """
+    from gi.repository import GLib
+
+    def _pump(max_iterations: int = 200) -> int:
+        context = GLib.MainContext.default()
+        ran = 0
+        while context.pending() and ran < max_iterations:
+            context.iteration(False)
+            ran += 1
+        assert ran < max_iterations, "main loop still busy — a callback keeps rescheduling"
+        return ran
+
+    return _pump

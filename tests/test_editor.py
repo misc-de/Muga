@@ -389,3 +389,216 @@ def test_editor_cleanup_is_idempotent(editor, tmp_path) -> None:
     ed = editor()
     ed.cleanup()
     ed.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# The edit pipeline
+# ---------------------------------------------------------------------------
+
+def _edit_win(**extra):
+    """A ``self`` carrying only what _apply_edits reads."""
+    defaults = dict(
+        _filter_mode=None, _brightness=1.0, _contrast=1.0,
+        _red=1.0, _green=1.0, _blue=1.0,
+        _stickers=[], _obfuscate_strokes=[], _frame_theme=None,
+    )
+    defaults.update(extra)
+    return SimpleNamespace(**defaults)
+
+
+def _grey(size=(60, 40), level=128):
+    return PILImage.new("RGB", size, (level, level, level))
+
+
+def test_edits_return_an_unchanged_image_by_default() -> None:
+    src = _grey()
+    out = view.EditorView._apply_edits(_edit_win(), src)
+    assert out.size == src.size
+    assert out.getpixel((30, 20)) == (128, 128, 128)
+
+
+def test_edits_convert_a_non_rgb_source() -> None:
+    """Screenshots are frequently RGBA or palette images."""
+    out = view.EditorView._apply_edits(_edit_win(), PILImage.new("RGBA", (20, 20), (1, 2, 3, 255)))
+    assert out.mode == "RGB"
+
+
+def test_brightness_lightens_and_darkens() -> None:
+    brighter = view.EditorView._apply_edits(_edit_win(_brightness=1.6), _grey())
+    darker = view.EditorView._apply_edits(_edit_win(_brightness=0.4), _grey())
+    assert brighter.getpixel((30, 20))[0] > 128
+    assert darker.getpixel((30, 20))[0] < 128
+
+
+def test_contrast_spreads_the_tonal_range() -> None:
+    """Pillow's Contrast works against the image's own mean, so it needs an
+    image that actually has light and dark areas — on a flat fill it is a
+    no-op by definition."""
+    src = PILImage.new("RGB", (20, 20), (100, 100, 100))
+    for x in range(10):
+        for y in range(20):
+            src.putpixel((x, y), (160, 160, 160))
+
+    out = view.EditorView._apply_edits(_edit_win(_contrast=2.0), src)
+
+    dark, light = out.getpixel((15, 10))[0], out.getpixel((5, 10))[0]
+    assert light - dark > 160 - 100, "the range was not widened"
+
+
+def test_contrast_below_one_flattens_the_range() -> None:
+    src = PILImage.new("RGB", (20, 20), (60, 60, 60))
+    for x in range(10):
+        for y in range(20):
+            src.putpixel((x, y), (200, 200, 200))
+    out = view.EditorView._apply_edits(_edit_win(_contrast=0.3), src)
+    assert out.getpixel((5, 10))[0] - out.getpixel((15, 10))[0] < 140
+
+
+def test_channel_gains_are_applied_per_channel() -> None:
+    out = view.EditorView._apply_edits(_edit_win(_red=1.5, _blue=0.5), _grey())
+    r, g, b = out.getpixel((30, 20))
+    assert r > g > b
+
+
+def test_channel_gains_are_clamped_at_255() -> None:
+    """Without the min() a bright pixel wraps around to dark."""
+    src = PILImage.new("RGB", (10, 10), (250, 250, 250))
+    r, _g, _b = view.EditorView._apply_edits(_edit_win(_red=3.0), src).getpixel((5, 5))
+    assert r == 255
+
+
+def test_neutral_channel_gains_leave_the_pixels_exact() -> None:
+    """All three at 1.0 skips the split/point/merge round-trip; going through
+    it anyway would round every channel through int() for nothing."""
+    src = PILImage.new("RGB", (20, 20), (33, 77, 199))
+    out = view.EditorView._apply_edits(_edit_win(), src)
+    assert list(out.getdata()) == list(src.getdata())
+
+
+def test_filters_can_be_skipped() -> None:
+    """The preview caches the filtered base separately, so it asks for the
+    rest of the pipeline without re-running the slow stage."""
+    from yaga.editor import _FILTER_DEFS
+
+    mode = next((k for k, _l, f in _FILTER_DEFS if f), None)
+    if mode is None:
+        pytest.skip("no filter with a callable defined")
+
+    src = _grey()
+    filtered = view.EditorView._apply_edits(_edit_win(_filter_mode=mode), src)
+    unfiltered = view.EditorView._apply_edits(
+        _edit_win(_filter_mode=mode), src, apply_filter=False)
+    assert unfiltered.getpixel((30, 20)) == (128, 128, 128)
+    assert filtered.size == unfiltered.size
+
+
+def test_an_unknown_filter_is_a_no_op() -> None:
+    out = view.EditorView._apply_edits(_edit_win(_filter_mode="not-a-filter"), _grey())
+    assert out.getpixel((30, 20)) == (128, 128, 128)
+
+
+def test_filter_only_stage_matches_the_full_pipeline() -> None:
+    """The preview splits the pipeline in two for caching; the halves have to
+    agree with the whole or the preview lies about the result."""
+    from yaga.editor import _FILTER_DEFS
+
+    mode = next((k for k, _l, f in _FILTER_DEFS if f), None)
+    if mode is None:
+        pytest.skip("no filter with a callable defined")
+
+    src = PILImage.new("RGB", (30, 20), (90, 140, 200))
+    win = _edit_win(_filter_mode=mode)
+    whole = view.EditorView._apply_edits(win, src)
+    halves = view.EditorView._apply_edits(
+        win, view.EditorView._apply_filter_only(win, src), apply_filter=False)
+    assert list(whole.getdata()) == list(halves.getdata())
+
+
+def test_obfuscate_blurs_only_where_it_was_drawn() -> None:
+    """It is a redaction tool — the rest of the photo has to come through
+    untouched."""
+    src = PILImage.new("RGB", (100, 100), (0, 0, 0))
+    for x in range(40, 60):
+        for y in range(40, 60):
+            src.putpixel((x, y), (255, 255, 255))
+
+    out = view.EditorView._apply_edits(
+        _edit_win(_obfuscate_strokes=[(0.5, 0.5, 0.15, (1, 1, 1, 1))]), src)
+
+    assert out.getpixel((50, 50)) != (255, 255, 255), "the covered area was not blurred"
+    assert out.getpixel((5, 5)) == (0, 0, 0), "an untouched corner changed"
+
+
+def test_multiple_obfuscate_strokes_all_apply() -> None:
+    src = PILImage.new("RGB", (100, 100), (255, 255, 255))
+    src.putpixel((10, 10), (0, 0, 0))
+    src.putpixel((90, 90), (0, 0, 0))
+    out = view.EditorView._apply_edits(
+        _edit_win(_obfuscate_strokes=[(0.1, 0.1, 0.1, None), (0.9, 0.9, 0.1, None)]), src)
+    assert out.getpixel((10, 10)) != (0, 0, 0)
+    assert out.getpixel((90, 90)) != (0, 0, 0)
+
+
+def _a_frame_theme() -> str:
+    from yaga.editor.frames import _FRAME_THEMES
+
+    return _FRAME_THEMES[0][0]
+
+
+def test_a_frame_is_composited_over_the_photo() -> None:
+    theme = _a_frame_theme()
+    src = _grey((200, 150))
+    out = view.EditorView._apply_edits(_edit_win(_frame_theme=theme), src)
+    assert out.size == src.size
+    assert out.mode == "RGB"
+
+
+def test_an_emoji_sticker_is_pasted() -> None:
+    src = _grey((200, 150))
+    win = _edit_win(_stickers=[{"source": "🙂", "size": 0.3, "rel": (0.5, 0.5)}])
+    out = view.EditorView._apply_edits(win, src)
+    assert out.size == src.size
+    assert list(out.getdata()) != list(src.getdata()), "nothing was pasted"
+
+
+def test_an_image_sticker_keeps_its_aspect() -> None:
+    src = _grey((200, 200))
+    sticker = PILImage.new("RGBA", (40, 20), (255, 0, 0, 255))
+    win = _edit_win(_stickers=[{"source": sticker, "size": 0.5, "rel": (0.5, 0.5)}])
+    out = view.EditorView._apply_edits(win, src)
+    assert out.size == (200, 200)
+
+
+def test_stickers_stack_in_order() -> None:
+    src = _grey((200, 200))
+    red = PILImage.new("RGBA", (40, 40), (255, 0, 0, 255))
+    blue = PILImage.new("RGBA", (40, 40), (0, 0, 255, 255))
+    win = _edit_win(_stickers=[
+        {"source": red, "size": 0.5, "rel": (0.5, 0.5)},
+        {"source": blue, "size": 0.5, "rel": (0.5, 0.5)},
+    ])
+    r, g, b = view.EditorView._apply_edits(win, src).getpixel((100, 100))
+    assert b > r, "the later sticker did not land on top"
+
+
+def test_every_stage_composes() -> None:
+    """Filters, sliders, a sticker, a redaction and a frame at once — the
+    order matters and nothing may raise."""
+    win = _edit_win(
+        _brightness=1.2, _contrast=1.1, _red=1.1, _blue=0.9,
+        _stickers=[{"source": "🙂", "size": 0.2, "rel": (0.3, 0.3)}],
+        _obfuscate_strokes=[(0.7, 0.7, 0.1, None)],
+        _frame_theme=_a_frame_theme(),
+    )
+    out = view.EditorView._apply_edits(win, _grey((240, 180)))
+    assert out.size == (240, 180)
+    assert out.mode == "RGB"
+
+
+def test_edits_do_not_mutate_the_source() -> None:
+    """History snapshots share the working image by reference, so an in-place
+    edit would silently rewrite every undo step."""
+    src = _grey()
+    before = list(src.getdata())
+    view.EditorView._apply_edits(_edit_win(_brightness=1.5, _contrast=1.4), src)
+    assert list(src.getdata()) == before

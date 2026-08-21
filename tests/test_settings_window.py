@@ -12,6 +12,7 @@ where text from a scanned code becomes an account password.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -327,3 +328,367 @@ def test_qr_success_treats_plain_text_as_a_password(settings_dialog) -> None:
     dialog._closing = False
     dialog._nc_qr_success(MagicMock(), "raw-app-password")
     assert dialog._nc_pass_row.get_text() == "raw-app-password"
+
+
+# ---------------------------------------------------------------------------
+# Update flow, main-loop half
+# ---------------------------------------------------------------------------
+
+@requires_display
+def test_update_check_offers_the_new_version(settings_dialog) -> None:
+    from yaga import updater
+
+    dialog = settings_dialog()
+    dialog._on_check_update_done(updater.UpdateInfo(True, "0.9.9"), "2026-03-14T09:30:00")
+    assert "0.9.9" in dialog._update_btn.get_label()   # the version is not localised
+    assert dialog._update_btn.get_sensitive() is True
+
+
+@requires_display
+def test_update_check_reports_being_current(settings_dialog) -> None:
+    from yaga import updater
+
+    dialog = settings_dialog()
+    with patch.object(sw.GLib, "timeout_add_seconds", return_value=7):
+        dialog._on_check_update_done(updater.UpdateInfo(False, None), "2026-03-14T09:30:00")
+    # Compared through the dialog's own translator — the label is localised.
+    assert dialog._update_btn.get_label() == dialog._("Up to date")
+    assert dialog._update_btn.get_sensitive() is False
+
+
+@requires_display
+def test_update_check_rearms_the_button_afterwards(settings_dialog) -> None:
+    """Left disabled, "Up to date" would be the last thing the button ever
+    says for the rest of the session."""
+    from yaga import updater
+
+    dialog = settings_dialog()
+    with patch.object(sw.GLib, "timeout_add_seconds", return_value=7) as timeout:
+        dialog._on_check_update_done(updater.UpdateInfo(False, None), "")
+    timeout.assert_called_once()
+    assert dialog._no_update_reset_src == 7
+
+
+@requires_display
+def test_update_check_persists_the_timestamp(settings_dialog, gallery_window) -> None:
+    from yaga import updater
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    with patch.object(Settings, "save"):
+        dialog._on_check_update_done(updater.UpdateInfo(False, None), "2026-03-14T09:30:00")
+    assert gallery_window.settings.last_update_check == "2026-03-14T09:30:00"
+    assert "14.03.2026" in dialog._update_row.get_subtitle()
+
+
+@requires_display
+def test_update_check_skips_a_closed_dialog(settings_dialog) -> None:
+    """The check runs on a worker; the user can close Settings meanwhile."""
+    from yaga import updater
+
+    dialog = settings_dialog()
+    dialog._closing = True
+    before = dialog._update_btn.get_label()
+    dialog._on_check_update_done(updater.UpdateInfo(True, "9.9.9"), "")
+    assert dialog._update_btn.get_label() == before
+
+
+@requires_display
+def test_applied_update_asks_for_a_restart(settings_dialog) -> None:
+    dialog = settings_dialog()
+    with patch.object(type(dialog), "_show_restart_dialog") as restart:
+        dialog._on_apply_update_done(True)
+    assert dialog._update_btn.get_label() == dialog._("Restart required")
+    restart.assert_called_once()
+
+
+@requires_display
+def test_failed_update_says_so_and_stops(settings_dialog) -> None:
+    """Leaving it enabled invites a retry into the same failure."""
+    dialog = settings_dialog()
+    dialog._on_apply_update_done(False)
+    assert dialog._update_btn.get_label() == dialog._("Update failed")
+    assert dialog._update_btn.get_sensitive() is False
+
+
+@requires_display
+def test_applied_update_skips_a_closed_dialog(settings_dialog) -> None:
+    dialog = settings_dialog()
+    dialog._closing = True
+    with patch.object(type(dialog), "_show_restart_dialog") as restart:
+        dialog._on_apply_update_done(True)
+    restart.assert_not_called()
+
+
+@requires_display
+def test_update_check_end_to_end(settings_dialog, pump) -> None:
+    """Button press to result, through the worker thread and back."""
+    from yaga import updater
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    with patch.object(updater, "check_for_update",
+                      return_value=updater.UpdateInfo(True, "1.0.0")), \
+         patch.object(Settings, "save"):
+        expected = dialog._("Update to v%s") % "1.0.0"
+        dialog._on_check_update(None)
+        for _ in range(50):
+            pump()
+            if dialog._update_btn.get_label() == expected:
+                break
+            time.sleep(0.01)
+    assert dialog._update_btn.get_label() == expected
+
+
+# ---------------------------------------------------------------------------
+# Nextcloud connect / disconnect
+# ---------------------------------------------------------------------------
+
+@requires_display
+def test_nc_connect_success_enables_the_account(settings_dialog, gallery_window) -> None:
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    with patch.object(Settings, "save"), \
+         patch.object(type(gallery_window), "apply_settings"):
+        dialog._nc_connect_done(True, "")
+    assert dialog.settings.nextcloud_enabled is True
+    assert dialog.settings.nextcloud_session_active is True
+    assert gallery_window._nc_session_active is True
+
+
+@requires_display
+def test_nc_connect_failure_reports_the_reason(settings_dialog) -> None:
+    dialog = settings_dialog()
+    dialog._nc_connect_done(False, "HTTP 401")
+    assert dialog._nc_runtime_connected is False
+    assert dialog._nc_connect_btn.get_sensitive() is True
+
+
+@requires_display
+def test_nc_connect_failure_does_not_enable_the_account(settings_dialog) -> None:
+    """Credentials are written before the test runs; a failed test must not
+    leave the account switched on with them."""
+    dialog = settings_dialog()
+    dialog.settings.nextcloud_enabled = False
+    dialog._nc_connect_done(False, "refused")
+    assert dialog.settings.nextcloud_enabled is False
+
+
+@requires_display
+def test_nc_connect_skips_a_closed_dialog(settings_dialog) -> None:
+    dialog = settings_dialog()
+    dialog._closing = True
+    dialog._nc_connect_done(True, "")
+    assert dialog.settings.nextcloud_enabled is not True
+
+
+@requires_display
+def test_nc_disconnect_closes_the_shared_client(settings_dialog, gallery_window) -> None:
+    """Otherwise a scripted call could still reach the server with the
+    credentials the user just disconnected from."""
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    client = MagicMock()
+    gallery_window._nc_thumb_shared_client = client
+
+    with patch.object(Settings, "save"):
+        dialog._nc_disconnect(None)
+
+    client.close.assert_called_once()
+    assert gallery_window._nc_thumb_shared_client is None
+    assert gallery_window._nc_session_active is False
+
+
+@requires_display
+def test_nc_disconnect_is_persisted(settings_dialog, gallery_window) -> None:
+    """The next launch has to come up disconnected too."""
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    with patch.object(Settings, "save") as save:
+        dialog._nc_disconnect(None)
+    assert gallery_window.settings.nextcloud_session_active is False
+    save.assert_called()
+
+
+@requires_display
+def test_nc_disconnect_leaves_the_account_configured(settings_dialog) -> None:
+    """It is a soft action — cached thumbnails and the tab stay."""
+    dialog = settings_dialog()
+    dialog.settings.nextcloud_enabled = True
+    from yaga.config import Settings
+
+    with patch.object(Settings, "save"):
+        dialog._nc_disconnect(None)
+    assert dialog.settings.nextcloud_enabled is True, "the account was switched off"
+
+
+@requires_display
+def test_nc_disconnect_survives_a_dead_client(settings_dialog, gallery_window) -> None:
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    client = MagicMock()
+    client.close.side_effect = OSError("socket already gone")
+    gallery_window._nc_thumb_shared_client = client
+    with patch.object(Settings, "save"):
+        dialog._nc_disconnect(None)
+    assert gallery_window._nc_session_active is False
+
+
+@requires_display
+def test_nc_connect_clears_the_index_on_an_account_change(settings_dialog, gallery_window) -> None:
+    """Rows from the old account would otherwise linger in the gallery."""
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    dialog.settings.nextcloud_url = "https://old.example.org"
+    dialog.settings.nextcloud_user = "alice"
+
+    with patch.object(Settings, "save"), patch.object(Settings, "save_app_password"), \
+         patch.object(type(gallery_window.database), "clear_category") as clear, \
+         patch.object(sw.threading, "Thread"):
+        dialog._nc_proceed_connect("https://new.example.org", "bob", "pw")
+
+    clear.assert_called_once_with("nextcloud")
+
+
+@requires_display
+def test_nc_connect_keeps_the_index_for_the_same_account(settings_dialog, gallery_window) -> None:
+    """Re-entering the same password must not throw the whole index away."""
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    dialog.settings.nextcloud_url = "https://cloud.example.org"
+    dialog.settings.nextcloud_user = "alice"
+
+    with patch.object(Settings, "save"), patch.object(Settings, "save_app_password"), \
+         patch.object(type(gallery_window.database), "clear_category") as clear, \
+         patch.object(sw.threading, "Thread"):
+        dialog._nc_proceed_connect("https://cloud.example.org", "alice", "pw")
+
+    clear.assert_not_called()
+
+
+@requires_display
+def test_nc_connect_stores_credentials_before_testing(settings_dialog) -> None:
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    with patch.object(Settings, "save"), \
+         patch.object(Settings, "save_app_password") as store, \
+         patch.object(sw.threading, "Thread"):
+        dialog._nc_proceed_connect("https://cloud.example.org", "alice", "s3cret")
+    store.assert_called_once_with("s3cret")
+    assert dialog.settings.nextcloud_enabled is False, (
+        "the account must stay off until the connection test passes"
+    )
+
+
+@requires_display
+def test_nc_connect_defaults_the_photos_path(settings_dialog) -> None:
+    from yaga.config import Settings
+
+    dialog = settings_dialog()
+    dialog.settings.nextcloud_photos_path = "   "
+    with patch.object(Settings, "save"), patch.object(Settings, "save_app_password"), \
+         patch.object(sw.threading, "Thread"):
+        dialog._nc_proceed_connect("https://cloud.example.org", "alice", "pw")
+    assert dialog.settings.nextcloud_photos_path == "Photos"
+
+
+# ---------------------------------------------------------------------------
+# Extra media locations
+# ---------------------------------------------------------------------------
+
+@requires_display
+def test_removing_a_location_renumbers_the_order(settings_dialog) -> None:
+    """media_folder_order keys carry the list index, so a removal in the
+    middle has to shift every later key down or the nav points at the wrong
+    folders."""
+    dialog = settings_dialog()
+    dialog.settings.extra_locations = ["/a", "/b", "/c"]
+    dialog.settings.extra_location_names = ["A", "B", "C"]
+    dialog.settings.extra_location_no_inherit = [False, True, False]
+    dialog.settings.extra_location_media_filter = ["both", "images", "videos"]
+    dialog.settings.media_folder_order = [
+        "photos", "location:0", "location:1", "location:2", "videos",
+    ]
+
+    dialog._remove_extra_at(1)
+
+    assert dialog.settings.extra_locations == ["/a", "/c"]
+    assert dialog.settings.extra_location_names == ["A", "C"]
+    assert dialog.settings.extra_location_no_inherit == [False, False]
+    assert dialog.settings.extra_location_media_filter == ["both", "videos"]
+    assert dialog.settings.media_folder_order == [
+        "photos", "location:0", "location:1", "videos",
+    ]
+
+
+@requires_display
+def test_removing_the_last_location(settings_dialog) -> None:
+    dialog = settings_dialog()
+    dialog.settings.extra_locations = ["/a", "/b"]
+    dialog.settings.extra_location_names = ["A", "B"]
+    dialog.settings.extra_location_no_inherit = [False, False]
+    dialog.settings.extra_location_media_filter = ["both", "both"]
+    dialog.settings.media_folder_order = ["location:0", "location:1"]
+
+    dialog._remove_extra_at(1)
+
+    assert dialog.settings.extra_locations == ["/a"]
+    assert dialog.settings.media_folder_order == ["location:0"]
+
+
+@requires_display
+@pytest.mark.parametrize("idx", [-1, 5, 99])
+def test_removing_an_out_of_range_location_is_a_noop(settings_dialog, idx) -> None:
+    dialog = settings_dialog()
+    dialog.settings.extra_locations = ["/a"]
+    before = list(dialog.settings.extra_locations)
+    dialog._remove_extra_at(idx)
+    assert dialog.settings.extra_locations == before
+
+
+@requires_display
+def test_removing_a_location_tolerates_short_parallel_lists(settings_dialog) -> None:
+    """Older settings.json files have paths but no names/filters."""
+    dialog = settings_dialog()
+    dialog.settings.extra_locations = ["/a", "/b"]
+    dialog.settings.extra_location_names = []
+    dialog.settings.extra_location_no_inherit = []
+    dialog.settings.extra_location_media_filter = []
+    dialog.settings.media_folder_order = ["location:0", "location:1"]
+    dialog._remove_extra_at(0)
+    assert dialog.settings.extra_locations == ["/b"]
+
+
+@requires_display
+def test_removing_a_location_keeps_unrelated_order_keys(settings_dialog) -> None:
+    dialog = settings_dialog()
+    dialog.settings.extra_locations = ["/a", "/b"]
+    dialog.settings.extra_location_names = ["A", "B"]
+    dialog.settings.extra_location_no_inherit = [False, False]
+    dialog.settings.extra_location_media_filter = ["both", "both"]
+    dialog.settings.media_folder_order = [
+        "pictures", "location:0", "photos", "location:1", "screenshots",
+    ]
+    dialog._remove_extra_at(0)
+    assert dialog.settings.media_folder_order == [
+        "pictures", "photos", "location:0", "screenshots",
+    ]
+
+
+@requires_display
+def test_removing_a_location_survives_a_malformed_order_key(settings_dialog) -> None:
+    dialog = settings_dialog()
+    dialog.settings.extra_locations = ["/a", "/b"]
+    dialog.settings.extra_location_names = ["A", "B"]
+    dialog.settings.extra_location_no_inherit = [False, False]
+    dialog.settings.extra_location_media_filter = ["both", "both"]
+    dialog.settings.media_folder_order = ["location:zero", "location:0", "location:1"]
+    dialog._remove_extra_at(0)
+    assert "location:zero" in dialog.settings.media_folder_order
