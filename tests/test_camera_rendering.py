@@ -19,6 +19,7 @@ Checked two ways, neither of which uses a checked-in reference image:
 
 from __future__ import annotations
 
+import time
 import pytest
 
 from tests.conftest import requires_display
@@ -282,11 +283,14 @@ def _allocated(gtk, widget, width=80, height=40):
     window.set_child(widget)
     window.set_default_size(width, height)
     window.present()
+    # Wait for the allocation rather than pumping a fixed number of times:
+    # how many iterations it takes depends on what else the compositor is
+    # doing, and a fixed count made this flaky as the suite grew.
     context = GLib.MainContext.default()
-    for _ in range(100):
-        if not context.pending():
-            break
-        context.iteration(False)
+    deadline = time.monotonic() + 2.0
+    while widget.get_width() <= 0 and time.monotonic() < deadline:
+        if not context.iteration(False):
+            time.sleep(0.005)
     return window
 
 
@@ -502,10 +506,10 @@ def _allocated_picture(gtk, *, mirrored=False, zoom=1.0, size=60):
     window.set_default_size(size, size)
     window.present()
     context = GLib.MainContext.default()
-    for _ in range(100):
-        if not context.pending():
-            break
-        context.iteration(False)
+    deadline = time.monotonic() + 2.0
+    while picture.get_width() <= 0 and time.monotonic() < deadline:
+        if not context.iteration(False):
+            time.sleep(0.005)
     return picture, window
 
 
@@ -687,20 +691,23 @@ def test_every_rotatable_pushes_the_same_transform(gtk, name, factory) -> None:
         window.destroy()
 
 
-def test_the_pivot_is_the_widget_centre(gtk) -> None:
-    """Explicitly, against two different allocations."""
-    for size in (40, 100):
-        icon = widgets.RotatableIcon()
-        icon.set_from_icon_name("camera-photo-symbolic")
-        icon.set_rotation_deg(90)
-        window = _allocated(gtk, icon, width=size, height=size)
-        try:
-            if icon.get_width() <= 0:
-                pytest.skip("widget was never allocated in this environment")
-            half = size / 2
-            assert _recorded_calls(gtk, icon)[1] == f"translate({half:g},{half:g})"
-        finally:
-            window.destroy()
+@pytest.mark.parametrize("size", [40, 100])
+def test_the_pivot_is_the_widget_centre(gtk, size) -> None:
+    """Read against the allocation the widget actually got, not the one the
+    window was asked for — the two can differ, and it is the widget's own
+    centre the transform has to pivot about."""
+    icon = widgets.RotatableIcon()
+    icon.set_from_icon_name("camera-photo-symbolic")
+    icon.set_rotation_deg(90)
+    window = _allocated(gtk, icon, width=size, height=size)
+    try:
+        width, height = icon.get_width(), icon.get_height()
+        if width <= 0 or height <= 0:
+            pytest.skip("widget was never allocated in this environment")
+        expected = f"translate({width / 2:g},{height / 2:g})"
+        assert _recorded_calls(gtk, icon)[1] == expected
+    finally:
+        window.destroy()
 
 
 def test_the_preview_pushes_mirror_and_zoom_in_order(gtk) -> None:
