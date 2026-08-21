@@ -19,10 +19,14 @@ Checked two ways, neither of which uses a checked-in reference image:
 
 from __future__ import annotations
 
+import io
 import time
+
 import pytest
 
 from tests.conftest import requires_display
+
+PILImage = pytest.importorskip("PIL.Image")
 
 widgets = pytest.importorskip("yaga.camera_widgets")
 
@@ -92,21 +96,21 @@ def _render(gtk, node, width, height):
     try:
         texture = renderer.render_texture(
             node, Graphene.Rect().init(0, 0, width, height))
-        downloader = Gdk.TextureDownloader.new(texture)
-        # Pin the byte order. Without this the downloader hands back the
-        # texture's preferred format, which is not the same on every GTK
-        # version — and the unpacking below would then read red out of the
-        # blue channel and conclude that nothing was painted.
-        downloader.set_format(Gdk.MemoryFormat.B8G8R8A8)
-        data, stride = downloader.download_bytes()
-        buf = data.get_data()
+        # Via PNG rather than TextureDownloader.download_bytes(). The
+        # downloader hands back the texture's preferred memory format, and
+        # which one that is differs between GTK versions — unpacking the
+        # bytes as a fixed BGRA read red out of the blue channel on the CI
+        # runner and concluded nothing had been painted. PNG is lossless and
+        # says what its channel order is, so there is nothing left to assume.
+        png = texture.save_to_png_bytes().get_data()
     finally:
         renderer.unrealize()
 
+    image = PILImage.open(io.BytesIO(png)).convert("RGBA")
+    rgba = image.load()
+
     def pixel(x, y):
-        off = y * stride + x * 4
-        b, g, r, a = buf[off:off + 4]
-        return (r, g, b, a)
+        return tuple(rgba[x, y])
 
     return pixel
 
