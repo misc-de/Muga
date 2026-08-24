@@ -99,6 +99,8 @@ modules:
         ${FLATPAK_DEST}/share/metainfo/de.cais.Muga.metainfo.xml
       - install -Dm644 muga/data/icons/hicolor/128x128/apps/de.cais.Muga.png
         ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/de.cais.Muga.png
+      - install -Dm644 muga/data/icons/hicolor/256x256/apps/de.cais.Muga.png
+        ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/de.cais.Muga.png
     sources:
       - type: git
         url: https://github.com/misc-de/Muga.git

@@ -41,6 +41,7 @@ include = ["muga*"]
 [tool.setuptools.package-data]
 muga = [
     "data/icons/hicolor/128x128/apps/*.png",
+    "data/icons/hicolor/256x256/apps/*.png",
     "data/icons/hicolor/scalable/apps/*.svg",
     "data/icons/hicolor/symbolic/apps/*.svg",
     "data/icons/*.png",
@@ -55,6 +56,9 @@ muga = [
 "share/metainfo" = ["data/de.cais.Muga.metainfo.xml"]
 "share/icons/hicolor/128x128/apps" = [
     "muga/data/icons/hicolor/128x128/apps/de.cais.Muga.png",
+]
+"share/icons/hicolor/256x256/apps" = [
+    "muga/data/icons/hicolor/256x256/apps/de.cais.Muga.png",
 ]
 
 [tool.pytest.ini_options]

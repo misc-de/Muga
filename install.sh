@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Installs:
 #   • a launcher script  → ~/.local/bin/muga
-#   • the app icon       → ~/.local/share/icons/hicolor/128x128/apps/
+#   • the app icon       → ~/.local/share/icons/hicolor/{128x128,256x256}/apps/
 #   • the desktop entry  → ~/.local/share/applications/
 #   • AppStream metadata → ~/.local/share/metainfo/
 #
@@ -43,10 +43,14 @@ chmod +x "${LOCAL}/bin/muga"
 echo "  ✓ launcher  ${LOCAL}/bin/muga"
 
 # ── App icon ─────────────────────────────────────────────────────────────────
-install -Dm644 \
-    "${SCRIPT_DIR}/muga/data/icons/hicolor/128x128/apps/de.cais.Muga.png" \
-    "${LOCAL}/share/icons/hicolor/128x128/apps/de.cais.Muga.png"
-echo "  ✓ icon      ${LOCAL}/share/icons/hicolor/128x128/apps/de.cais.Muga.png"
+# Both sizes: 128 is what most panels ask for, 256 is what a HiDPI screen and
+# a software centre pick up.
+for size in 128x128 256x256; do
+    install -Dm644 \
+        "${SCRIPT_DIR}/muga/data/icons/hicolor/${size}/apps/de.cais.Muga.png" \
+        "${LOCAL}/share/icons/hicolor/${size}/apps/de.cais.Muga.png"
+    echo "  ✓ icon      ${LOCAL}/share/icons/hicolor/${size}/apps/de.cais.Muga.png"
+done
 
 # ── Desktop entry ─────────────────────────────────────────────────────────────
 # Write a patched copy that uses the installed launcher path
