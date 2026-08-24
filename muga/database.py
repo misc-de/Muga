@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from .config import DB_PATH
+from .config import CACHE_DIR, DB_PATH, LEGACY_CACHE_DIR
 from .models import MediaItem
 
 LOGGER = logging.getLogger(__name__)
@@ -379,6 +379,49 @@ class Database:
             # records that the migration step was reached.
             self.wconn.execute("PRAGMA user_version = 6")
             self.wconn.commit()
+        if version < 7:
+            self._repoint_legacy_thumb_paths()
+            self.wconn.execute("PRAGMA user_version = 7")
+            self.wconn.commit()
+
+    def _repoint_legacy_thumb_paths(self) -> None:
+        """Point thumb_path at the renamed cache directory.
+
+        migrate_legacy_dirs() renames ~/.cache/yaga to ~/.cache/muga, and every
+        cached thumbnail travels with it. thumb_path, however, stores an
+        *absolute* path, and those rows kept naming a directory that no longer
+        exists — so the grid asks for a file that is not there and draws the
+        placeholder instead, while the real thumbnail sits next door under the
+        new name.
+
+        Local items recover on their own: the scanner recomputes the path, finds
+        no file, re-decodes and writes the row back. Nextcloud items never do —
+        the folder sync skips anything that already carries a thumb_path, so a
+        whole remote library stays on placeholder tiles for good. Rewriting the
+        prefix restores them at once, instead of re-fetching thousands of
+        previews over the network.
+
+        Prefix-matched with substr rather than LIKE on purpose: a home directory
+        containing "_" would make LIKE match paths of the same length that are
+        not under the old directory at all, and the rewrite would then corrupt
+        them.
+        """
+        old_prefix = f"{LEGACY_CACHE_DIR}/"
+        new_prefix = f"{CACHE_DIR}/"
+        try:
+            cur = self.wconn.execute(
+                "UPDATE media SET thumb_path = ? || substr(thumb_path, ?) "
+                "WHERE substr(thumb_path, 1, ?) = ?",
+                (new_prefix, len(old_prefix) + 1, len(old_prefix), old_prefix),
+            )
+        except sqlite3.OperationalError:
+            LOGGER.debug("legacy thumb_path migration failed", exc_info=True)
+            return
+        if cur.rowcount:
+            LOGGER.info(
+                "Repointed %s thumbnail path(s) from %s to %s",
+                cur.rowcount, LEGACY_CACHE_DIR, CACHE_DIR,
+            )
 
     def load_scan_index(self, category: str) -> dict[str, tuple[float, int]]:
         """Return ``{path: (mtime, size)}`` for every row in *category*.

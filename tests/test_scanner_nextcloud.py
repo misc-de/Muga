@@ -330,11 +330,15 @@ def test_an_empty_remote_folder(scanner) -> None:
 # On-demand folder thumbnails
 # ---------------------------------------------------------------------------
 
-def test_folder_thumbs_fetch_only_what_is_missing(scanner) -> None:
+def test_folder_thumbs_fetch_only_what_is_missing(scanner, tmp_path) -> None:
     sc, db = scanner
     files = [_file("a.jpg", folder="Photos/2026"), _file("b.jpg", folder="Photos/2026")]
     sc.scan_nc_structure(FakeClient(files), "Photos")
-    db.set_thumb(nc_path(files[0]["dav_path"]), "/cache/a.jpg", "nextcloud")
+    # A real file, not just a recorded path: "already has a thumbnail" now means
+    # the thumbnail is actually there. See the test below for why.
+    have = tmp_path / "a.jpg"
+    have.write_bytes(b"\xff\xd8thumb")
+    db.set_thumb(nc_path(files[0]["dav_path"]), str(have), "nextcloud")
     db.commit()
 
     client = FakeClient(files, thumbs={files[1]["dav_path"]: "/cache/b.jpg"})
@@ -343,6 +347,25 @@ def test_folder_thumbs_fetch_only_what_is_missing(scanner) -> None:
 
     assert client.thumbed == [files[1]["dav_path"]], "re-fetched a thumbnail it had"
     assert len(seen) == 1
+
+
+def test_folder_thumbs_refetch_when_the_recorded_file_is_gone(scanner) -> None:
+    """A thumb_path whose file has vanished — a cache wipe, an eviction, the
+    cache directory renamed under the app's feet — used to be read as "this one
+    is done" and skipped for ever, leaving the tile on its placeholder with
+    nothing in the app able to recover it."""
+    sc, db = scanner
+    files = [_file("a.jpg", folder="Photos/2026")]
+    sc.scan_nc_structure(FakeClient(files), "Photos")
+    db.set_thumb(nc_path(files[0]["dav_path"]), "/gone/yaga/thumbnails/a.jpg", "nextcloud")
+    db.commit()
+
+    client = FakeClient(files, thumbs={files[0]["dav_path"]: "/cache/a.jpg"})
+    seen = []
+    sc.load_nc_folder_thumbs(client, "2026", lambda p, t: seen.append((p, t)))
+
+    assert client.thumbed == [files[0]["dav_path"]], "the placeholder would never recover"
+    assert seen == [(nc_path(files[0]["dav_path"]), "/cache/a.jpg")]
 
 
 def test_folder_thumbs_report_each_arrival(scanner) -> None:

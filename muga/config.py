@@ -24,6 +24,11 @@ TRACE_LOG_PATH = CACHE_DIR / "trace.log"
 _LEGACY_DIR_NAME = "yaga"
 _LEGACY_DB_NAME = "yaga.sqlite3"
 
+# Where the cache lived before the rename. Public because the database has to
+# repoint the absolute thumb_path values it stored back then — moving the
+# directory (below) does not rewrite what is inside the index.
+LEGACY_CACHE_DIR = CACHE_DIR.parent / _LEGACY_DIR_NAME
+
 
 def migrate_legacy_dirs() -> None:
     """Move the pre-rename directories into place. Runs once, at startup.
