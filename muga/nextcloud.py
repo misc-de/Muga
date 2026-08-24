@@ -49,6 +49,10 @@ _MAX_THUMB_BYTES = 10 * 1024 * 1024
 # killer on a phone.
 _MAX_PROPFIND_BYTES = 64 * 1024 * 1024
 
+# Round-trip slack for the cache-freshness mtime comparison, mirroring
+# thumbnails._MTIME_EPS and scanner._MTIME_EPS.
+_MTIME_EPS = 1e-6
+
 # Prefix stored in DB to identify nextcloud paths
 NC_PATH_PREFIX = "nextcloud://"
 
@@ -324,10 +328,59 @@ class NextcloudClient:
         return results
 
     # ------------------------------------------------------------------
+    # Cache freshness
+    # ------------------------------------------------------------------
+    # Both local caches below (_NC_THUMB and _NC_CACHE) key on the DAV path
+    # alone, so a file replaced on the server keeps its cache filename and a
+    # bare `dest.exists()` would serve the pre-change copy forever — nothing on
+    # the Nextcloud side ever rescans a local file to notice otherwise.
+    #
+    # A downloaded copy is therefore stamped with the *server's* modification
+    # time rather than the download time. Comparing two values that both come
+    # from the server sidesteps clock skew: a server running minutes ahead of
+    # the phone would otherwise make every cache entry look stale on every
+    # sweep and re-download the whole library.
+
+    @staticmethod
+    def _stamp_remote_mtime(dest: Path, remote_mtime: float | None) -> None:
+        """Set *dest*'s mtime to the server's, leaving its atime alone (atime is
+        what the disk-cache evictor sorts on). Best-effort."""
+        if not remote_mtime or remote_mtime <= 0:
+            return
+        try:
+            os.utime(dest, (dest.stat().st_atime, remote_mtime))
+        except OSError:
+            LOGGER.debug("could not stamp cache mtime for %s", dest, exc_info=True)
+
+    @staticmethod
+    def _cache_is_current(dest: Path, remote_mtime: float | None) -> bool:
+        """True when the cached copy at *dest* still matches the server's file.
+
+        *remote_mtime* of None or 0 means "the server did not tell us" — an
+        unparseable getlastmodified, or a caller that has no mtime at hand. The
+        cached copy is kept in that case, which is what this client did before
+        stamping existed.
+        """
+        if not dest.exists():
+            return False
+        if not remote_mtime or remote_mtime <= 0:
+            return True
+        try:
+            cached_mtime = dest.stat().st_mtime
+        except OSError:
+            return False
+        # >= rather than ==: entries cached before stamping existed carry their
+        # download time, which is later than the server's mtime, so upgrading
+        # does not re-download an entire library at once.
+        return cached_mtime >= remote_mtime - _MTIME_EPS
+
+    # ------------------------------------------------------------------
     # Thumbnail via Nextcloud preview API
     # ------------------------------------------------------------------
 
-    def ensure_thumbnail(self, dav_path: str, size: int = 256) -> str | None:
+    def ensure_thumbnail(
+        self, dav_path: str, size: int = 256, remote_mtime: float | None = None,
+    ) -> str | None:
         """
         Download a thumbnail via the Nextcloud preview API.
         Returns local path on success, None on failure.
@@ -339,7 +392,9 @@ class NextcloudClient:
         # Derive a stable local filename from the dav_path
         safe = dav_path.lstrip("/").replace("/", "_")
         dest = _NC_THUMB / f"{safe}.jpg"
-        if dest.exists():
+        # Not `dest.exists()` — see _cache_is_current: a file replaced on the
+        # server keeps its cache filename.
+        if self._cache_is_current(dest, remote_mtime):
             return str(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -362,6 +417,7 @@ class NextcloudClient:
                 resp = conn.getresponse()
                 if resp.status == 200:
                     if self._write_response_atomic(resp, dest, max_bytes=_MAX_THUMB_BYTES):
+                        self._stamp_remote_mtime(dest, remote_mtime)
                         return str(dest)
                     self._drop_persistent_conn()
                     return None
@@ -388,14 +444,18 @@ class NextcloudClient:
     # Download full file for viewing/editing
     # ------------------------------------------------------------------
 
-    def download_file(self, dav_path: str) -> str | None:
+    def download_file(self, dav_path: str, remote_mtime: float | None = None) -> str | None:
         """
         Download a file to local cache.
         Returns local path on success, None on failure.
+
+        Pass *remote_mtime* (the server's getlastmodified, as the PROPFIND
+        listing reports it) to have a copy that the server has since replaced
+        re-downloaded instead of served from cache.
         """
         safe = dav_path.lstrip("/").replace("/", "_")
         dest = _NC_CACHE / safe
-        if dest.exists():
+        if self._cache_is_current(dest, remote_mtime):
             return str(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         conn = self._conn()
@@ -408,6 +468,7 @@ class NextcloudClient:
             resp = conn.getresponse()
             if resp.status == 200:
                 if self._write_response_atomic(resp, dest):
+                    self._stamp_remote_mtime(dest, remote_mtime)
                     return str(dest)
                 return None
             LOGGER.debug("Nextcloud file HTTP %s for %s", resp.status, dav_path)

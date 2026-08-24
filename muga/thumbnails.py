@@ -37,6 +37,66 @@ def _save_atomic(target: Path, write) -> None:
             LOGGER.debug("tmp.unlink failed", exc_info=True)
         raise
 
+
+# Round-trip slack for the source-vs-thumbnail mtime comparison below. A
+# thumbnail is stamped with its source's mtime, and that float crosses two
+# filesystems' timestamp representations on the way back out; a
+# sub-microsecond wobble is not an edited photo. Same value and same reasoning
+# as scanner._MTIME_EPS.
+_MTIME_EPS = 1e-6
+
+
+def _stamp_source_mtime(target: Path, source_mtime: float | None) -> None:
+    """Set *target*'s mtime to *source_mtime*, leaving its atime alone.
+
+    atime is what the disk-cache evictor sorts on (LRU — see
+    gallery_thumbnails.evict_cache), so it has to survive the stamp.
+
+    Best-effort: a filesystem that refuses utime leaves the thumbnail carrying
+    its generation time, which _thumbnail_is_current reads as "still current" —
+    exactly the behaviour this module had before stamping existed.
+    """
+    if source_mtime is None:
+        return
+    try:
+        os.utime(target, (target.stat().st_atime, source_mtime))
+    except OSError:
+        LOGGER.debug("could not stamp thumbnail mtime for %s", target, exc_info=True)
+
+
+def _thumbnail_is_current(target: Path, source_mtime: float | None) -> bool:
+    """True when the thumbnail cached at *target* still shows what is in its
+    source file.
+
+    ``thumb_path_for`` keys on the file path alone, so a photo edited in place
+    — a rotation baked in by the viewer, an EXIF write after a capture, an
+    external editor — keeps the same thumbnail filename. Testing
+    ``target.exists()`` on its own would then serve the pre-edit image for as
+    long as the photo keeps its name.
+
+    Every thumbnail this module writes is stamped with its source's mtime, so
+    the two timestamps are equal while the thumbnail is current, and the
+    source's runs ahead the moment the photo is rewritten.
+
+    The comparison is ``>=`` rather than ``==`` on purpose: thumbnails
+    generated before stamping existed carry their *generation* time, which is
+    later than the source's, so upgrading does not invalidate an entire
+    library at once. The cost is that a source restored from a backup with an
+    *older* mtime is missed here — the scanner catches that one, because it
+    compares against the mtime recorded in the index and requires a match in
+    both directions.
+    """
+    try:
+        thumb_mtime = target.stat().st_mtime
+    except OSError:
+        return False
+    if source_mtime is None:
+        # Source unreadable — an unmounted drive, a permission change. There is
+        # nothing to regenerate from, so the cached thumbnail is the best answer
+        # available: a stale tile beats a blank one.
+        return True
+    return thumb_mtime >= source_mtime - _MTIME_EPS
+
 # Sync the decompression-bomb cap with editor/_pil.py at import time so the
 # scanner thumbnail path is also protected — a hostile NC server could
 # otherwise feed us a multi-gigapixel PNG that OOMs the worker pool when a
@@ -221,11 +281,33 @@ class Thumbnailer:
         else:
             path = item_or_path
         target = self.thumb_path_for(path)
-        if target.exists():
+        try:
+            source_mtime: float | None = path.stat().st_mtime
+        except OSError:
+            source_mtime = None
+        # Not `target.exists()`: a photo edited in place keeps its path, so the
+        # cached thumbnail keeps its name. See _thumbnail_is_current.
+        if _thumbnail_is_current(target, source_mtime):
             return str(target)
         if media_type == "video":
-            return self._video_thumbnail(path, target)
-        return self._image_thumbnail(path, target)
+            thumb = self._video_thumbnail(path, target)
+        else:
+            thumb = self._image_thumbnail(path, target)
+        if thumb:
+            _stamp_source_mtime(target, source_mtime)
+        return thumb
+
+    def invalidate(self, path: Path) -> None:
+        """Drop the cached thumbnail for *path*, so the next ensure_thumbnail
+        regenerates it from the file as it now stands.
+
+        ensure_thumbnail already invalidates itself on mtime; this is for the
+        callers that want the guarantee without depending on timestamps at all
+        — two rotations saved inside one filesystem timestamp tick, say."""
+        try:
+            self.thumb_path_for(path).unlink(missing_ok=True)
+        except OSError:
+            LOGGER.debug("thumbnail invalidate failed for %s", path, exc_info=True)
 
     def clear(self) -> None:
         if THUMB_DIR.exists():

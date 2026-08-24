@@ -692,7 +692,9 @@ class ViewerWindow(Adw.ApplicationWindow):
             if pwd:
                 try:
                     client = NextcloudClient(settings.nextcloud_url, settings.nextcloud_user, pwd)
-                    local = client.download_file(dav_path_from_nc(item.path))
+                    local = client.download_file(
+                        dav_path_from_nc(item.path), remote_mtime=item.mtime,
+                    )
                 except Exception:
                     LOGGER.debug("NC download failed for %s", item.path, exc_info=True)
             if local:
@@ -1183,10 +1185,15 @@ class ViewerWindow(Adw.ApplicationWindow):
         """Regenerate the gallery thumbnail after a rotation was baked into the
         file on disk.
 
-        The thumbnail is keyed by the (unchanged) source path, so a plain
-        ``ensure_thumbnail`` would short-circuit on the still-existing stale file
-        and hand back the pre-rotation image. Delete it, regenerate, and push the
-        fresh thumb to the gallery grid so the tile turns without a full rescan.
+        ``ensure_thumbnail`` notices the rewritten source by itself (it compares
+        the thumbnail's stamped mtime against the file's), so the explicit
+        invalidate below is belt and braces: two rotations saved inside a single
+        filesystem timestamp tick would otherwise leave the second one showing
+        the first one's thumbnail.
+
+        What this method adds beyond freshness is what the thumbnailer cannot
+        do on its own — writing the new thumbnail path back to the index and
+        turning the tile in the live grid, without waiting for a full rescan.
 
         Only for genuine local items whose display path *is* the stored path — an
         NC item's display path is a throwaway download whose rotation never
@@ -1196,7 +1203,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         parent = self.parent_window
         try:
             thumbnailer = parent.thumbnailer
-            thumbnailer.thumb_path_for(Path(path)).unlink(missing_ok=True)
+            thumbnailer.invalidate(Path(path))
             thumb = thumbnailer.ensure_thumbnail(Path(path), item.media_type)
         except Exception:
             LOGGER.debug("thumbnail refresh after rotation failed for %s", path, exc_info=True)

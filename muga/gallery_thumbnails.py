@@ -407,6 +407,11 @@ class GalleryWindowThumbnailsMixin:
                 server_down_err: Exception | None = None
                 try:
                     dav = dav_path_from_nc(path)
+                    # No remote_mtime here on purpose: this worker is fed bare
+                    # paths off the bind queue, and looking the row up would
+                    # add a DB round-trip per tile to the scroll path. It only
+                    # ever fetches thumbnails that are missing, and the scan
+                    # above is what re-fetches the ones that went stale.
                     thumb = client.ensure_thumbnail(dav)
                 except NextcloudConnectionError as exc:
                     # The server is unreachable (not just this one preview

@@ -43,7 +43,9 @@ class FakeClient:
         self._list_error = list_error
         self.listed: list[str] = []
         self.thumbed: list[str] = []
+        self.thumbed_mtimes: list[float | None] = []
         self.downloaded: list[str] = []
+        self.downloaded_mtimes: list[float | None] = []
 
     def list_files(self, folder):
         self.listed.append(folder)
@@ -51,12 +53,19 @@ class FakeClient:
             raise self._list_error
         return self._files
 
-    def ensure_thumbnail(self, dav, size=256):
+    def ensure_thumbnail(self, dav, size=256, remote_mtime=None):
+        # remote_mtime is recorded, not acted on: the freshness rule itself is
+        # the real client's business (tests/test_thumbnail_freshness.py). What
+        # matters here is that the scanner passes the listing's mtime through,
+        # since without it a file replaced on the server keeps its cached
+        # thumbnail forever.
         self.thumbed.append(dav)
+        self.thumbed_mtimes.append(remote_mtime)
         return self._thumbs.get(dav)
 
-    def download_file(self, dav):
+    def download_file(self, dav, remote_mtime=None):
         self.downloaded.append(dav)
+        self.downloaded_mtimes.append(remote_mtime)
         return f"/cache/{Path(dav).name}"
 
 
@@ -409,6 +418,21 @@ def test_the_eager_scan_downloads_when_asked(scanner) -> None:
     client = FakeClient(files)
     sc._scan_nextcloud(client, "Photos", thumbnail_only=False)
     assert len(client.downloaded) == 2
+
+
+def test_the_eager_scan_forwards_the_server_mtime(scanner) -> None:
+    """Both Nextcloud caches key on the DAV path, so a file replaced on the
+    server keeps its cache filename. The listing already carries the server's
+    mtime — dropping it here is what would leave the pre-change thumbnail and
+    the pre-change download in place for good."""
+    sc, _db = scanner
+    files = [_file("a.jpg", mtime=1_700_000_000.0), _file("b.jpg", mtime=1_700_000_900.0)]
+    client = FakeClient(files)
+
+    sc._scan_nextcloud(client, "Photos", thumbnail_only=False)
+
+    assert client.thumbed_mtimes == [1_700_000_000.0, 1_700_000_900.0]
+    assert client.downloaded_mtimes == [1_700_000_000.0, 1_700_000_900.0]
 
 
 def test_the_eager_scan_skips_non_media(scanner) -> None:
