@@ -271,11 +271,22 @@ class SettingsWindow(Adw.PreferencesWindow):
         page.add(group)
         self._update_row = Adw.ActionRow(title=self._("App version"))
         self._update_row.set_subtitle(self._update_row_subtitle())
+        group.add(self._update_row)
+        if updater.is_flatpak():
+            # The in-app updater cannot write into a Flatpak's read-only /app,
+            # so a button here would only ever end in "Update failed". Keep the
+            # row — the version is worth showing — and say where updates come
+            # from instead. No _update_btn is created: nothing below can be
+            # reached without one, since every path starts at its "clicked".
+            hint = Gtk.Label(label=self._("Managed by Flatpak"))
+            hint.add_css_class("dim-label")
+            hint.set_valign(Gtk.Align.CENTER)
+            self._update_row.add_suffix(hint)
+            return
         self._update_btn = Gtk.Button(label=self._("Check for updates"))
         self._update_btn.set_valign(Gtk.Align.CENTER)
         self._update_btn.connect("clicked", self._on_check_update)
         self._update_row.add_suffix(self._update_btn)
-        group.add(self._update_row)
 
     def _update_row_subtitle(self, check_iso: str | None = None) -> str:
         parts = [f"v{updater.get_current_version()}"]
