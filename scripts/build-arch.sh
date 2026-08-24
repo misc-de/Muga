@@ -9,10 +9,10 @@
 #
 #   scripts/build-arch.sh [manifest]
 #
-# Result: ./repo carrying the ref app/io.github.miscde.Muga/<arch>/master.
+# Result: ./repo carrying the ref app/de.cais.Muga/<arch>/master.
 set -euo pipefail
 
-manifest="${1:-io.github.miscde.Muga.yml}"
+manifest="${1:-de.cais.Muga.yml}"
 appid="$(basename "$manifest" .yml)"
 appid="${appid%.flathub}"
 arch="$(flatpak --default-arch)"

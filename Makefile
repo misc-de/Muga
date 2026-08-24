@@ -12,7 +12,7 @@
 # Everything about the app itself — tests, linting, installing from source —
 # lives in pyproject.toml and install.sh; this file is only about packaging.
 
-APPID       = io.github.miscde.Muga
+APPID       = de.cais.Muga
 FP_MANIFEST = $(APPID).yml
 VERSION     = $(shell sed -n 's/^VERSION = "\(.*\)"/\1/p' muga/__init__.py)
 

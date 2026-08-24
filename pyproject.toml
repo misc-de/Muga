@@ -51,10 +51,10 @@ muga = [
 ]
 
 [tool.setuptools.data-files]
-"share/applications" = ["data/io.github.miscde.Muga.desktop"]
-"share/metainfo" = ["data/io.github.miscde.Muga.metainfo.xml"]
+"share/applications" = ["data/de.cais.Muga.desktop"]
+"share/metainfo" = ["data/de.cais.Muga.metainfo.xml"]
 "share/icons/hicolor/128x128/apps" = [
-    "muga/data/icons/hicolor/128x128/apps/io.github.miscde.Muga.png",
+    "muga/data/icons/hicolor/128x128/apps/de.cais.Muga.png",
 ]
 
 [tool.pytest.ini_options]

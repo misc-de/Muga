@@ -692,7 +692,7 @@ def _declared_versions() -> dict[str, str]:
     import tomllib
 
     root = Path(__file__).resolve().parent.parent
-    xml = (root / "data" / "io.github.miscde.Muga.metainfo.xml").read_text()
+    xml = (root / "data" / "de.cais.Muga.metainfo.xml").read_text()
     return {
         "muga.VERSION": __import__("muga").VERSION,
         "pyproject": tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"],
@@ -734,7 +734,7 @@ def test_the_version_is_newer_than_the_previous_release() -> None:
     from muga.updater import _is_newer
 
     root = Path(__file__).resolve().parent.parent
-    xml = (root / "data" / "io.github.miscde.Muga.metainfo.xml").read_text()
+    xml = (root / "data" / "de.cais.Muga.metainfo.xml").read_text()
     listed = re.findall(r'<release version="([^"]+)"', xml)
     assert len(listed) >= 2, "only one release listed"
     assert _is_newer(listed[0], listed[1]), f"{listed[0]} is not newer than {listed[1]}"
@@ -830,3 +830,127 @@ def test_a_fresh_install_has_nothing_to_migrate(tmp_path: Path, monkeypatch) -> 
     _point_config_at(monkeypatch, tmp_path)
     config.migrate_legacy_dirs()  # must not raise
     assert not config.CONFIG_DIR.exists()
+
+
+# ---------------------------------------------------------------------------
+# The keyring schema rename must not look like a lost Nextcloud connection
+# ---------------------------------------------------------------------------
+#
+# The schema used to be de.furilabs.muga.nextcloud — the namespace of the
+# FuriPhone's maker, not ours. Renaming it to de.cais.Muga.nextcloud changes
+# the lookup key, so a password stored under the old one is invisible unless
+# it is moved across. Without that, an existing install comes up disconnected
+# and asks for an app password it already has.
+
+
+class _FakeSchema:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeSecret:
+    """An in-memory stand-in for libsecret, keyed by (schema, attrs)."""
+
+    COLLECTION_DEFAULT = "default"
+
+    class SchemaFlags:
+        NONE = 0
+
+    class SchemaAttributeType:
+        STRING = 0
+
+    class Schema:
+        @staticmethod
+        def new(name, _flags, _attrs):
+            return _FakeSchema(name)
+
+    def __init__(self) -> None:
+        self.store: dict[tuple[str, tuple], str] = {}
+        self.store_fails = False
+
+    @staticmethod
+    def _key(schema, attrs):
+        return (schema.name, tuple(sorted(attrs.items())))
+
+    def password_lookup_sync(self, schema, attrs, _cancellable):
+        return self.store.get(self._key(schema, attrs))
+
+    def password_store_sync(self, schema, attrs, _collection, _label, password, _c):
+        if self.store_fails:
+            return False
+        self.store[self._key(schema, attrs)] = password
+        return True
+
+    def password_clear_sync(self, schema, attrs, _cancellable):
+        return self.store.pop(self._key(schema, attrs), None) is not None
+
+
+def _settings_with_fake_keyring(monkeypatch, tmp_path):
+    """A Settings pointed at a fake keyring and an empty credential file."""
+    import gi.repository
+
+    fake = _FakeSecret()
+    monkeypatch.setattr(gi.repository, "Secret", fake, raising=False)
+    monkeypatch.setattr("muga.config.Settings._CRED_FILE", tmp_path / "nc_password")
+
+    from muga.config import Settings
+    settings = Settings()
+    settings.nextcloud_url = "https://nc.example"
+    settings.nextcloud_user = "alice"
+    attrs = {"server": "https://nc.example", "user": "alice"}
+    return settings, fake, attrs
+
+
+def test_password_under_the_old_schema_is_found_and_moved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, fake, attrs = _settings_with_fake_keyring(monkeypatch, tmp_path)
+    old = _FakeSchema(settings._LEGACY_KEYRING_SCHEMA)
+    fake.store[fake._key(old, attrs)] = "hunter2"
+
+    assert settings.load_app_password() == "hunter2"
+
+    new_key = fake._key(_FakeSchema(settings._KEYRING_SCHEMA), attrs)
+    assert fake.store.get(new_key) == "hunter2", "not re-stored under the new schema"
+    assert fake._key(old, attrs) not in fake.store, "the old entry was left behind"
+
+
+def test_a_failed_move_keeps_the_old_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the new store fails, the old entry must survive — losing the password
+    between two schemas would be worse than not migrating at all."""
+    settings, fake, attrs = _settings_with_fake_keyring(monkeypatch, tmp_path)
+    old_key = fake._key(_FakeSchema(settings._LEGACY_KEYRING_SCHEMA), attrs)
+    fake.store[old_key] = "hunter2"
+    fake.store_fails = True
+
+    assert settings.load_app_password() == "hunter2", "the password is still returned"
+    assert fake.store.get(old_key) == "hunter2", "the old entry must be kept"
+
+
+def test_the_new_schema_wins_and_the_old_is_not_consulted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, fake, attrs = _settings_with_fake_keyring(monkeypatch, tmp_path)
+    old_key = fake._key(_FakeSchema(settings._LEGACY_KEYRING_SCHEMA), attrs)
+    new_key = fake._key(_FakeSchema(settings._KEYRING_SCHEMA), attrs)
+    fake.store[new_key] = "current"
+    fake.store[old_key] = "stale"
+
+    assert settings.load_app_password() == "current"
+    assert fake.store[old_key] == "stale", "an unrelated old entry was touched"
+
+
+def test_disconnect_clears_both_schemas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disconnecting must not leave the password behind under the old name on
+    an install that never went through the migration."""
+    settings, fake, attrs = _settings_with_fake_keyring(monkeypatch, tmp_path)
+    for schema in (settings._KEYRING_SCHEMA, settings._LEGACY_KEYRING_SCHEMA):
+        fake.store[fake._key(_FakeSchema(schema), attrs)] = "hunter2"
+
+    settings.clear_app_password()
+
+    assert fake.store == {}, f"entries survived the disconnect: {fake.store}"

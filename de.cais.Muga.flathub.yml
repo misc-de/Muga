@@ -1,15 +1,21 @@
-# Flatpak manifest for Muga.
+# Flathub manifest for Muga.
 #
-# Build and install locally:
-#   flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
-#   flatpak-builder --user --install --force-clean build-dir io.github.miscde.Muga.yml
-#   flatpak run io.github.miscde.Muga
+# Differences from the repository manifest (de.cais.Muga.yml):
+#   * The source is a tagged git state instead of the working tree — Flathub
+#     builds only from published states.
+#   * `commit:` is pinned to the tag's SHA on release (Flathub recommends it).
+# Everything else — runtime, modules, permissions — is deliberately identical,
+# so both builds rest on the same base.
 #
-# Camera note: v4l2 webcams work. The Halium / gst-droid path (FuriOS,
-# Droidian) does NOT — it needs the Android HAL and sysfs torch nodes that a
-# sandbox does not reach. On those phones install from source with install.sh.
-# See docs/compatibility.md.
-id: io.github.miscde.Muga
+# Submitting: fork github.com/flathub/flathub, add this file as
+# de.cais.Muga.yml on a branch named de.cais.Muga, open the
+# pull request against the `new-pr` branch. See docs/flathub.md.
+#
+# Check it the way Flathub's CI does, before opening the PR:
+#   flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+#       manifest de.cais.Muga.flathub.yml
+#
+id: de.cais.Muga
 runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
@@ -87,23 +93,17 @@ modules:
       # (it carries its own MO writer, so the SDK needs no gettext).
       - pip3 install --exists-action=i --no-index --no-build-isolation
         --prefix=${FLATPAK_DEST} .
-      - install -Dm644 data/io.github.miscde.Muga.desktop
-        ${FLATPAK_DEST}/share/applications/io.github.miscde.Muga.desktop
-      - install -Dm644 data/io.github.miscde.Muga.metainfo.xml
-        ${FLATPAK_DEST}/share/metainfo/io.github.miscde.Muga.metainfo.xml
-      - install -Dm644 muga/data/icons/hicolor/128x128/apps/io.github.miscde.Muga.png
-        ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/io.github.miscde.Muga.png
+      - install -Dm644 data/de.cais.Muga.desktop
+        ${FLATPAK_DEST}/share/applications/de.cais.Muga.desktop
+      - install -Dm644 data/de.cais.Muga.metainfo.xml
+        ${FLATPAK_DEST}/share/metainfo/de.cais.Muga.metainfo.xml
+      - install -Dm644 muga/data/icons/hicolor/128x128/apps/de.cais.Muga.png
+        ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/de.cais.Muga.png
     sources:
-      - type: dir
-        path: .
-        # Without skip the build tree copies itself in: repo/ and repo-arm/
-        # are OSTree repos of several hundred MB, and .flatpak-builder/ is the
-        # cache of the very build that is running.
-        skip:
-          - .git
-          - .venv
-          - .flatpak-builder
-          - .flatpak-build
-          - build-dir
-          - repo
-          - repo-arm
+      - type: git
+        url: https://github.com/misc-de/Muga.git
+        tag: v0.3.1
+        # commit: pinned to the tag's SHA on release
+        x-checker-data:
+          type: git
+          tag-pattern: "^v([\\d.]+)$"

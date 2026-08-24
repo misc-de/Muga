@@ -95,7 +95,7 @@ def test_flatpak_is_detected_from_either_signal(monkeypatch) -> None:
     assert updater.is_flatpak() is True
 
     monkeypatch.setattr(updater.os.path, "exists", lambda p: False)
-    monkeypatch.setenv("FLATPAK_ID", "io.github.miscde.Muga")
+    monkeypatch.setenv("FLATPAK_ID", "de.cais.Muga")
     assert updater.is_flatpak() is True
 
 

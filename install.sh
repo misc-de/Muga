@@ -44,23 +44,23 @@ echo "  ✓ launcher  ${LOCAL}/bin/muga"
 
 # ── App icon ─────────────────────────────────────────────────────────────────
 install -Dm644 \
-    "${SCRIPT_DIR}/muga/data/icons/hicolor/128x128/apps/io.github.miscde.Muga.png" \
-    "${LOCAL}/share/icons/hicolor/128x128/apps/io.github.miscde.Muga.png"
-echo "  ✓ icon      ${LOCAL}/share/icons/hicolor/128x128/apps/io.github.miscde.Muga.png"
+    "${SCRIPT_DIR}/muga/data/icons/hicolor/128x128/apps/de.cais.Muga.png" \
+    "${LOCAL}/share/icons/hicolor/128x128/apps/de.cais.Muga.png"
+echo "  ✓ icon      ${LOCAL}/share/icons/hicolor/128x128/apps/de.cais.Muga.png"
 
 # ── Desktop entry ─────────────────────────────────────────────────────────────
 # Write a patched copy that uses the installed launcher path
 mkdir -p "${LOCAL}/share/applications"
 sed "s|Exec=.*|Exec=${LOCAL}/bin/muga|" \
-    "${SCRIPT_DIR}/data/io.github.miscde.Muga.desktop" \
-    > "${LOCAL}/share/applications/io.github.miscde.Muga.desktop"
-echo "  ✓ desktop   ${LOCAL}/share/applications/io.github.miscde.Muga.desktop"
+    "${SCRIPT_DIR}/data/de.cais.Muga.desktop" \
+    > "${LOCAL}/share/applications/de.cais.Muga.desktop"
+echo "  ✓ desktop   ${LOCAL}/share/applications/de.cais.Muga.desktop"
 
 # ── AppStream metadata ───────────────────────────────────────────────────────
 install -Dm644 \
-    "${SCRIPT_DIR}/data/io.github.miscde.Muga.metainfo.xml" \
-    "${LOCAL}/share/metainfo/io.github.miscde.Muga.metainfo.xml"
-echo "  ✓ metainfo  ${LOCAL}/share/metainfo/io.github.miscde.Muga.metainfo.xml"
+    "${SCRIPT_DIR}/data/de.cais.Muga.metainfo.xml" \
+    "${LOCAL}/share/metainfo/de.cais.Muga.metainfo.xml"
+echo "  ✓ metainfo  ${LOCAL}/share/metainfo/de.cais.Muga.metainfo.xml"
 
 # ── Refresh system caches ────────────────────────────────────────────────────
 gtk-update-icon-cache -f -t "${LOCAL}/share/icons/hicolor" 2>/dev/null || true

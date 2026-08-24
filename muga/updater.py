@@ -45,7 +45,7 @@ def is_flatpak() -> bool:
     there is no checkout to ``git pull`` and the zip overlay would have to
     write into site-packages. A Flatpak is updated through the host instead
     (``flatpak update`` or a software centre, which reads the releases in
-    data/io.github.miscde.Muga.metainfo.xml).
+    data/de.cais.Muga.metainfo.xml).
 
     Both signals are set by flatpak itself; either alone is enough.
     """
