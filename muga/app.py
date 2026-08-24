@@ -1124,6 +1124,25 @@ class GalleryWindow(
                 return path
         return None
 
+    def _sync_new_folder_button(self) -> None:
+        """Offer "New folder" only where a new folder could actually land.
+
+        Overview is a virtual aggregator over the other categories — it has no
+        directory of its own (its path slot carries a legacy value that is never
+        scanned, see Settings.categories), so a folder created "in" Overview
+        would sit somewhere the view never shows.
+
+        Insensitive rather than hidden: the header keeps its shape as the user
+        switches tabs, and the tooltip says why the button is dimmed instead of
+        leaving them to guess.
+        """
+        can_create = self.category != "pictures"
+        self.new_folder_button.set_sensitive(can_create)
+        self.new_folder_button.set_tooltip_text(
+            self._("New folder") if can_create
+            else self._("Overview combines your other folders — open one to create a folder in it")
+        )
+
     def _prompt_new_folder(self) -> None:
         """Adwaita-styled dialog asking for a folder name; creates it on confirm."""
         if self.scanner.missing_root.get(self.category) is not None:
