@@ -69,6 +69,16 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.3.2" date="2026-08-24">
+      <description>
+        <p>Fixes: a photo you rotate or edit now gets a fresh thumbnail. The
+        tile in the gallery used to keep showing the picture as it was before
+        the change, until the next full rescan came round to it.</p>
+        <p>Nextcloud: a photo replaced on the server is fetched again instead
+        of being served from the local cache, so both its thumbnail and the
+        full-size copy follow the server.</p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-08-24">
       <description>
         <p>Fixes: paging through photos follows the picture when the screen is
