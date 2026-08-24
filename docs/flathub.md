@@ -33,14 +33,30 @@ flatpak-builder --force-clean --install --user \
 
 These are what still stands between the manifest and a submission:
 
-1. **A domain check is what Flathub will ask for.** The app ID is
-   `de.cais.Muga`, so Flathub has to see that `cais.de` is ours — usually a
-   DNS TXT record or a file served from the domain, agreed with the reviewer
-   in the pull request. This replaced `io.github.miscde.Muga`, which derived
-   `github.com/miscde` — an unrelated user, since this project is `misc-de`.
-   `flatpak-builder-lint` rejected that outright; the domain form also keeps
-   the ID valid if the code ever moves off GitHub, and matches the sibling
-   apps (`de.cais.Schwupp`, `de.cais.Emilia`).
+1. **Two separate domain questions — do not confuse them.**
+
+   *At submission.* Flathub requires that "the author or the developer or the
+   project must have control over the domain. The corresponding URL must be
+   reachable over HTTPS." For `de.cais.Muga` that is `cais.de`, which redirects
+   to `www.cais.de` and answers 200 — reachability is satisfied; control is
+   asserted in the pull request. This is the step the old ID could never pass:
+   `io.github.miscde.Muga` derived `github.com/miscde`, an unrelated user,
+   since this project is `misc-de` and a hyphen cannot appear in a D-Bus name.
+
+   *After acceptance,* for the "verified" badge, Flathub issues a token in the
+   developer portal and looks for it in one of two places:
+
+   - a DNS TXT record named `_flathub.cais.de` whose value is that token
+     (a UUID like `00000000-aaaa-0000-aaaa-000000000000`); several apps on one
+     domain add several TXT values to the same record, or
+   - a file at `https://cais.de/.well-known/org.flathub.VerifiedApps.txt`, one
+     token per line, `#` starting a comment. HTTPS is required and redirects
+     are followed, so the file may live on `www.cais.de`.
+
+   **The token does not exist yet** — Flathub generates it once the app is
+   accepted, so neither the record nor the file can be prepared in advance.
+   Today `_flathub.cais.de` is unset and the well-known path answers 404,
+   which is the expected state.
 
 2. **Two screenshots still show the old name.** The metainfo carries all eight
    shots, served from `https://misc-de.github.io/Muga/screenshots/`, and
