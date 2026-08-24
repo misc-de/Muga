@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<components version="0.8" origin="flatpak">
+  <component type="desktop-application">
+    <id>io.github.miscde.Muga</id>
+    <name>Muga</name>
+    <summary>Browse photos and videos</summary>
+    <project_license>MIT</project_license>
+    <description>
+      <p>
+      Muga is a GTK 4 and libadwaita photo gallery for Linux desktops and
+      phones. It indexes local media folders, shows cached thumbnails, plays
+      videos, edits photos, connects to Nextcloud Photos, and includes a
+      camera for photo and video capture.
+    </p>
+      <p>
+      On Halium and gst-droid based phones such as FuriOS devices, Muga can
+      use the device camera HAL directly for flash, video light, orientation,
+      and geotagging workflows.
+    </p>
+    </description>
+    <developer id="io.github.miscde">
+      <name>miscde</name>
+    </developer>
+    <developer_name>miscde</developer_name>
+    <launchable type="desktop-id">io.github.miscde.Muga.desktop</launchable>
+    <icon type="cached" width="64" height="64">io.github.miscde.Muga.png</icon>
+    <icon type="cached" width="128" height="128">io.github.miscde.Muga.png</icon>
+    <icon type="stock">io.github.miscde.Muga</icon>
+    <url type="homepage">https://github.com/misc-de/Muga</url>
+    <url type="bugtracker">https://github.com/misc-de/Muga/issues</url>
+    <url type="translate">https://github.com/misc-de/Muga/tree/main/po</url>
+    <url type="vcs-browser">https://github.com/misc-de/Muga</url>
+    <categories>
+      <category>Graphics</category>
+      <category>Photography</category>
+    </categories>
+    <provides>
+      <binary>muga</binary>
+    </provides>
+    <screenshots>
+      <screenshot type="default">
+        <caption>Overview — every library in one grid</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/overview.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Photos grouped by month and year</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/date-grouping.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Full-screen viewer</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/viewer.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Editor — filters</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/editor-filters.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Editor — brightness, contrast and colour channels</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/editor-adjust.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Settings — media folders</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/settings-folders.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Settings — appearance and cache</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/settings-appearance.jpg</image>
+      </screenshot>
+      <screenshot>
+        <caption>Settings — Nextcloud</caption>
+        <image type="source" width="720" height="1600">https://misc-de.github.io/Muga/screenshots/settings-nextcloud.jpg</image>
+      </screenshot>
+    </screenshots>
+    <keywords>
+      <keyword>photo</keyword>
+      <keyword>gallery</keyword>
+      <keyword>camera</keyword>
+      <keyword>video</keyword>
+      <keyword>nextcloud</keyword>
+    </keywords>
+    <releases>
+      <release type="stable" version="0.3.1" timestamp="1787529600">
+        <description>
+          <p>Fixes: paging through photos follows the picture when the screen is
+        rotated. Holding the phone sideways used to turn the pages with an up
+        and down swipe; left and right works again.</p>
+          <p>Packaging: the translations are compiled during the install, and the
+        desktop entry starts the installed launcher.</p>
+        </description>
+      </release>
+      <release type="stable" version="0.3.0" timestamp="1787270400">
+        <description>
+          <p>Reliability: rotating or moving a photo can no longer damage or
+        overwrite it, a hand-edited settings file or a damaged media index no
+        longer stops the app from starting, and an interrupted update rolls
+        itself back.</p>
+          <p>Fixes: cameras reporting a resolution range (libcamera) are found
+        again, large libraries no longer load in full before the first frame,
+        oversized images are refused before they exhaust memory, and rotated
+        controls are laid out correctly.</p>
+        </description>
+      </release>
+      <release type="stable" version="0.2.0" timestamp="1780531200">
+        <description>
+          <p>Performance: off-thread thumbnail and image decoding, smoother
+        scrolling and swiping, faster re-scans (unchanged files are skipped),
+        EXIF search via the full-text index, and lighter settings/sync work.</p>
+        </description>
+      </release>
+      <release type="stable" version="0.1.0" timestamp="1778716800"/>
+    </releases>
+    <content_rating type="oars-1.1"/>
+    <bundle type="flatpak" runtime="org.gnome.Platform/aarch64/49" sdk="org.gnome.Sdk/aarch64/49">app/io.github.miscde.Muga/aarch64/master</bundle>
+  </component>
+</components>
