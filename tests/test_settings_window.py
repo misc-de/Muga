@@ -230,7 +230,7 @@ def test_settings_dialog_builds(settings_dialog) -> None:
 
 
 @requires_display
-@pytest.mark.parametrize("page", [None, "appearance", "folders", "nextcloud"])
+@pytest.mark.parametrize("page", [None, "appearance", "folders", "nextcloud", "mcp"])
 def test_settings_dialog_opens_on_any_page(settings_dialog, page) -> None:
     assert settings_dialog(page) is not None
 

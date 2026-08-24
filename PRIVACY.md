@@ -14,6 +14,10 @@ an issue.
 - All your photos, thumbnails, and the search index stay on your machine.
 - The app makes network requests **only** to a Nextcloud server **you**
   configured, and **only** while you keep the Nextcloud integration enabled.
+- The optional MCP server is the one thing that *accepts* connections. It is
+  off by default, listens on this device only unless you widen it, refuses to
+  start without a token you issued, and can only read the index — never your
+  files, never anything outside it.
 - No third-party servers, no telemetry, no advertising IDs, no fingerprinting.
 
 ---
@@ -31,6 +35,7 @@ Muga follows the XDG base-dir spec
 | `~/.cache/muga/thumbnails/` | Generated thumbnail JPEGs of your local photos. |
 | `~/.cache/muga/nextcloud/` | Cached thumbnails (and on-demand downloads) of Nextcloud photos. Cleared when you disconnect. |
 | `~/.cache/muga/debug.log`, `trace.log` | Diagnostic logs (off by default; opt-in via settings). |
+| `~/.config/muga/mcp_tokens.json` | MCP access tokens, `0600`. Only present once you create one in *Settings → MCP*. |
 
 Muga only reads from the folders you point it at. It does not scan your whole
 home directory.
@@ -59,6 +64,39 @@ configure yourself:
   connecting ([muga/settings_window.py:410-426](muga/settings_window.py#L410-L426)).
 
 There is no auto-update check, no usage ping, no error reporting.
+
+---
+
+## What comes in over the network
+
+Muga accepts exactly one kind of inbound connection, and only when you switch
+it on: the **MCP server** in *Settings → MCP*
+([muga/mcp_server.py](muga/mcp_server.py)).
+
+- **Off by default.** No socket is opened until you enable it.
+- **Loopback by default.** *Reachable from* decides how far it listens: this
+  device only (`127.0.0.1`), your local network, a public address, or every
+  interface. Anything beyond the first is a deliberate choice you make in the
+  combo — turning the server on does not make it reachable from the network.
+  A saved scope whose interface has gone away falls back to loopback, never
+  to something wider.
+- **No token, no server.** It will not start until you have created an access
+  token — a client authenticates with one, and a socket that refuses every
+  request is only a way to be wrong later.
+- **Read-only.** Every tool it exposes is a database SELECT: category listings,
+  search, folder listings, per-file metadata, totals. There is no tool that
+  writes, moves, deletes, or reads file *contents* — an MCP client gets paths
+  and metadata, not your photos.
+- **What a client can see:** file paths, names, folders, sizes, modification
+  times, and the EXIF block the scanner extracted — the same data as the local
+  index. Nextcloud items only appear if the gallery itself is showing them.
+- **Tokens are revocable.** Deleting one in *Settings → MCP* takes effect on
+  the next request, with no restart
+  ([muga/mcp_tokens.py](muga/mcp_tokens.py)).
+- **Plain HTTP, no TLS.** On loopback that is moot. On any wider scope, anyone
+  able to watch that network sees the metadata and the bearer token in transit
+  — keep it to networks you trust, and do not expose the port to the internet
+  or forward it through a router.
 
 ---
 

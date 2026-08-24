@@ -90,6 +90,11 @@ def default_path(name: str) -> str:
 # __dataclass_fields__ for the literal.
 DEFAULT_CACHE_MAX_MB = 2048
 
+# Default listening port for the built-in MCP server. Named rather than
+# inlined so load()'s range clamp can fall back to it without reaching into
+# the dataclass fields for the literal.
+DEFAULT_MCP_PORT = 8765
+
 
 @dataclass
 class Settings:
@@ -188,6 +193,18 @@ class Settings:
 
     # ISO timestamp of the last in-app update check (shown in Settings).
     last_update_check: str = ""
+
+    # MCP server — the access tokens live in mcp_tokens.json (0600), never
+    # here: settings.json is documented as hand-editable and written on almost
+    # every UI interaction. Only the on/off state and the port belong in it.
+    mcp_enabled: bool = False
+    mcp_port: int = DEFAULT_MCP_PORT
+    # How far the MCP server listens: "local" (loopback only), "lan", "public"
+    # or "all". Defaults to the narrowest — reaching the index from another
+    # machine has to be a deliberate choice, not the consequence of turning
+    # the server on. Validated in mcp_server.resolve_bind, which falls back to
+    # loopback for an unknown or currently unavailable value.
+    mcp_bind: str = "local"
 
     # Nextcloud — stored in keyring; only URL/user saved to settings.json
     nextcloud_url: str = ""
@@ -302,6 +319,12 @@ class Settings:
             )
             settings.save()
         settings.grid_columns = min(max(int(settings.grid_columns), 2), 10)
+        # Ports below 1024 need root on Linux and would fail to bind; above
+        # 65535 there is nothing to bind to at all. A hand-edited value out of
+        # range falls back to the default rather than leaving the MCP page
+        # showing a port that can never come up.
+        if not 1024 <= int(settings.mcp_port) <= 65535:
+            settings.mcp_port = DEFAULT_MCP_PORT
         # Clamp legacy / hand-edited values to the four supported positions so a
         # typo in settings.json doesn't crash the layout logic in _build_ui.
         if settings.nav_position not in ("top", "bottom", "left", "right"):

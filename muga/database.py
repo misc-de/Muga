@@ -206,6 +206,25 @@ class Database:
         self._tls.conn = conn
         return conn
 
+    def close_thread_connection(self) -> None:
+        """Close and forget the calling thread's read connection.
+
+        Long-lived threads never need this — they keep their handle for the
+        life of the app. Short-lived ones do: a pool worker that reads once
+        and exits leaves behind an open file descriptor and the 16 MB page
+        cache its PRAGMA asked for, reclaimed only whenever the garbage
+        collector next gets to the object. The MCP server serves each request
+        on a fresh thread, so it calls this when the request is done.
+        """
+        conn = getattr(self._tls, "conn", None)
+        self._tls.conn = None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:
+            LOGGER.debug("close_thread_connection failed", exc_info=True)
+
     @property
     def wconn(self) -> "sqlite3.Connection":
         """The single connection every write goes through.

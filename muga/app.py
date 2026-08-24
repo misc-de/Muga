@@ -21,7 +21,7 @@ gi.require_version("GdkPixbuf", "2.0")
 
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
-from . import APP_ID, APP_NAME
+from . import APP_ID, APP_NAME, mcp_server
 from .config import DEBUG_LOG_PATH, Settings, migrate_legacy_dirs
 from .database import Database
 from .gtk_util import idle_once
@@ -106,6 +106,11 @@ class GalleryApplication(Adw.Application):
         _enable_thread_dump_signal()
         GLib.set_application_name(APP_NAME)
         self.connect("activate", self.on_activate)
+        # Release the MCP port on the way out. Its worker threads are daemons
+        # and would not hold the process open, but the listening socket lives
+        # until the process actually exits — long enough for a relaunch to hit
+        # "address already in use".
+        self.connect("shutdown", lambda _app: mcp_server.shutdown())
 
     def on_activate(self, _app: Adw.Application) -> None:
         # If --trace is active, prove the main loop is alive via a 1 Hz heartbeat
@@ -161,6 +166,15 @@ class GalleryWindow(
             self._startup_warning = "database"
         self.thumbnailer = Thumbnailer()
         self.scanner = MediaScanner(self.database, self.thumbnailer)
+        # The MCP server is a module-level singleton, so this both starts it
+        # when it was left enabled and re-points an already-running one at
+        # this window's database — a nav-position change builds the new window
+        # before destroying the old one, and a window-owned server would still
+        # be holding the port at that moment.
+        try:
+            mcp_server.sync_with_settings(self.settings, self.database)
+        except Exception:
+            LOGGER.exception("Could not bring up the MCP server")
         self.category = self._first_existing_category()
         self.current_folder: str | None = None
         self.current_items: list[MediaItem] = []
@@ -1514,6 +1528,13 @@ class GalleryWindow(
         self.settings = settings
         self.settings.save()
         self.translator.language = settings.language
+        # settings is a fresh object, so the server's reference to the old one
+        # is now stale — resync rather than leaving its tools reading a copy
+        # that no longer reflects what the user just changed.
+        try:
+            mcp_server.sync_with_settings(self.settings, self.database)
+        except Exception:
+            LOGGER.exception("Could not apply MCP settings")
         # Invalidate the shared NC client — credentials/URL may have changed.
         old_client = self._nc_thumb_shared_client
         self._nc_thumb_shared_client = None

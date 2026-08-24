@@ -52,7 +52,7 @@ long-press any photo to enter multi-select, then delete or move a whole batch at
 - **Folder view**  
 drill into subfolders; folder tiles show a 2×2 preview mosaic
 - **MCP server**  
-let an AI assistant search your library — a built-in, read-only [MCP](https://modelcontextprotocol.io) endpoint over HTTP, off by default and reachable only with a token you issue
+let an AI assistant search your library — a built-in, read-only [MCP](https://modelcontextprotocol.io) endpoint over HTTP. Off by default, needs a token you issue, and listens on this device only until you widen it
 
 ---
 
@@ -157,9 +157,10 @@ last August?" without you opening the app.
 
 1. Open **Settings → MCP**
 2. **Add token** and name it after the client that will use it, then copy the token
-3. Flip **MCP server** on — the address it is reachable at appears right below
+3. Pick under **Reachable from** how far it should listen — see below
+4. Flip **MCP server** on — the address it is reachable at appears right below
 
-The endpoint is Streamable HTTP at `http://<your-ip>:8765/mcp`, authenticated
+The endpoint is Streamable HTTP at `http://<address>:8765/mcp`, authenticated
 with `Authorization: Bearer <token>`. Point a client at it:
 
 ```json
@@ -167,7 +168,7 @@ with `Authorization: Bearer <token>`. Point a client at it:
   "mcpServers": {
     "muga": {
       "type": "http",
-      "url": "http://192.168.1.42:8765/mcp",
+      "url": "http://127.0.0.1:8765/mcp",
       "headers": { "Authorization": "Bearer muga_…" }
     }
   }
@@ -178,10 +179,27 @@ Six tools, all read-only: `list_categories`, `list_media`, `search_media`,
 `list_folders`, `get_media`, `gallery_stats`. Nothing an MCP client can call
 changes, moves or deletes a file — it reads the index and nothing else.
 
-The server listens on every network interface so a client on your laptop can
-reach the phone, which means the token is what keeps the index private: it will
-not start until you have issued one, and deleting a token cuts that client off
-immediately. It is off by default and stays off until you turn it on.
+### Reachable from
+
+The combo lists the addresses this machine actually has, so you pick a real
+interface rather than a scope that may not exist here:
+
+| Choice | Binds | Who can reach it |
+|---|---|---|
+| **This device only** (default) | `127.0.0.1` | Only clients running on this device |
+| **Local network** | your LAN address, e.g. `192.168.0.24` | Anything on that network with a token |
+| **Public address** | a globally routable address, if this machine has one | Anything that can route to it — see the warning below |
+| **All interfaces** | `0.0.0.0` | Every network this machine is on |
+
+A scope with no address behind it right now (no public IP, wifi down) is simply
+not offered. If the one you saved disappears later, the server falls back to
+loopback rather than to something wider.
+
+Two things hold regardless of the scope: the server will not start until you
+have issued a token, and deleting a token cuts that client off on its very next
+request, with no restart. There is no TLS — on anything beyond
+*This device only*, the metadata and the token travel in the clear, so keep it
+to networks you trust and never forward the port from a router.
 
 ---
 
