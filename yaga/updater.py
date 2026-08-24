@@ -12,6 +12,7 @@ user_version on next launch, so there's no separate migration step.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -36,6 +37,20 @@ _RAW_INIT_URL = f"https://raw.githubusercontent.com/{_GITHUB_REPO}/{{branch}}/ya
 _ZIP_URL = f"https://github.com/{_GITHUB_REPO}/archive/refs/heads/{{branch}}.zip"
 _USER_AGENT = f"Yaga/{VERSION}"
 _VERSION_RE = re.compile(r"""VERSION\s*=\s*['"]([^'"]+)['"]""")
+
+def is_flatpak() -> bool:
+    """True when Yaga runs inside a Flatpak sandbox.
+
+    Neither update strategy can work there: /app is mounted read-only, so
+    there is no checkout to ``git pull`` and the zip overlay would have to
+    write into site-packages. A Flatpak is updated through the host instead
+    (``flatpak update`` or a software centre, which reads the releases in
+    data/io.github.miscde.Yaga.metainfo.xml).
+
+    Both signals are set by flatpak itself; either alone is enough.
+    """
+    return os.path.exists("/.flatpak-info") or bool(os.environ.get("FLATPAK_ID"))
+
 
 # Never overwrite these during a zip overlay.
 _ZIP_SKIP = {".git"}
@@ -153,7 +168,13 @@ def _http_download(url: str, dest: Path, timeout: int = 120) -> bool:
 
 def check_for_update() -> UpdateInfo:
     """Return whether a newer version is available (does network I/O — call
-    off the UI thread)."""
+    off the UI thread).
+
+    Reports "no update" inside a Flatpak: offering one there would only lead
+    to an apply that cannot succeed. See `is_flatpak`.
+    """
+    if is_flatpak():
+        return UpdateInfo(False, None)
     if _is_git_repo():
         return _check_git()
     return _check_zip()
@@ -161,7 +182,14 @@ def check_for_update() -> UpdateInfo:
 
 def apply_update() -> bool:
     """Download and apply the update (does network/disk I/O — call off the UI
-    thread). Returns True on success; the caller should then restart."""
+    thread). Returns True on success; the caller should then restart.
+
+    Refuses inside a Flatpak rather than failing halfway through a write to a
+    read-only /app. See `is_flatpak`.
+    """
+    if is_flatpak():
+        LOGGER.info("Running as a Flatpak — updates come from the host, not from here")
+        return False
     if _is_git_repo():
         return _apply_git()
     return _apply_zip()

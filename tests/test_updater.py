@@ -83,3 +83,44 @@ def test_check_zip_compares_remote_version(monkeypatch) -> None:
     # Network failure (None) → no update, no crash.
     monkeypatch.setattr(updater, "_http_get_text", lambda *a, **k: None)
     assert updater.check_for_update() == UpdateInfo(False, None)
+
+
+# ---------------------------------------------------------------------------
+# Flatpak: /app is read-only, so neither strategy can work there
+# ---------------------------------------------------------------------------
+
+def test_flatpak_is_detected_from_either_signal(monkeypatch) -> None:
+    monkeypatch.delenv("FLATPAK_ID", raising=False)
+    monkeypatch.setattr(updater.os.path, "exists", lambda p: p == "/.flatpak-info")
+    assert updater.is_flatpak() is True
+
+    monkeypatch.setattr(updater.os.path, "exists", lambda p: False)
+    monkeypatch.setenv("FLATPAK_ID", "io.github.miscde.Yaga")
+    assert updater.is_flatpak() is True
+
+
+def test_a_normal_install_is_not_a_flatpak(monkeypatch) -> None:
+    monkeypatch.delenv("FLATPAK_ID", raising=False)
+    monkeypatch.setattr(updater.os.path, "exists", lambda p: False)
+    assert updater.is_flatpak() is False
+
+
+def test_flatpak_is_never_offered_an_update(monkeypatch) -> None:
+    """Without the guard the zip strategy would compare versions and offer an
+    update whose apply cannot succeed."""
+    monkeypatch.setattr(updater, "is_flatpak", lambda: True)
+    monkeypatch.setattr(updater, "_http_get_text", lambda *a, **k: 'VERSION = "9.9.9"')
+    assert updater.check_for_update() == UpdateInfo(False, None)
+
+
+def test_flatpak_refuses_to_apply_without_touching_the_tree(monkeypatch) -> None:
+    """The refusal has to come before either strategy runs — a half-applied
+    overlay on a read-only /app is the failure mode being avoided."""
+    monkeypatch.setattr(updater, "is_flatpak", lambda: True)
+
+    def fail(*_a, **_k):
+        raise AssertionError("an update strategy ran inside a Flatpak")
+
+    monkeypatch.setattr(updater, "_apply_zip", fail)
+    monkeypatch.setattr(updater, "_apply_git", fail)
+    assert updater.apply_update() is False

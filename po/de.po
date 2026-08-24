@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Yaga 0.3.0\n"
 "Report-Msgid-Bugs-To: https://github.com/misc-de/Yaga/issues\n"
-"POT-Creation-Date: 2026-08-21 00:00+0000\n"
+"POT-Creation-Date: 2026-08-24 07:22+0200\n"
 "PO-Revision-Date: 2026-08-21 00:00+0000\n"
 "Last-Translator: Yaga contributors\n"
 "Language-Team: German\n"
@@ -16,31 +16,23 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-
-#: yaga/app.py:2441
+#: yaga/gallery_selection.py:489
 #, python-format
 msgid "%d Nextcloud item(s) skipped (not downloaded locally)."
 msgstr "%d Nextcloud-Element(e) übersprungen (nicht lokal verfügbar)."
-
-#. Referenced indirectly — passed to _() as a variable.
-msgid "%d hits"
-msgstr "%d Treffer"
 
 #: yaga/settings_window.py:203
 msgid "0 = unlimited"
 msgstr "0 = unbegrenzt"
 
-
-#: yaga/camera.py:2537
+#: yaga/camera_menus.py:526
 msgid "2K"
 msgstr "2K"
 
-
-#: yaga/app.py:1692
+#: yaga/app.py:1205
 #, python-format
 msgid "A folder named %s already exists here."
 msgstr "Hier gibt es bereits einen Ordner namens %s."
-
 
 #: yaga/editor/view.py:579
 msgid "Add"
@@ -54,24 +46,19 @@ msgstr "Ort hinzufügen"
 msgid "Adjust"
 msgstr "Anpassen"
 
-#. Referenced indirectly — passed to _() as a variable.
-msgid "All media"
-msgstr "Alle Medien"
-
-#: yaga/settings_window.py:982
+#: yaga/settings_window.py:993
 msgid "All other folders combined"
 msgstr "Inhalt aller anderen Ordner"
 
-#: yaga/app.py:465
+#: yaga/app.py:415
 msgid "An error occurred while accessing Nextcloud."
 msgstr "Beim Zugriff auf Nextcloud ist ein Fehler aufgetreten."
 
-#: yaga/app.py:434
+#: yaga/app.py:384
 msgid "An unexpected error occurred."
 msgstr "Ein unerwarteter Fehler ist aufgetreten."
 
-
-#: yaga/settings_window.py:563
+#: yaga/settings_window.py:574
 msgid "App password"
 msgstr "App-Passwort"
 
@@ -87,29 +74,1251 @@ msgstr "Darstellung"
 msgid "Apply"
 msgstr "Übernehmen"
 
+#: yaga/app.py:738
+msgid "Ascending"
+msgstr "Aufsteigend"
+
+#: yaga/camera_menus.py:158 yaga/camera_menus.py:182 yaga/camera_menus.py:194
+#: yaga/camera_menus.py:216
+msgid "Auto"
+msgstr "Automatisch"
+
+#: yaga/app.py:441
+msgid "Back"
+msgstr "Zurück"
+
+#: yaga/settings_window.py:1445 yaga/settings_window.py:1659
+msgid "Both"
+msgstr "Beides"
+
+#: yaga/camera_menus.py:233
+msgid "Brightness"
+msgstr "Helligkeit"
+
+#: yaga/editor/view.py:721
+msgid "Brush size"
+msgstr "Pinselgröße"
+
+#: yaga/settings_window.py:196
+msgid "Cache"
+msgstr "Zwischenspeicher"
+
+#: yaga/camera.py:202 yaga/viewer.py:1722 yaga/viewer.py:1727
+msgid "Camera"
+msgstr "Kamera"
+
+#: yaga/camera.py:1368
+msgid ""
+"Camera and preview pipeline couldn't agree on a format. Pick a lower "
+"resolution from the menu."
+msgstr ""
+"Kamera und Vorschau konnten sich auf kein Format einigen. Bitte im Menü eine "
+"niedrigere Auflösung wählen."
+
+#: yaga/camera.py:545
+msgid "Camera controls"
+msgstr "Kameraeinstellungen"
+
+#: yaga/camera.py:1354
+#, python-format
+msgid ""
+"Camera node%s isn't a v4l2 capture device. Try the switch-camera button or "
+"open a different node."
+msgstr ""
+"Kameraknoten%s ist kein v4l2-Aufnahmegerät. Bitte die Kamera wechseln oder "
+"einen anderen Knoten öffnen."
+
+#: yaga/camera.py:1359
+#, python-format
+msgid "Camera%s is in use by another app — close it and retry."
+msgstr ""
+"Kamera%s wird von einer anderen App verwendet – bitte schließen und erneut "
+"versuchen."
+
+#: yaga/app.py:1148 yaga/gallery_selection.py:244 yaga/gallery_selection.py:492
+#: yaga/settings_window.py:638 yaga/settings_window.py:779
+#: yaga/settings_window.py:886 yaga/settings_window.py:1270
+#: yaga/settings_window.py:1460 yaga/settings_window.py:1510
+#: yaga/settings_window.py:1677 yaga/viewer.py:302 yaga/viewer.py:608
+#: yaga/viewer.py:1059 yaga/viewer.py:1601
+msgid "Cancel"
+msgstr "Abbrechen"
+
+#: yaga/app.py:506
+msgid "Cancel selection"
+msgstr "Auswahl aufheben"
+
+#: yaga/settings_window.py:791
+msgid "Cancelled"
+msgstr "Abgebrochen"
+
+#: yaga/app.py:1131
+msgid "Cannot create folder"
+msgstr "Ordner kann nicht erstellt werden"
+
+#: yaga/gallery_selection.py:417
+msgid "Cannot delete"
+msgstr "Löschen nicht möglich"
+
+#: yaga/gallery_selection.py:477
+msgid "Cannot share Nextcloud items directly — open them first to download."
+msgstr ""
+"Nextcloud-Elemente lassen sich nicht direkt teilen – bitte vorher öffnen, "
+"damit sie heruntergeladen werden."
+
+#: yaga/camera.py:637
+msgid "Capture"
+msgstr "Aufnehmen"
+
+#: yaga/camera.py:2868
+#, python-format
+msgid "Capture failed: %s"
+msgstr "Aufnahme fehlgeschlagen: %s"
+
+#: yaga/camera.py:1162
+msgid "Capture unavailable"
+msgstr "Aufnahme nicht verfügbar"
+
+#: yaga/camera.py:399
+msgid "Capturing…"
+msgstr "Nimmt auf …"
+
+#: yaga/settings_window.py:286 yaga/settings_window.py:311
+msgid "Check for updates"
+msgstr "Auf Updates prüfen"
+
+#: yaga/settings_window.py:317
+msgid "Checking…"
+msgstr "Prüfe …"
+
+#: yaga/gallery_selection.py:310 yaga/gallery_selection.py:432
+#: yaga/settings_window.py:971 yaga/settings_window.py:1141
+#: yaga/settings_window.py:1212 yaga/settings_window.py:1370
+#: yaga/settings_window.py:1388 yaga/settings_window.py:1621
+msgid "Choose folder"
+msgstr "Ordner wählen"
+
+#: yaga/gallery_selection.py:486
+msgid "Choose how to share:"
+msgstr "Übertragungsweg wählen:"
+
+#: yaga/settings_window.py:209
+msgid "Clear cache"
+msgstr "Cache löschen"
+
+#: yaga/app.py:354 yaga/viewer.py:273 yaga/viewer.py:1470
+msgid "Close"
+msgstr "Schließen"
+
+#: yaga/settings_window.py:550
+msgid "Connect"
+msgstr "Verbinden"
+
+#: yaga/settings_window.py:780
+msgid "Connect anyway"
+msgstr "Trotzdem verbinden"
+
+#: yaga/viewer.py:609
+msgid "Connect once"
+msgstr "Einmalig verbinden"
+
+#: yaga/viewer.py:610
+msgid "Connect permanently"
+msgstr "Dauerhaft verbinden"
+
+#: yaga/settings_window.py:532
+msgid "Connect to your Nextcloud"
+msgstr "Mit deiner Nextcloud verbinden"
+
+#: yaga/settings_window.py:744
+msgid "Connected ✓"
+msgstr "Verbunden ✓"
+
+#: yaga/settings_window.py:812
+msgid "Connecting…"
+msgstr "Verbinde…"
+
+#: yaga/app.py:408 yaga/settings_window.py:848
+msgid "Connection failed"
+msgstr "Verbindung fehlgeschlagen"
+
+#: yaga/camera_menus.py:234
+msgid "Contrast"
+msgstr "Kontrast"
+
+#: yaga/camera_menus.py:417
+msgid "Controls reset"
+msgstr "Einstellungen zurückgesetzt"
+
+#: yaga/settings_window.py:421
+msgid "Copied"
+msgstr "Kopiert"
+
+#: yaga/settings_window.py:242 yaga/settings_window.py:422
+msgid "Copy"
+msgstr "Kopieren"
+
+#: yaga/settings_window.py:233
+msgid "Copy this when reporting camera, Nextcloud, or media-scan issues."
+msgstr ""
+"Beim Melden von Kamera-, Nextcloud- oder Medien-Scan-Problemen kopieren."
+
+#: yaga/app.py:378
+msgid "Could not access the file due to a system error."
+msgstr ""
+"Auf die Datei konnte wegen eines Systemfehlers nicht zugegriffen werden."
+
+#: yaga/app.py:365
+msgid ""
+"Could not access the file. It may have been moved, deleted, or you don't "
+"have permission."
+msgstr ""
+"Auf die Datei konnte nicht zugegriffen werden. Möglicherweise wurde sie "
+"verschoben oder gelöscht, oder die Berechtigung fehlt."
+
+#: yaga/gallery_selection.py:447 yaga/gallery_selection.py:517
+#: yaga/viewer.py:1620
+msgid "Could not complete action"
+msgstr "Aktion konnte nicht ausgeführt werden"
+
+#: yaga/app.py:1048
+msgid "Could not connect to Nextcloud"
+msgstr "Keine Verbindung zu Nextcloud"
+
+#: yaga/app.py:409
+msgid ""
+"Could not connect to Nextcloud. Check your internet connection and server "
+"URL."
+msgstr ""
+"Keine Verbindung zu Nextcloud. Bitte Internetverbindung und Server-URL "
+"prüfen."
+
+#: yaga/app.py:1210 yaga/app.py:1250
+msgid "Could not create folder"
+msgstr "Ordner konnte nicht erstellt werden"
+
+#: yaga/gallery_selection.py:294
+msgid "Could not delete all files. Check file permissions or disk state."
+msgstr ""
+"Es konnten nicht alle Dateien gelöscht werden. Bitte Dateirechte und "
+"Datenträger prüfen."
+
+#: yaga/viewer.py:720
+msgid "Could not load file"
+msgstr "Datei konnte nicht geladen werden"
+
+#: yaga/gallery_selection.py:371
+msgid "Could not move files. Check file permissions and disk space."
+msgstr ""
+"Dateien konnten nicht verschoben werden. Bitte Dateirechte und freien "
+"Speicher prüfen."
+
+#: yaga/gallery_selection.py:424
+msgid "Could not move the file to trash."
+msgstr "Die Datei konnte nicht in den Papierkorb verschoben werden."
+
+#: yaga/viewer.py:1394 yaga/viewer.py:1413 yaga/viewer.py:1467
+msgid "Could not open editor"
+msgstr "Editor konnte nicht geöffnet werden"
+
+#: yaga/camera_capture_io.py:289
+msgid "Could not read frame"
+msgstr "Bild konnte nicht gelesen werden"
+
+#: yaga/viewer.py:1544
+msgid "Could not save edited image"
+msgstr "Bearbeitetes Bild konnte nicht gespeichert werden"
+
+#: yaga/camera.py:1142
+msgid "Could not start camera"
+msgstr "Kamera konnte nicht gestartet werden"
+
+#: yaga/app.py:1149
+msgid "Create"
+msgstr "Erstellen"
+
+#: yaga/app.py:1145
+#, python-format
+msgid "Create a new folder in %s"
+msgstr "Neuen Ordner in %s erstellen"
+
+#: yaga/settings_window.py:542
+msgid "Credentials"
+msgstr "Zugangsdaten"
+
+#: yaga/editor/view.py:221 yaga/editor/view.py:688
+msgid "Crop"
+msgstr "Zuschneiden"
+
+#: yaga/settings_window.py:208
+msgid "Current cache size"
+msgstr "Aktuelle Größe"
+
+#: yaga/gallery_selection.py:245 yaga/viewer.py:278 yaga/viewer.py:1602
+msgid "Delete"
+msgstr "Löschen"
+
+#: yaga/gallery_selection.py:293 yaga/gallery_selection.py:423
+msgid "Delete failed"
+msgstr "Löschen fehlgeschlagen"
+
+#: yaga/viewer.py:1598
+msgid "Delete media?"
+msgstr "Medium löschen?"
+
+#: yaga/app.py:484
+msgid "Delete selected"
+msgstr "Ausgewählte löschen"
+
+#: yaga/gallery_selection.py:241
+msgid "Delete selection?"
+msgstr "Auswahl löschen?"
+
+#: yaga/viewer.py:1599
+msgid "Delete this item from the gallery?"
+msgstr "Dieses Element aus der Galerie löschen?"
+
+#: yaga/gallery_selection.py:300
+#, python-format
+msgid "Deleted %d/%d items (%d failed)"
+msgstr "%d/%d Elemente gelöscht (%d fehlgeschlagen)"
+
+#: yaga/gallery_selection.py:256
+#, python-format
+msgid "Deleting %d items…"
+msgstr "Lösche %d Elemente …"
+
+#: yaga/app.py:1420
+msgid "Deleting Photos"
+msgstr "Fotos löschen"
+
+#: yaga/app.py:738
+msgid "Descending"
+msgstr "Absteigend"
+
+#: yaga/settings_window.py:239
+msgid "Diagnostic report"
+msgstr "Diagnosebericht"
+
+#: yaga/settings_window.py:222 yaga/settings_window.py:231
+msgid "Diagnostics"
+msgstr "Diagnose"
+
+#: yaga/viewer.py:1718
+msgid "Dimensions"
+msgstr "Abmessungen"
+
+#: yaga/viewer.py:1057
+msgid "Discard"
+msgstr "Verwerfen"
+
+#: yaga/settings_window.py:557
+msgid "Disconnect"
+msgstr "Trennen"
+
+#: yaga/settings_window.py:746 yaga/settings_window.py:872
+msgid "Disconnected"
+msgstr "Getrennt"
+
+#: yaga/settings_window.py:197
+msgid ""
+"Disk cache for thumbnails and downloaded Nextcloud files. When the limit is "
+"reached, the least-recently-used files are deleted first."
+msgstr ""
+"Zwischenspeicher für Vorschaubilder und heruntergeladene Nextcloud-Dateien. "
+"Ist die Grenze erreicht, werden die am längsten unbenutzten Dateien zuerst "
+"gelöscht."
+
+#: yaga/settings_window.py:1648
+msgid "Don't inherit"
+msgstr "Nicht vererben"
+
+#: yaga/camera.py:1033
+msgid "Downstream element has no sink pad"
+msgstr "Das nachgelagerte Element hat keinen Eingang"
+
+#: yaga/settings_window.py:1087
+msgid "Drag to reorder"
+msgstr "Zum Sortieren ziehen"
+
+#: yaga/app.py:1396
+msgid "EXIF Data"
+msgstr "EXIF-Daten"
+
+#: yaga/camera_menus.py:501 yaga/camera_menus.py:546
+msgid "Eco"
+msgstr "Eco"
+
+#: yaga/settings_window.py:1111 yaga/settings_window.py:1147
+#: yaga/settings_window.py:1151 yaga/viewer.py:291
+msgid "Edit"
+msgstr "Bearbeiten"
+
+#: yaga/settings_window.py:1440 yaga/settings_window.py:1605
+msgid "Edit folder"
+msgstr "Ordner bearbeiten"
+
+#: yaga/editor/view.py:219
+msgid "Effects"
+msgstr "Effekte"
+
+#: yaga/gallery_selection.py:494
+msgid "Email"
+msgstr "E-Mail"
+
+#: yaga/viewer.py:605
+msgid "Enable the connection now so the image can be loaded."
+msgstr "Aktiviere jetzt die Verbindung, damit das Bild geladen werden kann."
+
+#: yaga/settings_window.py:522
+msgid "Enables or disables all Nextcloud functions"
+msgstr "Aktiviert oder deaktiviert alle Nextcloud-Funktionen"
+
+#: yaga/app.py:383
+msgid "Error"
+msgstr "Fehler"
+
+#: yaga/camera_menus.py:153
+msgid "Exposure"
+msgstr "Belichtung"
+
+#: yaga/settings_window.py:189
+msgid "External player command"
+msgstr "Externer Player-Befehl"
+
+#: yaga/camera_menus.py:527
+msgid "FHD"
+msgstr "FHD"
+
+#: yaga/camera_capture_io.py:303 yaga/camera_capture_io.py:327
+#: yaga/camera_capture_io.py:337
+#, python-format
+msgid "Failed to save: %s"
+msgstr "Speichern fehlgeschlagen: %s"
+
+#: yaga/camera_capture_io.py:330
+msgid "Failed to save: too many collisions"
+msgstr "Speichern fehlgeschlagen: zu viele Namenskonflikte"
+
+#: yaga/app.py:364
+msgid "File not found"
+msgstr "Datei nicht gefunden"
+
+#: yaga/app.py:516
+msgid "Filename, date, month, EXIF…"
+msgstr "Dateiname, Datum, Monat, EXIF…"
+
+#: yaga/editor/view.py:217
+msgid "Filter"
+msgstr "Filter"
+
+#: yaga/camera.py:1958
+msgid "Flash off"
+msgstr "Blitz aus"
+
+#: yaga/camera.py:1958
+msgid "Flash on"
+msgstr "Blitz an"
+
+#: yaga/camera_menus.py:214
+msgid "Focus"
+msgstr "Fokus"
+
+#: yaga/viewer.py:1678
+msgid "Folder"
+msgstr "Ordner"
+
+#: yaga/app.py:346
+#, python-format
+msgid "Folder %s not found"
+msgstr "Ordner %s nicht gefunden"
+
+#: yaga/app.py:1204
+msgid "Folder exists"
+msgstr "Ordner existiert bereits"
+
+#: yaga/app.py:1137
+msgid "Folder name"
+msgstr "Ordnername"
+
+#: yaga/app.py:1183
+msgid "Folder names cannot contain slashes."
+msgstr "Ordnernamen dürfen keine Schrägstriche enthalten."
+
+#: yaga/settings_window.py:100 yaga/settings_window.py:105
+msgid "Folders"
+msgstr "Ordner"
+
+#: yaga/viewer.py:1724 yaga/viewer.py:1728
+msgid "GPS"
+msgstr "GPS"
+
+#: yaga/settings_window.py:892
+msgid ""
+"GStreamer camera support missing.\n"
+"Install: apt install gstreamer1.0-plugins-bad\n"
+"                    python3-gst-1.0"
+msgstr ""
+"GStreamer-Kamera-Unterstützung fehlt.\n"
+"Installieren: apt install gstreamer1.0-plugins-bad\n"
+"              python3-gst-1.0"
+
+#: yaga/camera_menus.py:232
+msgid "Gain"
+msgstr "Verstärkung"
+
+#: yaga/camera_menus.py:609
+msgid "Geotagging"
+msgstr "Standortdaten"
+
+#: yaga/camera.py:494 yaga/settings_window.py:145
+msgid "Grid"
+msgstr "Raster"
+
+#: yaga/camera_menus.py:528
+msgid "HD"
+msgstr "HD"
+
+#: yaga/camera_menus.py:583 yaga/settings_window.py:169
+msgid "Handedness"
+msgstr "Händigkeit"
+
+#: yaga/settings_window.py:1120
+msgid "Hide"
+msgstr "Ausblenden"
+
+#: yaga/camera_menus.py:503 yaga/camera_menus.py:548
+msgid "High"
+msgstr "Hoch"
+
+#: yaga/settings_window.py:633
+msgid ""
+"How would you like to connect to your Nextcloud?\n"
+"\n"
+"You can find the app-password QR code in your Nextcloud under:\n"
+"Settings → Security → App passwords → \"Create new app password\"."
+msgstr ""
+"Wie möchtest du deine Nextcloud verbinden?\n"
+"\n"
+"Den App-Passwort-QR-Code findest du in deiner Nextcloud unter:\n"
+"Einstellungen → Sicherheit → App-Passwörter → „Neues App-Passwort erstellen“."
+
+#: yaga/camera_menus.py:243
+msgid "Image"
+msgstr "Bild"
+
+#: yaga/settings_window.py:1445 yaga/settings_window.py:1659
+msgid "Images only"
+msgstr "Nur Bilder"
+
+#: yaga/settings_window.py:240
+msgid "Includes paths, runtime versions, camera plugins, and status flags."
+msgstr "Enthält Pfade, Laufzeitversionen, Kamera-Plugins und Statuswerte."
+
+#: yaga/viewer.py:285
+msgid "Info"
+msgstr "Info"
+
+#: yaga/app.py:1182
+msgid "Invalid folder name"
+msgstr "Ungültiger Ordnername"
+
+#: yaga/settings_window.py:1508
+msgid ""
+"It will disappear from the gallery navigation. The files on disk are not "
+"deleted."
+msgstr ""
+"Er verschwindet aus der Navigation. Die Dateien auf der Festplatte werden "
+"nicht gelöscht."
+
+#: yaga/settings_window.py:297
+msgid "Last checked: "
+msgstr "Zuletzt geprüft: "
+
+#: yaga/settings_window.py:399
+msgid "Later"
+msgstr "Später"
+
+#: yaga/settings_window.py:186
+msgid "Leave empty to use built-in playback"
+msgstr "Leer lassen für integrierte Wiedergabe"
+
+#: yaga/camera_menus.py:590
+msgid "Left"
+msgstr "Links"
+
+#: yaga/camera.py:1956
+msgid "Light off"
+msgstr "Licht aus"
+
+#: yaga/camera.py:1956
+msgid "Light on"
+msgstr "Licht an"
+
+#: yaga/settings_window.py:592
+msgid "Load thumbnails only"
+msgstr "Nur Vorschaubilder laden"
+
+#: yaga/viewer.py:1687
+msgid "Loading…"
+msgstr "Lädt …"
+
+#: yaga/settings_window.py:281
+msgid "Managed by Flatpak"
+msgstr "Über Flatpak verwaltet"
+
+#: yaga/settings_window.py:639
+msgid "Manually"
+msgstr "Manuell"
+
+#: yaga/camera_menus.py:504 yaga/camera_menus.py:525 yaga/camera_menus.py:549
+msgid "Max"
+msgstr "Max"
+
+#: yaga/settings_window.py:202
+msgid "Maximum cache size (MB)"
+msgstr "Maximale Größe (MB)"
+
+#: yaga/settings_window.py:601
+msgid "Merge Nextcloud items into the Overview (thumbnails load on demand)"
+msgstr ""
+"Nextcloud-Inhalte in die Übersicht einblenden (Vorschaubilder werden bei "
+"Bedarf geladen)"
+
+#: yaga/viewer.py:1680
+msgid "Modified"
+msgstr "Geändert"
+
+#: yaga/gallery_selection.py:370
+msgid "Move failed"
+msgstr "Verschieben fehlgeschlagen"
+
+#: yaga/app.py:491
+msgid "Move selected"
+msgstr "Ausgewählte verschieben"
+
+#: yaga/gallery_selection.py:445
+msgid "Moved"
+msgstr "Verschoben"
+
+#: yaga/gallery_selection.py:367
+#, python-format
+msgid "Moved %d items"
+msgstr "%d Elemente verschoben"
+
+#: yaga/gallery_selection.py:376
+#, python-format
+msgid "Moved %d items (%d failed)"
+msgstr "%d Elemente verschoben (%d fehlgeschlagen)"
+
+#: yaga/gallery_selection.py:330
+#, python-format
+msgid "Moving %d items…"
+msgstr "Verschiebe %d Elemente …"
+
+#: yaga/settings_window.py:1609 yaga/viewer.py:1677
+msgid "Name"
+msgstr "Name"
+
+#: yaga/settings_window.py:154
+msgid "Navigation"
+msgstr "Navigation"
+
+#: yaga/camera_menus.py:591
+msgid "Neutral"
+msgstr "Neutral"
+
+#: yaga/app.py:452 yaga/app.py:1144
+msgid "New folder"
+msgstr "Neuer Ordner"
+
+#: yaga/app.py:1441
+msgid "Nextcloud Integration"
+msgstr "Nextcloud-Anbindung"
+
+#: yaga/settings_window.py:521
+msgid "Nextcloud active"
+msgstr "Nextcloud aktiv"
+
+#: yaga/app.py:392 yaga/app.py:1045
+msgid "Nextcloud authentication failed"
+msgstr "Nextcloud-Anmeldung fehlgeschlagen"
+
+#: yaga/viewer.py:603
+msgid "Nextcloud connection disabled"
+msgstr "Nextcloud-Verbindung deaktiviert"
+
+#: yaga/app.py:414
+msgid "Nextcloud error"
+msgstr "Nextcloud-Fehler"
+
+#: yaga/app.py:1221
+msgid "Nextcloud password is unavailable."
+msgstr "Das Nextcloud-Passwort ist nicht verfügbar."
+
+#: yaga/app.py:1448
+msgid ""
+"Nextcloud passwords are stored in your system keyring (or local file with "
+"restricted permissions). Ensure your Nextcloud instance uses HTTPS to "
+"protect data in transit."
+msgstr ""
+"Nextcloud-Passwörter liegen im Schlüsselbund des Systems (oder in einer "
+"lokalen Datei mit eingeschränkten Rechten). Achte darauf, dass deine "
+"Nextcloud HTTPS verwendet, damit die Übertragung geschützt ist."
+
+#: yaga/app.py:398 yaga/app.py:1047
+msgid "Nextcloud path not found"
+msgstr "Nextcloud-Pfad nicht gefunden"
+
+#: yaga/camera.py:737
+msgid "No camera detected"
+msgstr "Keine Kamera gefunden"
+
+#: yaga/camera.py:954
+msgid "No camera source element available"
+msgstr "Kein Kamera-Quellelement verfügbar"
+
+#: yaga/editor/view.py:516
+msgid "No frame"
+msgstr "Ohne Rahmen"
+
+#: yaga/camera.py:2435 yaga/camera.py:2445 yaga/camera.py:2834
+#: yaga/camera.py:2844 yaga/camera_capture_io.py:284
+msgid "No frame available"
+msgstr "Kein Bild verfügbar"
+
+#: yaga/camera.py:1363
+#, python-format
+msgid ""
+"No permission to open %s. Add yourself to the 'video' group: sudo usermod -a "
+"-G video $USER"
+msgstr ""
+"Keine Berechtigung für %s. Füge dich der Gruppe „video“ hinzu: sudo usermod "
+"-a -G video $USER"
+
+#: yaga/app.py:348
+msgid "No pictures found"
+msgstr "Keine Bilder gefunden"
+
+#: yaga/app.py:1220
+msgid "Not connected"
+msgstr "Nicht verbunden"
+
+#: yaga/app.py:1466
+msgid "OK"
+msgstr "OK"
+
+#: yaga/app.py:473
+msgid "Open camera"
+msgstr "Kamera öffnen"
+
+#: yaga/settings_window.py:1441
+msgid "Overview shows the combined content of every other folder."
+msgstr "Übersicht zeigt den kombinierten Inhalt aller anderen Ordner."
+
+#: yaga/settings_window.py:1650
+msgid "Parent folders won't include this folder's content during scans."
+msgstr ""
+"Übergeordnete Ordner berücksichtigen den Inhalt dieses Ordners beim Scan "
+"nicht."
+
+#: yaga/settings_window.py:1611
+msgid "Path"
+msgstr "Pfad"
+
+#: yaga/settings_window.py:1260
+msgid "Path of the Photos folder on your Nextcloud server."
+msgstr "Pfad des Foto-Ordners auf deinem Nextcloud-Server."
+
+#: yaga/settings_window.py:588
+msgid "Performance"
+msgstr "Leistung"
+
+#: yaga/app.py:370
+msgid "Permission denied"
+msgstr "Zugriff verweigert"
+
+#: yaga/gallery_selection.py:418
+msgid "Permission denied. The file or folder is protected."
+msgstr "Zugriff verweigert. Die Datei oder der Ordner ist geschützt."
+
+#: yaga/camera_menus.py:737
+msgid "Photo mode"
+msgstr "Fotomodus"
+
+#: yaga/camera_menus.py:499
+msgid "Photo quality"
+msgstr "Fotoqualität"
+
+#: yaga/camera_menus.py:520
+msgid "Photo size"
+msgstr "Fotogröße"
+
+#: yaga/settings_window.py:1259
+msgid "Photos folder on Nextcloud"
+msgstr "Foto-Ordner auf Nextcloud"
+
+#: yaga/app.py:1403
+msgid ""
+"Photos often contain sensitive metadata (EXIF data):\n"
+"• Camera make & model\n"
+"• GPS coordinates and location history\n"
+"• Timestamp and date taken\n"
+"\n"
+"This app displays EXIF data in the Image Info panel. Be careful when sharing "
+"photos online, as metadata can reveal your location and privacy details."
+msgstr ""
+"Fotos enthalten oft sensible Metadaten (EXIF-Daten):\n"
+"• Kamerahersteller und -modell\n"
+"• GPS-Koordinaten und Ortsverlauf\n"
+"• Aufnahmezeitpunkt\n"
+"\n"
+"Diese App zeigt EXIF-Daten im Bildinfo-Bereich an. Sei vorsichtig beim "
+"Teilen von Fotos im Netz – Metadaten können deinen Aufenthaltsort und "
+"weitere private Details verraten."
+
+#: yaga/settings_window.py:148
+msgid "Photos per row"
+msgstr "Fotos pro Zeile"
+
+#: yaga/gallery_selection.py:242
+msgid "Photos will be moved to trash."
+msgstr "Fotos werden in den Papierkorb verschoben."
+
+#: yaga/app.py:271
+msgid "Pillow is outdated — please update it."
+msgstr "Pillow ist veraltet — bitte aktualisieren."
+
+#: yaga/settings_window.py:754
+msgid "Please fill in all fields."
+msgstr "Bitte alle Felder ausfüllen."
+
+#: yaga/camera_menus.py:225
+msgid "Position"
+msgstr "Position"
+
+#: yaga/app.py:1384
+msgid "Privacy & Help"
+msgstr "Datenschutz & Hilfe"
+
+#: yaga/settings_window.py:949
+msgid "QR code scan error"
+msgstr "QR-Code-Fehler"
+
+#: yaga/settings_window.py:944
+msgid "QR code scanned successfully ✓"
+msgstr "QR-Code erfolgreich gescannt ✓"
+
+#: yaga/settings_window.py:941
+msgid "QR code scanned – credentials entered ✓"
+msgstr "QR-Code gescannt – Zugangsdaten eingetragen ✓"
+
+#: yaga/camera.py:575
+msgid "Quality"
+msgstr "Qualität"
+
+#: yaga/viewer.py:1408
+msgid "RAW images cannot be edited with the built-in editor"
+msgstr "RAW-Bilder lassen sich mit dem eingebauten Editor nicht bearbeiten"
+
+#: yaga/camera_video.py:484
+msgid "Recording failed"
+msgstr "Aufnahme fehlgeschlagen"
+
+#: yaga/camera_video.py:498
+#, python-format
+msgid "Recording failed: %s"
+msgstr "Aufnahme fehlgeschlagen: %s"
+
+#: yaga/camera_video.py:277 yaga/camera_video.py:413
+msgid "Recording…"
+msgstr "Nimmt auf …"
+
+#: yaga/viewer.py:318
+msgid "Redo"
+msgstr "Wiederherstellen"
+
+#: yaga/app.py:436
+msgid "Refresh"
+msgstr "Aktualisieren"
+
+#: yaga/settings_window.py:1133 yaga/settings_window.py:1511
+msgid "Remove"
+msgstr "Entfernen"
+
+#: yaga/settings_window.py:1507
+msgid "Remove this folder?"
+msgstr "Diesen Ordner entfernen?"
+
+#: yaga/editor/view.py:450 yaga/editor/view.py:695
+msgid "Reset"
+msgstr "Zurücksetzen"
+
+#: yaga/editor/view.py:715
+msgid "Reset brush strokes"
+msgstr "Pinselstriche zurücksetzen"
+
+#: yaga/camera_menus.py:252
+msgid "Reset to defaults"
+msgstr "Auf Standard zurücksetzen"
+
+#: yaga/camera.py:535
+msgid "Resolution"
+msgstr "Auflösung"
+
+#: yaga/settings_window.py:396
+msgid "Restart Yaga?"
+msgstr "Yaga neu starten?"
+
+#: yaga/settings_window.py:400
+msgid "Restart now"
+msgstr "Jetzt neu starten"
+
+#: yaga/settings_window.py:380
+msgid "Restart required"
+msgstr "Neustart erforderlich"
+
+#: yaga/camera_menus.py:589
+msgid "Right"
+msgstr "Rechts"
+
+#: yaga/viewer.py:297
+msgid "Rotate clockwise"
+msgstr "Im Uhrzeigersinn drehen"
+
+#: yaga/camera_menus.py:235
+msgid "Saturation"
+msgstr "Sättigung"
+
+#: yaga/settings_window.py:1271 yaga/settings_window.py:1461
+#: yaga/settings_window.py:1678 yaga/viewer.py:324 yaga/viewer.py:1058
+msgid "Save"
+msgstr "Speichern"
+
+#: yaga/viewer.py:1117
+msgid "Save failed"
+msgstr "Speichern fehlgeschlagen"
+
+#: yaga/viewer.py:1054
+msgid "Save rotation?"
+msgstr "Rotation speichern?"
+
+#: yaga/camera_capture_io.py:342 yaga/camera_video.py:477
+#, python-format
+msgid "Saved %s"
+msgstr "%s gespeichert"
+
+#: yaga/settings_window.py:577 yaga/settings_window.py:640
+#: yaga/settings_window.py:878
+msgid "Scan QR code"
+msgstr "QR-Code scannen"
+
+#: yaga/app.py:448
+msgid "Search"
+msgstr "Suchen"
+
+#: yaga/camera.py:500
+msgid "Self-timer"
+msgstr "Selbstauslöser"
+
+#: yaga/camera.py:1869
+msgid "Self-timer off"
+msgstr "Selbstauslöser aus"
+
+#: yaga/camera.py:1882
+#, python-format
+msgid "Self-timer: %d seconds"
+msgstr "Selbstauslöser: %d Sekunden"
+
+#: yaga/settings_window.py:564
+msgid "Server URL"
+msgstr "Server-URL"
+
+#: yaga/settings_window.py:534
+msgid "Set up"
+msgstr "Einrichten"
+
+#: yaga/settings_window.py:531 yaga/settings_window.py:631
+msgid "Set up connection"
+msgstr "Verbindung einrichten"
+
+#: yaga/app.py:460 yaga/camera.py:594 yaga/settings_window.py:70
+msgid "Settings"
+msgstr "Einstellungen"
+
+#: yaga/viewer.py:337
+msgid "Share"
+msgstr "Teilen"
+
+#: yaga/gallery_selection.py:484
+#, python-format
+msgid "Share %d images"
+msgstr "%d Bilder teilen"
+
+#: yaga/gallery_selection.py:482
+msgid "Share image"
+msgstr "Bild teilen"
+
+#: yaga/app.py:497
+msgid "Share selected"
+msgstr "Ausgewählte teilen"
+
+#: yaga/settings_window.py:1120 yaga/settings_window.py:1450
+#: yaga/settings_window.py:1664
+msgid "Show"
+msgstr "Anzeigen"
+
+#: yaga/settings_window.py:600
+msgid "Show in Overview"
+msgstr "In Übersicht anzeigen"
+
+#: yaga/viewer.py:1679
+msgid "Size"
+msgstr "Größe"
+
+#: yaga/settings_window.py:593
+msgid "Skip downloading full files during sync"
+msgstr "Beim Abgleich keine vollständigen Dateien herunterladen"
+
+#: yaga/app.py:465
+msgid "Sort"
+msgstr "Sortierung"
+
+#: yaga/camera.py:1022
+msgid "Source element has no usable output pad"
+msgstr "Das Quellelement hat keinen nutzbaren Ausgang"
+
+#: yaga/viewer.py:331 yaga/viewer.py:1792
+msgid "Start slideshow"
+msgstr "Diaschau starten"
+
+#: yaga/camera_menus.py:502 yaga/camera_menus.py:547
+msgid "Std"
+msgstr "Std"
+
+#: yaga/editor/view.py:220
+msgid "Sticker"
+msgstr "Sticker"
+
+#: yaga/viewer.py:1785
+msgid "Stop slideshow"
+msgstr "Diaschau beenden"
+
+#: yaga/camera.py:606
+msgid "Switch camera"
+msgstr "Kamera wechseln"
+
+#: yaga/app.py:377
+msgid "System error"
+msgstr "Systemfehler"
+
+#: yaga/camera_menus.py:204
+msgid "Temperature"
+msgstr "Farbtemperatur"
+
+#: yaga/editor/view.py:577
+msgid "Text color"
+msgstr "Textfarbe"
+
+#: yaga/editor/view.py:568
+msgid "Text input…"
+msgstr "Text eingeben…"
+
+#: yaga/app.py:1251
+#, python-format
+msgid "The Nextcloud server rejected the new folder %s."
+msgstr "Der Nextcloud-Server hat den neuen Ordner %s abgelehnt."
+
+#: yaga/app.py:393
+msgid ""
+"The app password is incorrect or the account has been revoked. Check "
+"Nextcloud settings."
+msgstr ""
+"Das App-Passwort ist falsch oder der Zugang wurde widerrufen. Bitte in den "
+"Nextcloud-Einstellungen prüfen."
+
+#: yaga/app.py:1132
+msgid "The current location is not available."
+msgstr "Der aktuelle Ort ist nicht verfügbar."
+
+#: yaga/app.py:399
+msgid ""
+"The folder or file doesn't exist on the Nextcloud server. It may have been "
+"deleted."
+msgstr ""
+"Der Ordner oder die Datei existiert nicht auf dem Nextcloud-Server. "
+"Möglicherweise wurde sie gelöscht."
+
+#: yaga/viewer.py:1468
+msgid ""
+"The image editor could not start. This may be due to insufficient memory or "
+"unsupported image format."
+msgstr ""
+"Der Bildeditor konnte nicht gestartet werden. Möglicherweise fehlt "
+"Arbeitsspeicher oder das Bildformat wird nicht unterstützt."
+
+#: yaga/viewer.py:1055
+msgid "The image has been rotated. Save the change?"
+msgstr "Das Bild wurde gedreht. Änderung speichern?"
+
+#: yaga/app.py:280
+msgid "The media index was damaged and is being rebuilt."
+msgstr "Der Medienindex war beschädigt und wird neu aufgebaut."
+
+#: yaga/settings_window.py:1606
+msgid "The name appears as the entry label in the gallery navigation."
+msgstr "Der Name erscheint als Beschriftung in der Galerie-Navigation."
+
+#: yaga/viewer.py:1118
+msgid "The rotation could not be saved. The photo on disk is unchanged."
+msgstr ""
+"Die Drehung konnte nicht gespeichert werden. Das Foto auf der Festplatte ist "
+"unverändert."
+
+#: yaga/settings_window.py:773
+msgid ""
+"The server URL starts with http:// — your password and photos will be "
+"transmitted unencrypted. Anyone on the same network can read them. Use "
+"https:// unless you have a specific reason not to."
+msgstr ""
+"Die Server-Adresse beginnt mit http:// – dein Passwort und deine Fotos "
+"werden unverschlüsselt übertragen. Jeder im selben Netzwerk kann sie "
+"mitlesen. Verwende https://, sofern nichts ausdrücklich dagegen spricht."
+
+#: yaga/settings_window.py:397
+msgid "The update was installed. Restart Yaga to use the new version."
+msgstr ""
+"Das Update wurde installiert. Starte Yaga neu, um die neue Version zu "
+"verwenden."
+
+#: yaga/viewer.py:582
+msgid ""
+"This image is stored in your Nextcloud.\n"
+"The connection is currently disabled."
+msgstr ""
+"Das Bild liegt in deiner Nextcloud.\n"
+"Die Verbindung ist deaktiviert."
+
+#: yaga/camera_menus.py:168
+msgid "Time"
+msgstr "Zeit"
+
+#: yaga/viewer.py:311
+msgid "Undo"
+msgstr "Rückgängig"
+
+#: yaga/settings_window.py:771
+msgid "Unencrypted connection"
+msgstr "Unverschlüsselte Verbindung"
+
+#: yaga/settings_window.py:351
+msgid "Up to date"
+msgstr "Aktuell"
+
+#: yaga/settings_window.py:390
+msgid "Update failed"
+msgstr "Update fehlgeschlagen"
+
+#: yaga/settings_window.py:342
+#, python-format
+msgid "Update to v%s"
+msgstr "Auf v%s aktualisieren"
+
+#: yaga/settings_window.py:270
+msgid "Updates"
+msgstr "Aktualisierungen"
+
+#: yaga/settings_window.py:361
+msgid "Updating…"
+msgstr "Aktualisiere …"
+
+#: yaga/settings_window.py:569
+msgid "Username"
+msgstr "Benutzername"
+
+#: yaga/settings_window.py:185
+msgid "Video"
+msgstr "Video"
+
+#: yaga/camera.py:2000
+msgid "Video light unavailable"
+msgstr "Videolicht nicht verfügbar"
+
+#: yaga/camera_menus.py:737
+msgid "Video mode"
+msgstr "Videomodus"
+
+#: yaga/camera_menus.py:544
+msgid "Video quality"
+msgstr "Videoqualität"
+
+#: yaga/settings_window.py:1445 yaga/settings_window.py:1659
+msgid "Videos only"
+msgstr "Nur Videos"
+
+#: yaga/app.py:1427
+msgid ""
+"When you delete photos in Yaga, they are moved to trash. They can typically "
+"be recovered from your system trash until it is permanently emptied. For "
+"secure deletion, consider using specialized tools or encrypted storage."
+msgstr ""
+"Gelöschte Fotos wandern in den Papierkorb. Von dort lassen sie sich in der "
+"Regel wiederherstellen, bis der Papierkorb endgültig geleert wird. Für "
+"sicheres Löschen eignen sich spezialisierte Werkzeuge oder verschlüsselter "
+"Speicher."
+
+#: yaga/settings_window.py:155
+msgid "Where the category bar is shown around the gallery."
+msgstr "Wo die Kategorieleiste um die Galerie herum erscheint."
+
+#: yaga/settings_window.py:1451 yaga/settings_window.py:1665
+msgid "Which media types appear when this folder is opened."
+msgstr "Welche Medientypen erscheinen, wenn dieser Ordner geöffnet wird."
+
+#: yaga/settings_window.py:171
+msgid "Which side thumb-reachable camera controls sit on."
+msgstr "Auf welcher Seite die daumengerechten Kamerabedienelemente liegen."
+
+#: yaga/camera_menus.py:178
+msgid "White balance"
+msgstr "Weißabgleich"
+
+#: yaga/app.py:371
+msgid "You don't have permission to access this file."
+msgstr "Du hast keine Berechtigung für diese Datei."
+
+#: yaga/app.py:276
+msgid "Your settings could not be read and were reset to defaults."
+msgstr ""
+"Deine Einstellungen konnten nicht gelesen werden und wurden zurückgesetzt."
+
+#: yaga/camera.py:1365
+msgid "camera"
+msgstr "Kamera"
+
+#: yaga/gallery_selection.py:229
+msgid "selected"
+msgstr "ausgewählt"
+
+#: yaga/camera.py:425
+msgid "←  swipe  →"
+msgstr "←  wischen  →"
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "%d hits"
+msgstr "%d Treffer"
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "All media"
+msgstr "Alle Medien"
+
 #. Referenced indirectly — passed to _() as a variable.
 msgid "April"
 msgstr "April"
 
-
-#: yaga/app.py:788
-msgid "Ascending"
-msgstr "Aufsteigend"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "August"
 msgstr "August"
-
-
-#: yaga/camera.py:1682 yaga/camera.py:1706 yaga/camera.py:1718
-#: yaga/camera.py:1740
-msgid "Auto"
-msgstr "Automatisch"
-
-
-#: yaga/app.py:491
-msgid "Back"
-msgstr "Zurück"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Birthday"
@@ -123,284 +1332,17 @@ msgstr "Schwarz"
 msgid "Blue"
 msgstr "Blau"
 
-#: yaga/settings_window.py:1434 yaga/settings_window.py:1648
-msgid "Both"
-msgstr "Beides"
-
-#: yaga/camera.py:1757
-msgid "Brightness"
-msgstr "Helligkeit"
-
-#: yaga/editor/view.py:721
-msgid "Brush size"
-msgstr "Pinselgröße"
-
-#: yaga/settings_window.py:196
-msgid "Cache"
-msgstr "Zwischenspeicher"
-
-
-#: yaga/camera.py:366 yaga/viewer.py:1700 yaga/viewer.py:1705
-msgid "Camera"
-msgstr "Kamera"
-
-
-#: yaga/camera.py:1532
-msgid "Camera and preview pipeline couldn't agree on a format. Pick a lower resolution from the menu."
-msgstr "Kamera und Vorschau konnten sich auf kein Format einigen. Bitte im Menü eine niedrigere Auflösung wählen."
-
-
-#: yaga/camera.py:709
-msgid "Camera controls"
-msgstr "Kameraeinstellungen"
-
-
-#: yaga/camera.py:1518
-#, python-format
-msgid "Camera node%s isn't a v4l2 capture device. Try the switch-camera button or open a different node."
-msgstr "Kameraknoten%s ist kein v4l2-Aufnahmegerät. Bitte die Kamera wechseln oder einen anderen Knoten öffnen."
-
-
-#: yaga/camera.py:1523
-#, python-format
-msgid "Camera%s is in use by another app — close it and retry."
-msgstr "Kamera%s wird von einer anderen App verwendet – bitte schließen und erneut versuchen."
-
-
-#: yaga/app.py:1635 yaga/app.py:2196 yaga/app.py:2444
-#: yaga/settings_window.py:627 yaga/settings_window.py:768
-#: yaga/settings_window.py:875 yaga/settings_window.py:1259
-#: yaga/settings_window.py:1449 yaga/settings_window.py:1499
-#: yaga/settings_window.py:1666 yaga/viewer.py:282 yaga/viewer.py:588
-#: yaga/viewer.py:1039 yaga/viewer.py:1579
-msgid "Cancel"
-msgstr "Abbrechen"
-
-#: yaga/app.py:556
-msgid "Cancel selection"
-msgstr "Auswahl aufheben"
-
-#: yaga/settings_window.py:780
-msgid "Cancelled"
-msgstr "Abgebrochen"
-
-
-#: yaga/app.py:1618
-msgid "Cannot create folder"
-msgstr "Ordner kann nicht erstellt werden"
-
-
-#: yaga/app.py:2369
-msgid "Cannot delete"
-msgstr "Löschen nicht möglich"
-
-
-#: yaga/app.py:2429
-msgid "Cannot share Nextcloud items directly — open them first to download."
-msgstr "Nextcloud-Elemente lassen sich nicht direkt teilen – bitte vorher öffnen, damit sie heruntergeladen werden."
-
-#: yaga/camera.py:801
-msgid "Capture"
-msgstr "Aufnehmen"
-
-
-#: yaga/camera.py:3685
-#, python-format
-msgid "Capture failed: %s"
-msgstr "Aufnahme fehlgeschlagen: %s"
-
-
-#: yaga/camera.py:1326
-msgid "Capture unavailable"
-msgstr "Aufnahme nicht verfügbar"
-
-
-#: yaga/camera.py:563
-msgid "Capturing…"
-msgstr "Nimmt auf …"
-
-
-#: yaga/settings_window.py:274 yaga/settings_window.py:300
-msgid "Check for updates"
-msgstr "Auf Updates prüfen"
-
-#: yaga/settings_window.py:306
-msgid "Checking…"
-msgstr "Prüfe …"
-
-#: yaga/app.py:2262 yaga/app.py:2384 yaga/settings_window.py:960
-#: yaga/settings_window.py:1130 yaga/settings_window.py:1201
-#: yaga/settings_window.py:1359 yaga/settings_window.py:1377
-#: yaga/settings_window.py:1610
-msgid "Choose folder"
-msgstr "Ordner wählen"
-
-#: yaga/app.py:2438
-msgid "Choose how to share:"
-msgstr "Übertragungsweg wählen:"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Christmas"
 msgstr "Weihnachten"
-
-#: yaga/settings_window.py:209
-msgid "Clear cache"
-msgstr "Cache löschen"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Clear thumbnail cache"
 msgstr "Thumbnail-Cache löschen"
 
-#: yaga/app.py:404 yaga/viewer.py:253 yaga/viewer.py:1448
-msgid "Close"
-msgstr "Schließen"
-
-#: yaga/settings_window.py:539
-msgid "Connect"
-msgstr "Verbinden"
-
-#: yaga/settings_window.py:769
-msgid "Connect anyway"
-msgstr "Trotzdem verbinden"
-
-
-#: yaga/viewer.py:589
-msgid "Connect once"
-msgstr "Einmalig verbinden"
-
-#: yaga/viewer.py:590
-msgid "Connect permanently"
-msgstr "Dauerhaft verbinden"
-
-#: yaga/settings_window.py:521
-msgid "Connect to your Nextcloud"
-msgstr "Mit deiner Nextcloud verbinden"
-
-#: yaga/settings_window.py:733
-msgid "Connected ✓"
-msgstr "Verbunden ✓"
-
-#: yaga/settings_window.py:801
-msgid "Connecting…"
-msgstr "Verbinde…"
-
-#: yaga/app.py:458 yaga/settings_window.py:837
-msgid "Connection failed"
-msgstr "Verbindung fehlgeschlagen"
-
-#: yaga/camera.py:1758
-msgid "Contrast"
-msgstr "Kontrast"
-
-#: yaga/camera.py:1941
-msgid "Controls reset"
-msgstr "Einstellungen zurückgesetzt"
-
-
-#: yaga/settings_window.py:410
-msgid "Copied"
-msgstr "Kopiert"
-
-#: yaga/settings_window.py:242 yaga/settings_window.py:411
-msgid "Copy"
-msgstr "Kopieren"
-
-#: yaga/settings_window.py:233
-msgid "Copy this when reporting camera, Nextcloud, or media-scan issues."
-msgstr "Beim Melden von Kamera-, Nextcloud- oder Medien-Scan-Problemen kopieren."
-
-#: yaga/app.py:428
-msgid "Could not access the file due to a system error."
-msgstr "Auf die Datei konnte wegen eines Systemfehlers nicht zugegriffen werden."
-
-
-#: yaga/app.py:415
-msgid "Could not access the file. It may have been moved, deleted, or you don't have permission."
-msgstr "Auf die Datei konnte nicht zugegriffen werden. Möglicherweise wurde sie verschoben oder gelöscht, oder die Berechtigung fehlt."
-
-
-#: yaga/app.py:2399 yaga/app.py:2469 yaga/viewer.py:1598
-msgid "Could not complete action"
-msgstr "Aktion konnte nicht ausgeführt werden"
-
-#: yaga/app.py:1104
-msgid "Could not connect to Nextcloud"
-msgstr "Keine Verbindung zu Nextcloud"
-
-#: yaga/app.py:459
-msgid "Could not connect to Nextcloud. Check your internet connection and server URL."
-msgstr "Keine Verbindung zu Nextcloud. Bitte Internetverbindung und Server-URL prüfen."
-
-#: yaga/app.py:1697 yaga/app.py:1737
-msgid "Could not create folder"
-msgstr "Ordner konnte nicht erstellt werden"
-
-
-#: yaga/app.py:2246
-msgid "Could not delete all files. Check file permissions or disk state."
-msgstr "Es konnten nicht alle Dateien gelöscht werden. Bitte Dateirechte und Datenträger prüfen."
-
-
-#: yaga/viewer.py:700
-msgid "Could not load file"
-msgstr "Datei konnte nicht geladen werden"
-
-#: yaga/app.py:2323
-msgid "Could not move files. Check file permissions and disk space."
-msgstr "Dateien konnten nicht verschoben werden. Bitte Dateirechte und freien Speicher prüfen."
-
-
-#: yaga/app.py:2376
-msgid "Could not move the file to trash."
-msgstr "Die Datei konnte nicht in den Papierkorb verschoben werden."
-
-
-#: yaga/viewer.py:1372 yaga/viewer.py:1391 yaga/viewer.py:1445
-msgid "Could not open editor"
-msgstr "Editor konnte nicht geöffnet werden"
-
-
-#: yaga/camera.py:4260
-msgid "Could not read frame"
-msgstr "Bild konnte nicht gelesen werden"
-
-
-#: yaga/viewer.py:1522
-msgid "Could not save edited image"
-msgstr "Bearbeitetes Bild konnte nicht gespeichert werden"
-
-#: yaga/camera.py:1306
-msgid "Could not start camera"
-msgstr "Kamera konnte nicht gestartet werden"
-
-
-#: yaga/app.py:1636
-msgid "Create"
-msgstr "Erstellen"
-
-
-#: yaga/app.py:1632
-#, python-format
-msgid "Create a new folder in %s"
-msgstr "Neuen Ordner in %s erstellen"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Create app password"
 msgstr "App-Passwort erstellen"
-
-#: yaga/settings_window.py:531
-msgid "Credentials"
-msgstr "Zugangsdaten"
-
-#: yaga/editor/view.py:221 yaga/editor/view.py:688
-msgid "Crop"
-msgstr "Zuschneiden"
-
-#: yaga/settings_window.py:208
-msgid "Current cache size"
-msgstr "Aktuelle Größe"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Dark"
@@ -414,31 +1356,6 @@ msgstr "Datum"
 msgid "December"
 msgstr "Dezember"
 
-#: yaga/app.py:2197 yaga/viewer.py:258 yaga/viewer.py:1580
-msgid "Delete"
-msgstr "Löschen"
-
-#: yaga/app.py:2245 yaga/app.py:2375
-msgid "Delete failed"
-msgstr "Löschen fehlgeschlagen"
-
-
-#: yaga/viewer.py:1576
-msgid "Delete media?"
-msgstr "Medium löschen?"
-
-#: yaga/app.py:534
-msgid "Delete selected"
-msgstr "Ausgewählte löschen"
-
-#: yaga/app.py:2193
-msgid "Delete selection?"
-msgstr "Auswahl löschen?"
-
-#: yaga/viewer.py:1577
-msgid "Delete this item from the gallery?"
-msgstr "Dieses Element aus der Galerie löschen?"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Deleted"
 msgstr "Gelöscht"
@@ -447,98 +1364,9 @@ msgstr "Gelöscht"
 msgid "Deleted %d items"
 msgstr "%d Elemente gelöscht"
 
-#: yaga/app.py:2252
-#, python-format
-msgid "Deleted %d/%d items (%d failed)"
-msgstr "%d/%d Elemente gelöscht (%d fehlgeschlagen)"
-
-#: yaga/app.py:2208
-#, python-format
-msgid "Deleting %d items…"
-msgstr "Lösche %d Elemente …"
-
-
-#: yaga/app.py:2697
-msgid "Deleting Photos"
-msgstr "Fotos löschen"
-
-
-#: yaga/app.py:788
-msgid "Descending"
-msgstr "Absteigend"
-
-#: yaga/settings_window.py:239
-msgid "Diagnostic report"
-msgstr "Diagnosebericht"
-
-#: yaga/settings_window.py:222 yaga/settings_window.py:231
-msgid "Diagnostics"
-msgstr "Diagnose"
-
-#: yaga/viewer.py:1696
-msgid "Dimensions"
-msgstr "Abmessungen"
-
-#: yaga/viewer.py:1037
-msgid "Discard"
-msgstr "Verwerfen"
-
-#: yaga/settings_window.py:546
-msgid "Disconnect"
-msgstr "Trennen"
-
-#: yaga/settings_window.py:735 yaga/settings_window.py:861
-msgid "Disconnected"
-msgstr "Getrennt"
-
-#: yaga/settings_window.py:197
-msgid "Disk cache for thumbnails and downloaded Nextcloud files. When the limit is reached, the least-recently-used files are deleted first."
-msgstr "Zwischenspeicher für Vorschaubilder und heruntergeladene Nextcloud-Dateien. Ist die Grenze erreicht, werden die am längsten unbenutzten Dateien zuerst gelöscht."
-
-
-#: yaga/settings_window.py:1637
-msgid "Don't inherit"
-msgstr "Nicht vererben"
-
-#: yaga/camera.py:1197
-msgid "Downstream element has no sink pad"
-msgstr "Das nachgelagerte Element hat keinen Eingang"
-
-
-#: yaga/settings_window.py:1076
-msgid "Drag to reorder"
-msgstr "Zum Sortieren ziehen"
-
-#: yaga/app.py:2673
-msgid "EXIF Data"
-msgstr "EXIF-Daten"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Easter"
 msgstr "Ostern"
-
-#: yaga/camera.py:2512 yaga/camera.py:2557
-msgid "Eco"
-msgstr "Eco"
-
-
-#: yaga/settings_window.py:1100 yaga/settings_window.py:1136
-#: yaga/settings_window.py:1140 yaga/viewer.py:271
-msgid "Edit"
-msgstr "Bearbeiten"
-
-#: yaga/settings_window.py:1429 yaga/settings_window.py:1594
-msgid "Edit folder"
-msgstr "Ordner bearbeiten"
-
-#: yaga/editor/view.py:219
-msgid "Effects"
-msgstr "Effekte"
-
-#: yaga/app.py:2446
-msgid "Email"
-msgstr "E-Mail"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Emotions"
@@ -548,117 +1376,21 @@ msgstr "Emotionen"
 msgid "Empty"
 msgstr "Leer"
 
-#: yaga/viewer.py:585
-msgid "Enable the connection now so the image can be loaded."
-msgstr "Aktiviere jetzt die Verbindung, damit das Bild geladen werden kann."
-
-#: yaga/settings_window.py:511
-msgid "Enables or disables all Nextcloud functions"
-msgstr "Aktiviert oder deaktiviert alle Nextcloud-Funktionen"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "English"
 msgstr "Englisch"
-
-#: yaga/app.py:433
-msgid "Error"
-msgstr "Fehler"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Exit fullscreen"
 msgstr "Vollbild verlassen"
 
-#: yaga/camera.py:1677
-msgid "Exposure"
-msgstr "Belichtung"
-
-
-#: yaga/settings_window.py:189
-msgid "External player command"
-msgstr "Externer Player-Befehl"
-
-#: yaga/camera.py:2538
-msgid "FHD"
-msgstr "FHD"
-
-
-#: yaga/camera.py:4274 yaga/camera.py:4298 yaga/camera.py:4308
-#, python-format
-msgid "Failed to save: %s"
-msgstr "Speichern fehlgeschlagen: %s"
-
-
-#: yaga/camera.py:4301
-msgid "Failed to save: too many collisions"
-msgstr "Speichern fehlgeschlagen: zu viele Namenskonflikte"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "February"
 msgstr "Februar"
 
-#: yaga/app.py:414
-msgid "File not found"
-msgstr "Datei nicht gefunden"
-
-
-#: yaga/app.py:566
-msgid "Filename, date, month, EXIF…"
-msgstr "Dateiname, Datum, Monat, EXIF…"
-
-#: yaga/editor/view.py:217
-msgid "Filter"
-msgstr "Filter"
-
-
-#: yaga/camera.py:2775
-msgid "Flash off"
-msgstr "Blitz aus"
-
-
-#: yaga/camera.py:2775
-msgid "Flash on"
-msgstr "Blitz an"
-
-
-#: yaga/camera.py:1738
-msgid "Focus"
-msgstr "Fokus"
-
-
-#: yaga/viewer.py:1656
-msgid "Folder"
-msgstr "Ordner"
-
-#: yaga/app.py:396
-#, python-format
-msgid "Folder %s not found"
-msgstr "Ordner %s nicht gefunden"
-
-
-#: yaga/app.py:1691
-msgid "Folder exists"
-msgstr "Ordner existiert bereits"
-
-
-#: yaga/app.py:1624
-msgid "Folder name"
-msgstr "Ordnername"
-
-
-#: yaga/app.py:1670
-msgid "Folder names cannot contain slashes."
-msgstr "Ordnernamen dürfen keine Schrägstriche enthalten."
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Folder structure"
 msgstr "Ordnerstruktur"
-
-#: yaga/settings_window.py:100 yaga/settings_window.py:105
-msgid "Folders"
-msgstr "Ordner"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Frame"
@@ -668,25 +1400,6 @@ msgstr "Rahmen"
 msgid "Fullscreen"
 msgstr "Vollbild"
 
-#: yaga/viewer.py:1702 yaga/viewer.py:1706
-msgid "GPS"
-msgstr "GPS"
-
-
-#: yaga/settings_window.py:881
-msgid "GStreamer camera support missing.\nInstall: apt install gstreamer1.0-plugins-bad\n                    python3-gst-1.0"
-msgstr "GStreamer-Kamera-Unterstützung fehlt.\nInstallieren: apt install gstreamer1.0-plugins-bad\n              python3-gst-1.0"
-
-#: yaga/camera.py:1756
-msgid "Gain"
-msgstr "Verstärkung"
-
-
-#: yaga/camera.py:2620
-msgid "Geotagging"
-msgstr "Standortdaten"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "German"
 msgstr "Deutsch"
@@ -694,60 +1407,6 @@ msgstr "Deutsch"
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Green"
 msgstr "Grün"
-
-#: yaga/camera.py:658 yaga/settings_window.py:145
-msgid "Grid"
-msgstr "Raster"
-
-#: yaga/camera.py:2539
-msgid "HD"
-msgstr "HD"
-
-
-#: yaga/camera.py:2594 yaga/settings_window.py:169
-msgid "Handedness"
-msgstr "Händigkeit"
-
-
-#: yaga/settings_window.py:1109
-msgid "Hide"
-msgstr "Ausblenden"
-
-#: yaga/camera.py:2514 yaga/camera.py:2559
-msgid "High"
-msgstr "Hoch"
-
-
-#: yaga/settings_window.py:622
-msgid "How would you like to connect to your Nextcloud?\n\nYou can find the app-password QR code in your Nextcloud under:\nSettings → Security → App passwords → \"Create new app password\"."
-msgstr "Wie möchtest du deine Nextcloud verbinden?\n\nDen App-Passwort-QR-Code findest du in deiner Nextcloud unter:\nEinstellungen → Sicherheit → App-Passwörter → „Neues App-Passwort erstellen“."
-
-#: yaga/camera.py:1767
-msgid "Image"
-msgstr "Bild"
-
-
-#: yaga/settings_window.py:1434 yaga/settings_window.py:1648
-msgid "Images only"
-msgstr "Nur Bilder"
-
-#: yaga/settings_window.py:240
-msgid "Includes paths, runtime versions, camera plugins, and status flags."
-msgstr "Enthält Pfade, Laufzeitversionen, Kamera-Plugins und Statuswerte."
-
-#: yaga/viewer.py:265
-msgid "Info"
-msgstr "Info"
-
-
-#: yaga/app.py:1669
-msgid "Invalid folder name"
-msgstr "Ungültiger Ordnername"
-
-
-#: yaga/settings_window.py:1497
-msgid "It will disappear from the gallery navigation. The files on disk are not deleted."
-msgstr "Er verschwindet aus der Navigation. Die Dateien auf der Festplatte werden nicht gelöscht."
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "January"
@@ -765,67 +1424,17 @@ msgstr "Juni"
 msgid "Language"
 msgstr "Sprache"
 
-#: yaga/settings_window.py:286
-msgid "Last checked: "
-msgstr "Zuletzt geprüft: "
-
-#: yaga/settings_window.py:388
-msgid "Later"
-msgstr "Später"
-
-#: yaga/settings_window.py:186
-msgid "Leave empty to use built-in playback"
-msgstr "Leer lassen für integrierte Wiedergabe"
-
-#: yaga/camera.py:2601
-msgid "Left"
-msgstr "Links"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Light"
 msgstr "Hell"
-
-#: yaga/camera.py:2773
-msgid "Light off"
-msgstr "Licht aus"
-
-
-#: yaga/camera.py:2773
-msgid "Light on"
-msgstr "Licht an"
-
-
-#: yaga/settings_window.py:581
-msgid "Load thumbnails only"
-msgstr "Nur Vorschaubilder laden"
-
-#: yaga/viewer.py:1665
-msgid "Loading…"
-msgstr "Lädt …"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Locations"
 msgstr "Orte"
 
-#: yaga/settings_window.py:628
-msgid "Manually"
-msgstr "Manuell"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "March"
 msgstr "März"
-
-#: yaga/camera.py:2515 yaga/camera.py:2536 yaga/camera.py:2560
-msgid "Max"
-msgstr "Max"
-
-
-#: yaga/settings_window.py:202
-msgid "Maximum cache size (MB)"
-msgstr "Maximale Größe (MB)"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "May"
@@ -835,70 +1444,13 @@ msgstr "Mai"
 msgid "Media folders"
 msgstr "Medienordner"
 
-#: yaga/settings_window.py:590
-msgid "Merge Nextcloud items into the Overview (thumbnails load on demand)"
-msgstr "Nextcloud-Inhalte in die Übersicht einblenden (Vorschaubilder werden bei Bedarf geladen)"
-
-#: yaga/viewer.py:1658
-msgid "Modified"
-msgstr "Geändert"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Move"
 msgstr "Verschieben"
 
-#: yaga/app.py:2322
-msgid "Move failed"
-msgstr "Verschieben fehlgeschlagen"
-
-
-#: yaga/app.py:541
-msgid "Move selected"
-msgstr "Ausgewählte verschieben"
-
-#: yaga/app.py:2397
-msgid "Moved"
-msgstr "Verschoben"
-
-#: yaga/app.py:2319
-#, python-format
-msgid "Moved %d items"
-msgstr "%d Elemente verschoben"
-
-#: yaga/app.py:2328
-#, python-format
-msgid "Moved %d items (%d failed)"
-msgstr "%d Elemente verschoben (%d fehlgeschlagen)"
-
-#: yaga/app.py:2282
-#, python-format
-msgid "Moving %d items…"
-msgstr "Verschiebe %d Elemente …"
-
-
-#: yaga/settings_window.py:1598 yaga/viewer.py:1655
-msgid "Name"
-msgstr "Name"
-
-
-#: yaga/settings_window.py:154
-msgid "Navigation"
-msgstr "Navigation"
-
-
-#: yaga/camera.py:2602
-msgid "Neutral"
-msgstr "Neutral"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "New Year"
 msgstr "Silvester"
-
-#: yaga/app.py:502 yaga/app.py:1631
-msgid "New folder"
-msgstr "Neuer Ordner"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Newest first"
@@ -908,79 +1460,13 @@ msgstr "Neueste zuerst"
 msgid "Nextcloud"
 msgstr "Nextcloud"
 
-
-#: yaga/app.py:2718
-msgid "Nextcloud Integration"
-msgstr "Nextcloud-Anbindung"
-
-
-#: yaga/settings_window.py:510
-msgid "Nextcloud active"
-msgstr "Nextcloud aktiv"
-
-#: yaga/app.py:442 yaga/app.py:1101
-msgid "Nextcloud authentication failed"
-msgstr "Nextcloud-Anmeldung fehlgeschlagen"
-
-#: yaga/viewer.py:583
-msgid "Nextcloud connection disabled"
-msgstr "Nextcloud-Verbindung deaktiviert"
-
-#: yaga/app.py:464
-msgid "Nextcloud error"
-msgstr "Nextcloud-Fehler"
-
-#: yaga/app.py:1708
-msgid "Nextcloud password is unavailable."
-msgstr "Das Nextcloud-Passwort ist nicht verfügbar."
-
-
-#: yaga/app.py:2725
-msgid "Nextcloud passwords are stored in your system keyring (or local file with restricted permissions). Ensure your Nextcloud instance uses HTTPS to protect data in transit."
-msgstr "Nextcloud-Passwörter liegen im Schlüsselbund des Systems (oder in einer lokalen Datei mit eingeschränkten Rechten). Achte darauf, dass deine Nextcloud HTTPS verwendet, damit die Übertragung geschützt ist."
-
-
-#: yaga/app.py:448 yaga/app.py:1103
-msgid "Nextcloud path not found"
-msgstr "Nextcloud-Pfad nicht gefunden"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Nextcloud → Settings → Security → App passwords"
 msgstr "Nextcloud → Einstellungen → Sicherheit → App-Passwörter"
 
-#: yaga/camera.py:901
-msgid "No camera detected"
-msgstr "Keine Kamera gefunden"
-
-
-#: yaga/camera.py:1118
-msgid "No camera source element available"
-msgstr "Kein Kamera-Quellelement verfügbar"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "No configured folder exists yet."
 msgstr "Noch kein konfigurierter Ordner vorhanden."
-
-#: yaga/editor/view.py:516
-msgid "No frame"
-msgstr "Ohne Rahmen"
-
-#: yaga/camera.py:3252 yaga/camera.py:3262 yaga/camera.py:3651
-#: yaga/camera.py:3661 yaga/camera.py:4255
-msgid "No frame available"
-msgstr "Kein Bild verfügbar"
-
-
-#: yaga/camera.py:1527
-#, python-format
-msgid "No permission to open %s. Add yourself to the 'video' group: sudo usermod -a -G video $USER"
-msgstr "Keine Berechtigung für %s. Füge dich der Gruppe „video“ hinzu: sudo usermod -a -G video $USER"
-
-
-#: yaga/app.py:398
-msgid "No pictures found"
-msgstr "Keine Bilder gefunden"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "No results"
@@ -990,20 +1476,9 @@ msgstr "Keine Treffer"
 msgid "None"
 msgstr "Keine"
 
-#: yaga/app.py:1707
-msgid "Not connected"
-msgstr "Nicht verbunden"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "November"
 msgstr "November"
-
-
-#: yaga/app.py:2743
-msgid "OK"
-msgstr "OK"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "October"
@@ -1016,11 +1491,6 @@ msgstr "Älteste zuerst"
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Open"
 msgstr "Öffnen"
-
-#: yaga/app.py:523
-msgid "Open camera"
-msgstr "Kamera öffnen"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Open externally"
@@ -1038,52 +1508,6 @@ msgstr "Übersicht"
 msgid "Overview folder"
 msgstr "Übersichtsordner"
 
-#: yaga/settings_window.py:1430
-msgid "Overview shows the combined content of every other folder."
-msgstr "Übersicht zeigt den kombinierten Inhalt aller anderen Ordner."
-
-#: yaga/settings_window.py:1639
-msgid "Parent folders won't include this folder's content during scans."
-msgstr "Übergeordnete Ordner berücksichtigen den Inhalt dieses Ordners beim Scan nicht."
-
-#: yaga/settings_window.py:1600
-msgid "Path"
-msgstr "Pfad"
-
-#: yaga/settings_window.py:1249
-msgid "Path of the Photos folder on your Nextcloud server."
-msgstr "Pfad des Foto-Ordners auf deinem Nextcloud-Server."
-
-#: yaga/settings_window.py:577
-msgid "Performance"
-msgstr "Leistung"
-
-
-#: yaga/app.py:420
-msgid "Permission denied"
-msgstr "Zugriff verweigert"
-
-
-#: yaga/app.py:2370
-msgid "Permission denied. The file or folder is protected."
-msgstr "Zugriff verweigert. Die Datei oder der Ordner ist geschützt."
-
-
-#: yaga/camera.py:2748
-msgid "Photo mode"
-msgstr "Fotomodus"
-
-
-#: yaga/camera.py:2510
-msgid "Photo quality"
-msgstr "Fotoqualität"
-
-
-#: yaga/camera.py:2531
-msgid "Photo size"
-msgstr "Fotogröße"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Photos"
 msgstr "Fotos"
@@ -1092,26 +1516,9 @@ msgstr "Fotos"
 msgid "Photos folder"
 msgstr "Fotoordner"
 
-#: yaga/settings_window.py:1248
-msgid "Photos folder on Nextcloud"
-msgstr "Foto-Ordner auf Nextcloud"
-
-#: yaga/app.py:2680
-msgid "Photos often contain sensitive metadata (EXIF data):\n• Camera make & model\n• GPS coordinates and location history\n• Timestamp and date taken\n\nThis app displays EXIF data in the Image Info panel. Be careful when sharing photos online, as metadata can reveal your location and privacy details."
-msgstr "Fotos enthalten oft sensible Metadaten (EXIF-Daten):\n• Kamerahersteller und -modell\n• GPS-Koordinaten und Ortsverlauf\n• Aufnahmezeitpunkt\n\nDiese App zeigt EXIF-Daten im Bildinfo-Bereich an. Sei vorsichtig beim Teilen von Fotos im Netz – Metadaten können deinen Aufenthaltsort und weitere private Details verraten."
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Photos on Nextcloud"
 msgstr "Fotos auf Nextcloud"
-
-#: yaga/settings_window.py:148
-msgid "Photos per row"
-msgstr "Fotos pro Zeile"
-
-#: yaga/app.py:2194
-msgid "Photos will be moved to trash."
-msgstr "Fotos werden in den Papierkorb verschoben."
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Pictures"
@@ -1121,284 +1528,37 @@ msgstr "Bilder"
 msgid "Pictures folder"
 msgstr "Bilderordner"
 
-#: yaga/app.py:321
-msgid "Pillow is outdated — please update it."
-msgstr "Pillow ist veraltet — bitte aktualisieren."
-
-#: yaga/settings_window.py:743
-msgid "Please fill in all fields."
-msgstr "Bitte alle Felder ausfüllen."
-
-#: yaga/camera.py:1749
-msgid "Position"
-msgstr "Position"
-
-
-#: yaga/app.py:2661
-msgid "Privacy & Help"
-msgstr "Datenschutz & Hilfe"
-
-
-#: yaga/settings_window.py:938
-msgid "QR code scan error"
-msgstr "QR-Code-Fehler"
-
-#: yaga/settings_window.py:933
-msgid "QR code scanned successfully ✓"
-msgstr "QR-Code erfolgreich gescannt ✓"
-
-#: yaga/settings_window.py:930
-msgid "QR code scanned – credentials entered ✓"
-msgstr "QR-Code gescannt – Zugangsdaten eingetragen ✓"
-
-#: yaga/camera.py:739
-msgid "Quality"
-msgstr "Qualität"
-
-
-#: yaga/viewer.py:1386
-msgid "RAW images cannot be edited with the built-in editor"
-msgstr "RAW-Bilder lassen sich mit dem eingebauten Editor nicht bearbeiten"
-
-
-#: yaga/camera.py:4126
-msgid "Recording failed"
-msgstr "Aufnahme fehlgeschlagen"
-
-
-#: yaga/camera.py:4140
-#, python-format
-msgid "Recording failed: %s"
-msgstr "Aufnahme fehlgeschlagen: %s"
-
-
-#: yaga/camera.py:3919 yaga/camera.py:4055
-msgid "Recording…"
-msgstr "Nimmt auf …"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Red"
 msgstr "Rot"
-
-#: yaga/viewer.py:298
-msgid "Redo"
-msgstr "Wiederherstellen"
-
-#: yaga/app.py:486
-msgid "Refresh"
-msgstr "Aktualisieren"
-
-#: yaga/settings_window.py:1122 yaga/settings_window.py:1500
-msgid "Remove"
-msgstr "Entfernen"
-
-#: yaga/settings_window.py:1496
-msgid "Remove this folder?"
-msgstr "Diesen Ordner entfernen?"
-
-#: yaga/editor/view.py:450 yaga/editor/view.py:695
-msgid "Reset"
-msgstr "Zurücksetzen"
-
-#: yaga/editor/view.py:715
-msgid "Reset brush strokes"
-msgstr "Pinselstriche zurücksetzen"
-
-#: yaga/camera.py:1776
-msgid "Reset to defaults"
-msgstr "Auf Standard zurücksetzen"
-
-
-#: yaga/camera.py:699
-msgid "Resolution"
-msgstr "Auflösung"
-
-
-#: yaga/settings_window.py:385
-msgid "Restart Yaga?"
-msgstr "Yaga neu starten?"
-
-#: yaga/settings_window.py:389
-msgid "Restart now"
-msgstr "Jetzt neu starten"
-
-#: yaga/settings_window.py:369
-msgid "Restart required"
-msgstr "Neustart erforderlich"
-
-#: yaga/camera.py:2600
-msgid "Right"
-msgstr "Rechts"
-
-
-#: yaga/viewer.py:277
-msgid "Rotate clockwise"
-msgstr "Im Uhrzeigersinn drehen"
-
-#: yaga/camera.py:1759
-msgid "Saturation"
-msgstr "Sättigung"
-
-
-#: yaga/settings_window.py:1260 yaga/settings_window.py:1450
-#: yaga/settings_window.py:1667 yaga/viewer.py:304 yaga/viewer.py:1038
-msgid "Save"
-msgstr "Speichern"
-
-#: yaga/viewer.py:1097
-msgid "Save failed"
-msgstr "Speichern fehlgeschlagen"
-
-#: yaga/viewer.py:1034
-msgid "Save rotation?"
-msgstr "Rotation speichern?"
-
-#: yaga/camera.py:4119 yaga/camera.py:4313
-#, python-format
-msgid "Saved %s"
-msgstr "%s gespeichert"
-
-
-#: yaga/settings_window.py:566 yaga/settings_window.py:629
-#: yaga/settings_window.py:867
-msgid "Scan QR code"
-msgstr "QR-Code scannen"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Screenshots"
 msgstr "Bildschirmfotos"
 
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Screenshots folder"
 msgstr "Screenshotordner"
-
-#: yaga/app.py:498
-msgid "Search"
-msgstr "Suchen"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Search: %d hits"
 msgstr "Suche: %d Treffer"
 
-#: yaga/camera.py:664
-msgid "Self-timer"
-msgstr "Selbstauslöser"
-
-
-#: yaga/camera.py:2369
-msgid "Self-timer off"
-msgstr "Selbstauslöser aus"
-
-
-#: yaga/camera.py:2382
-#, python-format
-msgid "Self-timer: %d seconds"
-msgstr "Selbstauslöser: %d Sekunden"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "September"
 msgstr "September"
-
-
-#: yaga/settings_window.py:553
-msgid "Server URL"
-msgstr "Server-URL"
-
-#: yaga/settings_window.py:523
-msgid "Set up"
-msgstr "Einrichten"
-
-#: yaga/settings_window.py:520 yaga/settings_window.py:620
-msgid "Set up connection"
-msgstr "Verbindung einrichten"
-
-#: yaga/app.py:510 yaga/camera.py:758 yaga/settings_window.py:70
-msgid "Settings"
-msgstr "Einstellungen"
-
-#: yaga/viewer.py:317
-msgid "Share"
-msgstr "Teilen"
-
-#: yaga/app.py:2436
-#, python-format
-msgid "Share %d images"
-msgstr "%d Bilder teilen"
-
-#: yaga/app.py:2434
-msgid "Share image"
-msgstr "Bild teilen"
-
-#: yaga/app.py:547
-msgid "Share selected"
-msgstr "Ausgewählte teilen"
-
-#: yaga/settings_window.py:1109 yaga/settings_window.py:1439
-#: yaga/settings_window.py:1653
-msgid "Show"
-msgstr "Anzeigen"
-
-#: yaga/settings_window.py:589
-msgid "Show in Overview"
-msgstr "In Übersicht anzeigen"
-
-#: yaga/viewer.py:1657
-msgid "Size"
-msgstr "Größe"
-
-#: yaga/settings_window.py:582
-msgid "Skip downloading full files during sync"
-msgstr "Beim Abgleich keine vollständigen Dateien herunterladen"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Smileys"
 msgstr "Smileys"
 
-
-#: yaga/app.py:515
-msgid "Sort"
-msgstr "Sortierung"
-
-#: yaga/camera.py:1186
-msgid "Source element has no usable output pad"
-msgstr "Das Quellelement hat keinen nutzbaren Ausgang"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Spring"
 msgstr "Frühling"
 
-#: yaga/viewer.py:311 yaga/viewer.py:1770
-msgid "Start slideshow"
-msgstr "Diaschau starten"
-
-
-#: yaga/camera.py:2513 yaga/camera.py:2558
-msgid "Std"
-msgstr "Std"
-
-
-#: yaga/editor/view.py:220
-msgid "Sticker"
-msgstr "Sticker"
-
-
-#: yaga/viewer.py:1763
-msgid "Stop slideshow"
-msgstr "Diaschau beenden"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Summer"
 msgstr "Sommer"
-
-#: yaga/camera.py:770
-msgid "Switch camera"
-msgstr "Kamera wechseln"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Symbols"
@@ -1408,227 +1568,42 @@ msgstr "Symbole"
 msgid "System"
 msgstr "System"
 
-
-#: yaga/app.py:427
-msgid "System error"
-msgstr "Systemfehler"
-
-
-#: yaga/camera.py:1728
-msgid "Temperature"
-msgstr "Farbtemperatur"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Text"
 msgstr "Text"
-
-
-#: yaga/editor/view.py:577
-msgid "Text color"
-msgstr "Textfarbe"
-
-#: yaga/editor/view.py:568
-msgid "Text input…"
-msgstr "Text eingeben…"
-
-#: yaga/app.py:1738
-#, python-format
-msgid "The Nextcloud server rejected the new folder %s."
-msgstr "Der Nextcloud-Server hat den neuen Ordner %s abgelehnt."
-
-
-#: yaga/app.py:443
-msgid "The app password is incorrect or the account has been revoked. Check Nextcloud settings."
-msgstr "Das App-Passwort ist falsch oder der Zugang wurde widerrufen. Bitte in den Nextcloud-Einstellungen prüfen."
-
-#: yaga/app.py:1619
-msgid "The current location is not available."
-msgstr "Der aktuelle Ort ist nicht verfügbar."
-
-
-#: yaga/app.py:449
-msgid "The folder or file doesn't exist on the Nextcloud server. It may have been deleted."
-msgstr "Der Ordner oder die Datei existiert nicht auf dem Nextcloud-Server. Möglicherweise wurde sie gelöscht."
-
-#: yaga/viewer.py:1446
-msgid "The image editor could not start. This may be due to insufficient memory or unsupported image format."
-msgstr "Der Bildeditor konnte nicht gestartet werden. Möglicherweise fehlt Arbeitsspeicher oder das Bildformat wird nicht unterstützt."
-
-
-#: yaga/viewer.py:1035
-msgid "The image has been rotated. Save the change?"
-msgstr "Das Bild wurde gedreht. Änderung speichern?"
-
-#: yaga/app.py:330
-msgid "The media index was damaged and is being rebuilt."
-msgstr "Der Medienindex war beschädigt und wird neu aufgebaut."
-
-#: yaga/settings_window.py:1595
-msgid "The name appears as the entry label in the gallery navigation."
-msgstr "Der Name erscheint als Beschriftung in der Galerie-Navigation."
-
-#: yaga/viewer.py:1098
-msgid "The rotation could not be saved. The photo on disk is unchanged."
-msgstr "Die Drehung konnte nicht gespeichert werden. Das Foto auf der Festplatte ist unverändert."
-
-#: yaga/settings_window.py:762
-msgid "The server URL starts with http:// — your password and photos will be transmitted unencrypted. Anyone on the same network can read them. Use https:// unless you have a specific reason not to."
-msgstr "Die Server-Adresse beginnt mit http:// – dein Passwort und deine Fotos werden unverschlüsselt übertragen. Jeder im selben Netzwerk kann sie mitlesen. Verwende https://, sofern nichts ausdrücklich dagegen spricht."
-
-
-#: yaga/settings_window.py:386
-msgid "The update was installed. Restart Yaga to use the new version."
-msgstr "Das Update wurde installiert. Starte Yaga neu, um die neue Version zu verwenden."
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Theme"
 msgstr "Erscheinungsbild"
 
-
-#: yaga/viewer.py:562
-msgid "This image is stored in your Nextcloud.\nThe connection is currently disabled."
-msgstr "Das Bild liegt in deiner Nextcloud.\nDie Verbindung ist deaktiviert."
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Thumbnails"
 msgstr "Vorschaubilder"
-
-#: yaga/camera.py:1692
-msgid "Time"
-msgstr "Zeit"
-
-
-#: yaga/viewer.py:291
-msgid "Undo"
-msgstr "Rückgängig"
-
-#: yaga/settings_window.py:760
-msgid "Unencrypted connection"
-msgstr "Unverschlüsselte Verbindung"
-
-
-#: yaga/settings_window.py:340
-msgid "Up to date"
-msgstr "Aktuell"
-
-#: yaga/settings_window.py:379
-msgid "Update failed"
-msgstr "Update fehlgeschlagen"
-
-#: yaga/settings_window.py:331
-#, python-format
-msgid "Update to v%s"
-msgstr "Auf v%s aktualisieren"
-
-#: yaga/settings_window.py:270
-msgid "Updates"
-msgstr "Aktualisierungen"
-
-#: yaga/settings_window.py:350
-msgid "Updating…"
-msgstr "Aktualisiere …"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Use system language"
 msgstr "Systemsprache verwenden"
 
-#: yaga/settings_window.py:558
-msgid "Username"
-msgstr "Benutzername"
-
-#: yaga/settings_window.py:185
-msgid "Video"
-msgstr "Video"
-
-
-#: yaga/camera.py:2817
-msgid "Video light unavailable"
-msgstr "Videolicht nicht verfügbar"
-
-
-#: yaga/camera.py:2748
-msgid "Video mode"
-msgstr "Videomodus"
-
-
-#: yaga/camera.py:2555
-msgid "Video quality"
-msgstr "Videoqualität"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Videos"
 msgstr "Videos"
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Videos folder"
 msgstr "Videoordner"
 
-#: yaga/settings_window.py:1434 yaga/settings_window.py:1648
-msgid "Videos only"
-msgstr "Nur Videos"
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Wedding"
 msgstr "Hochzeit"
-
-#: yaga/app.py:2704
-msgid "When you delete photos in Yaga, they are moved to trash. They can typically be recovered from your system trash until it is permanently emptied. For secure deletion, consider using specialized tools or encrypted storage."
-msgstr "Gelöschte Fotos wandern in den Papierkorb. Von dort lassen sie sich in der Regel wiederherstellen, bis der Papierkorb endgültig geleert wird. Für sicheres Löschen eignen sich spezialisierte Werkzeuge oder verschlüsselter Speicher."
-
-
-#: yaga/settings_window.py:155
-msgid "Where the category bar is shown around the gallery."
-msgstr "Wo die Kategorieleiste um die Galerie herum erscheint."
-
-
-#: yaga/settings_window.py:1440 yaga/settings_window.py:1654
-msgid "Which media types appear when this folder is opened."
-msgstr "Welche Medientypen erscheinen, wenn dieser Ordner geöffnet wird."
-
-#: yaga/settings_window.py:171
-msgid "Which side thumb-reachable camera controls sit on."
-msgstr "Auf welcher Seite die daumengerechten Kamerabedienelemente liegen."
-
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "White"
 msgstr "Weiß"
 
-#: yaga/camera.py:1702
-msgid "White balance"
-msgstr "Weißabgleich"
-
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Winter"
 msgstr "Winter"
 
-
 #. Referenced indirectly — passed to _() as a variable.
 msgid "Yellow"
 msgstr "Gelb"
-
-#: yaga/app.py:421
-msgid "You don't have permission to access this file."
-msgstr "Du hast keine Berechtigung für diese Datei."
-
-
-#: yaga/app.py:326
-msgid "Your settings could not be read and were reset to defaults."
-msgstr "Deine Einstellungen konnten nicht gelesen werden und wurden zurückgesetzt."
-
-#: yaga/camera.py:1529
-msgid "camera"
-msgstr "Kamera"
-
-
-#: yaga/app.py:2181
-msgid "selected"
-msgstr "ausgewählt"
-
-#: yaga/camera.py:589
-msgid "←  swipe  →"
-msgstr "←  wischen  →"

@@ -244,6 +244,27 @@ def test_settings_dialog_shows_the_update_row(settings_dialog) -> None:
 
 
 @requires_display
+def test_a_flatpak_gets_the_version_but_no_update_button(settings_dialog, monkeypatch) -> None:
+    """Updates come from the host there, so the button is replaced by a hint.
+    The row itself stays: the version is what a bug report needs."""
+    from yaga import updater
+
+    monkeypatch.setattr(updater, "is_flatpak", lambda: True)
+    dialog = settings_dialog()
+    assert f"v{updater.get_current_version()}" in dialog._update_row.get_subtitle()
+    assert not hasattr(dialog, "_update_btn"), "a dead button was built anyway"
+
+
+@requires_display
+def test_a_normal_install_still_gets_the_update_button(settings_dialog, monkeypatch) -> None:
+    from yaga import updater
+
+    monkeypatch.setattr(updater, "is_flatpak", lambda: False)
+    dialog = settings_dialog()
+    assert dialog._update_btn is not None
+
+
+@requires_display
 def test_diagnostics_text_covers_the_environment(settings_dialog) -> None:
     """This is what a user pastes into a bug report."""
     text = settings_dialog()._diagnostics_text()
