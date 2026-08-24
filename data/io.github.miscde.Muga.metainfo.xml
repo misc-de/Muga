@@ -27,9 +27,46 @@
     <category>Photography</category>
   </categories>
   <url type="homepage">https://github.com/misc-de/Muga</url>
+  <url type="bugtracker">https://github.com/misc-de/Muga/issues</url>
+  <url type="vcs-browser">https://github.com/misc-de/Muga</url>
+  <url type="translate">https://github.com/misc-de/Muga/tree/main/po</url>
   <provides>
     <binary>muga</binary>
   </provides>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://misc-de.github.io/Muga/screenshots/overview.jpg</image>
+      <caption>Overview — every library in one grid</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/date-grouping.jpg</image>
+      <caption>Photos grouped by month and year</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/viewer.jpg</image>
+      <caption>Full-screen viewer</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/editor-filters.jpg</image>
+      <caption>Editor — filters</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/editor-adjust.jpg</image>
+      <caption>Editor — brightness, contrast and colour channels</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/settings-folders.jpg</image>
+      <caption>Settings — media folders</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/settings-appearance.jpg</image>
+      <caption>Settings — appearance and cache</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://misc-de.github.io/Muga/screenshots/settings-nextcloud.jpg</image>
+      <caption>Settings — Nextcloud</caption>
+    </screenshot>
+  </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
     <release version="0.3.1" date="2026-08-24">

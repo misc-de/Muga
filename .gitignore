@@ -16,6 +16,13 @@ htmlcov/
 # document building into build-dir, and the cache alone runs to tens of MB.
 build-dir/
 .flatpak-builder/
+.flatpak-build/
+
+# The OSTree repositories the Flatpaks are exported into. They are a cache,
+# not history: repo/ is published to the gh-pages branch instead, and repo-arm/
+# is what scripts/build-arch.sh produced on the phone.
+repo/
+repo-arm/
 
 # Compiled translation catalogues — po/*.po is the source of truth,
 # tools/i18n.py compile regenerates these.
