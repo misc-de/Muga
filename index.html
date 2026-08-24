@@ -10,10 +10,18 @@ code,pre{background:#f4f4f4;border-radius:4px}pre{padding:1rem;overflow:auto}cod
 with thumbnails, an editor, Nextcloud Photos and a built-in camera.
 Signed Flatpak repository for <b>x86_64</b> and <b>aarch64</b>.</p>
 <h2>Install</h2>
-<pre>flatpak remote-add --if-not-exists muga https://misc-de.github.io/Muga/io.github.miscde.Muga.flatpakrepo
-flatpak install muga io.github.miscde.Muga
-flatpak run io.github.miscde.Muga</pre>
+<pre>flatpak remote-add --if-not-exists muga https://misc-de.github.io/Muga/de.cais.Muga.flatpakrepo
+flatpak install muga de.cais.Muga
+flatpak run de.cais.Muga</pre>
 <p>Updates from then on with <code>flatpak update</code>.</p>
+<h2>Renamed from io.github.miscde.Muga</h2>
+<p>The app ID is now <code>de.cais.Muga</code>. It briefly shipped as
+<code>io.github.miscde.Muga</code>, which named a GitHub account that is not
+ours. If you installed it during that window, remove the old one and add the
+remote above again — a Flatpak's data lives under its ID, so the gallery
+rebuilds its index on first start:</p>
+<pre>flatpak uninstall --delete-data io.github.miscde.Muga
+flatpak remote-delete muga</pre>
 <h2>Cameras</h2>
 <p>v4l2 webcams work in the sandbox. The Halium / gst-droid path (FuriOS,
 Droidian) does not — it needs the Android HAL and sysfs torch nodes a sandbox
