@@ -32,6 +32,15 @@
   </provides>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.3.1" date="2026-08-24">
+      <description>
+        <p>Fixes: paging through photos follows the picture when the screen is
+        rotated. Holding the phone sideways used to turn the pages with an up
+        and down swipe; left and right works again.</p>
+        <p>Packaging: the translations are compiled during the install, and the
+        desktop entry starts the installed launcher.</p>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-08-21">
       <description>
         <p>Reliability: rotating or moving a photo can no longer damage or
