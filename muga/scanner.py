@@ -386,7 +386,11 @@ class MediaScanner:
         missing = 0
         loaded = 0
         for item in items:
-            if item.thumb_path:
+            # Not merely "is a thumbnail recorded?" — a recorded path whose file
+            # is gone (a cache wipe, an eviction, the cache directory renamed
+            # under the app's feet) would otherwise be skipped for ever, leaving
+            # the tile on its placeholder with nothing to recover it.
+            if item.thumb_path and Path(item.thumb_path).exists():
                 continue
             missing += 1
             dav = dav_path_from_nc(item.path)
