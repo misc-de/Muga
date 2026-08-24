@@ -40,6 +40,11 @@ CREATE INDEX IF NOT EXISTS idx_media_cat_type_mtime_name
     ON media(category, media_type, mtime DESC, name COLLATE NOCASE);
 CREATE INDEX IF NOT EXISTS idx_media_type_mtime_name
     ON media(media_type, mtime DESC, name COLLATE NOCASE);
+-- Serves the one-row-per-file subquery the aggregate views use. Without a
+-- (media_type, path) index SQLite filters on media_type and then sorts the
+-- whole result into a temp B-tree to GROUP BY path; on a 12k-row index that
+-- was the difference between 42 ms and 24 ms per Overview count.
+CREATE INDEX IF NOT EXISTS idx_media_type_path ON media(media_type, path);
 """
 
 _MIGRATION_V1 = """
@@ -383,6 +388,16 @@ class Database:
             self._repoint_legacy_thumb_paths()
             self.wconn.execute("PRAGMA user_version = 7")
             self.wconn.commit()
+        if version < 8:
+            # Index for the one-row-per-file subquery in _one_row_per_file.
+            try:
+                self.wconn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_media_type_path ON media(media_type, path)"
+                )
+                self.wconn.execute("PRAGMA user_version = 8")
+                self.wconn.commit()
+            except sqlite3.OperationalError as exc:
+                LOGGER.warning("Could not create the media_type/path index: %s", exc)
 
     def _repoint_legacy_thumb_paths(self) -> None:
         """Point thumb_path at the renamed cache directory.
@@ -588,6 +603,33 @@ class Database:
         self._run_write(self.wconn.commit)
 
     @staticmethod
+    def _one_row_per_file(where: str, args: list) -> tuple[str, list]:
+        """Narrow *where* to a single row per file.
+
+        The same photo legitimately sits in the index more than once: `media` is
+        unique on (path, category), so a file inside two overlapping media
+        folders gets one row per category — which is what makes each folder's
+        own tab complete on its own.
+
+        The aggregate views select *across* categories, and there the second row
+        is the same picture again: a duplicate tile in the grid, and a folder
+        whose count is inflated by the copies. Restricting to the lowest id per
+        path shows each file once. Lowest id is arbitrary but stable, so a photo
+        does not drift between the folders it is attributed to from one render
+        to the next — and because grid, count and folder listing all apply this
+        same predicate, the number on a folder tile matches what opening it
+        shows.
+
+        The where clause is repeated inside the subquery rather than deduping
+        over the whole table: a file that only collides *outside* the current
+        filter must not lose its row here.
+        """
+        return (
+            f"({where}) AND id IN (SELECT MIN(id) FROM media WHERE ({where}) GROUP BY path)",
+            args + args,
+        )
+
+    @staticmethod
     def _build_list_where(category: str, folder: str | None, include_nc: bool,
                           media_filter: str | None = None) -> tuple[str, list]:
         """Return (where_sql, args) for filtering by category (+ optional folder).
@@ -597,8 +639,10 @@ class Database:
         "both" drops the type constraint, "videos" flips to videos-only,
         "images" keeps the image-only default."""
         if category == "videos":
-            # Aggregate: every video on disk or NC, regardless of which root holds it.
-            return "media_type = 'video'", []
+            # Aggregate: every video on disk or NC, regardless of which root
+            # holds it — so the same clip under two overlapping folders needs
+            # the same one-row-per-file treatment as Overview below.
+            return Database._one_row_per_file("media_type = 'video'", [])
         if category == "pictures":
             # Overview is a virtual aggregator across every local category.
             # `category != 'pictures'` excludes any stale rows the migration
@@ -614,8 +658,10 @@ class Database:
                 base_pic += " AND folder = ?"
                 args_pic.append(folder)
             if include_nc:
-                return f"({base_pic}) OR (category = 'nextcloud' AND media_type = 'image')", args_pic
-            return base_pic, args_pic
+                base_pic = (
+                    f"({base_pic}) OR (category = 'nextcloud' AND media_type = 'image')"
+                )
+            return Database._one_row_per_file(base_pic, args_pic)
         args: list = [category]
         if media_filter == "videos":
             local = "category = ? AND media_type = 'video'"
@@ -854,7 +900,10 @@ class Database:
                       media_filter: str | None = None) -> list[tuple[str, int, list]]:
         params: tuple[str, ...]
         if category == "videos":
-            where, params = "media_type = 'video'", ()
+            # Aggregates get the same one-row-per-file treatment the grid uses,
+            # so a folder's count matches what opening it actually shows.
+            where, args = self._one_row_per_file("media_type = 'video'", [])
+            params = tuple(args)
         elif category == "pictures":
             # Overview aggregator — union across every local category.
             base = "category NOT IN ('pictures', 'nextcloud')"
@@ -864,7 +913,8 @@ class Database:
                 where = base
             else:
                 where = f"{base} AND media_type = 'image'"
-            params = ()
+            where, args = self._one_row_per_file(where, [])
+            params = tuple(args)
         elif media_filter == "videos":
             where, params = "category = ? AND media_type = 'video'", (category,)
         elif media_filter == "both":
