@@ -69,6 +69,18 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.3.3" date="2026-08-24">
+      <description>
+        <p>Fixes: photos that came across from the previous release under the
+        old name show their thumbnails again. The gallery was drawing the
+        placeholder for them because the index still pointed at the cache
+        folder as it was called before the app was renamed, while the
+        thumbnails themselves had moved with it.</p>
+        <p>Nextcloud: a thumbnail that has gone missing from the cache is
+        fetched again on the next folder sync instead of leaving the tile
+        blank for good.</p>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-08-24">
       <description>
         <p>Fixes: a photo you rotate or edit now gets a fresh thumbnail. The
