@@ -4,5 +4,5 @@ Url=https://misc-de.github.io/Muga/repo/
 Homepage=https://github.com/misc-de/Muga
 Comment=Photo and video gallery for Linux desktops and phones
 Description=Signed Flatpak repository for Muga, built for x86_64 and aarch64.
-Icon=https://misc-de.github.io/Muga/repo/appstream/x86_64/icons/128x128/io.github.miscde.Muga.png
+Icon=https://misc-de.github.io/Muga/repo/appstream/x86_64/icons/128x128/de.cais.Muga.png
 GPGKey=mDMEaowRKRYJKwYBBAHaRw8BAQdA6fPR/JqaPZJ8mB7aDctdgzBBfO1FUCjwKZ/7OomRgkG0I011Z2EgRmxhdHBhayBSZXBvIDxmbGF0cGFrQGNhaXMuZGU+iJAEExYKADgWIQQXRbzJrwux3KF6sM4q69GO3vkrfAUCaowRKQIbAwULCQgHAgYVCgkICwIEFgIDAQIeAQIXgAAKCRAq69GO3vkrfCsaAQC+Zm/dvNEH765qS+wPJ87mJGOY+8YTscylu0Lp5LFySAD/U7geGptxrc+XpNB6h69fpnjCHjOmJjV9GUryUVehswA=

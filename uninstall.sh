@@ -12,13 +12,13 @@ echo "Uninstalling Muga ..."
 rm -f "${LOCAL}/bin/muga"
 echo "  ✓ removed launcher"
 
-rm -f "${LOCAL}/share/icons/hicolor/128x128/apps/io.github.miscde.Muga.png"
+rm -f "${LOCAL}/share/icons/hicolor/128x128/apps/de.cais.Muga.png"
 echo "  ✓ removed icon"
 
-rm -f "${LOCAL}/share/applications/io.github.miscde.Muga.desktop"
+rm -f "${LOCAL}/share/applications/de.cais.Muga.desktop"
 echo "  ✓ removed desktop entry"
 
-rm -f "${LOCAL}/share/metainfo/io.github.miscde.Muga.metainfo.xml"
+rm -f "${LOCAL}/share/metainfo/de.cais.Muga.metainfo.xml"
 echo "  ✓ removed metainfo"
 
 gtk-update-icon-cache -f -t "${LOCAL}/share/icons/hicolor" 2>/dev/null || true

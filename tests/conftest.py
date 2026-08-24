@@ -135,7 +135,7 @@ def gtk_app():
     from gi.repository import Adw
 
     Adw.init()
-    app = Adw.Application(application_id="io.github.miscde.MugaTests")
+    app = Adw.Application(application_id="de.cais.MugaTests")
     app.register()
     return app
 

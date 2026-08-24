@@ -4,8 +4,8 @@ Muga already ships two Flatpak manifests:
 
 | File | Purpose |
 | --- | --- |
-| `io.github.miscde.Muga.yml` | the repository build — source is the working tree, exported to `repo/` and published on gh-pages |
-| `io.github.miscde.Muga.flathub.yml` | the Flathub build — source is a tagged git state |
+| `de.cais.Muga.yml` | the repository build — source is the working tree, exported to `repo/` and published on gh-pages |
+| `de.cais.Muga.flathub.yml` | the Flathub build — source is a tagged git state |
 
 Runtime, modules and permissions are identical between the two on purpose, so
 what Flathub builds rests on the same base as what the project's own repository
@@ -18,7 +18,7 @@ Flathub's CI runs `flatpak-builder-lint`; run the same checks locally first:
 ```bash
 flatpak install -y --user flathub org.flatpak.Builder
 flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
-    manifest io.github.miscde.Muga.flathub.yml
+    manifest de.cais.Muga.flathub.yml
 ```
 
 And build once from the tagged state the manifest names — not from the working
@@ -26,31 +26,21 @@ tree — so the submission is tested as Flathub will build it:
 
 ```bash
 flatpak-builder --force-clean --install --user \
-    .flatpak-build/flathub io.github.miscde.Muga.flathub.yml
+    .flatpak-build/flathub de.cais.Muga.flathub.yml
 ```
 
 ## Open points
 
 These are what still stands between the manifest and a submission:
 
-1. **The app ID claims a namespace the project does not own.** This is the
-   blocking one. `flatpak-builder-lint` reports `appid-url-not-reachable`:
-   from `io.github.miscde.Muga` it derives `https://github.com/miscde/muga`,
-   which is a 404. The GitHub account behind the project is **`misc-de`**, with
-   a hyphen; `github.com/miscde` is a *different, unrelated user*. For an
-   `io.github.*` ID Flathub requires that the namespace is yours, so this ID
-   cannot be submitted as it stands.
-
-   The correct form encodes the hyphen as an underscore: **`io.github.misc_de.Muga`**
-   (`-` is not allowed in a D-Bus name, and Flathub converts `_` back to `-`
-   when it checks). Renaming again touches the same surface the Yaga → Muga
-   rename did — desktop entry, metainfo, icon filenames, both manifests, the
-   OSTree refs and the `.flatpakrepo` — so it is a deliberate decision, not a
-   detail to slip in.
-
-   Nothing forces it for the project's own repository: `io.github.miscde.Muga`
-   works perfectly well there, and the Flatpaks currently published under it
-   are fine. It only blocks Flathub.
+1. **A domain check is what Flathub will ask for.** The app ID is
+   `de.cais.Muga`, so Flathub has to see that `cais.de` is ours — usually a
+   DNS TXT record or a file served from the domain, agreed with the reviewer
+   in the pull request. This replaced `io.github.miscde.Muga`, which derived
+   `github.com/miscde` — an unrelated user, since this project is `misc-de`.
+   `flatpak-builder-lint` rejected that outright; the domain form also keeps
+   the ID valid if the code ever moves off GitHub, and matches the sibling
+   apps (`de.cais.Schwupp`, `de.cais.Emilia`).
 
 2. **Two screenshots still show the old name.** The metainfo carries all eight
    shots, served from `https://misc-de.github.io/Muga/screenshots/`, and
@@ -77,9 +67,9 @@ These are what still stands between the manifest and a submission:
 ## The submission itself
 
 1. Fork `github.com/flathub/flathub` and create a branch named exactly
-   `io.github.miscde.Muga`.
-2. Add `io.github.miscde.Muga.flathub.yml` to it under the name
-   `io.github.miscde.Muga.yml` — Flathub expects the manifest to be named after
+   `de.cais.Muga`.
+2. Add `de.cais.Muga.flathub.yml` to it under the name
+   `de.cais.Muga.yml` — Flathub expects the manifest to be named after
    the app ID.
 3. Open the pull request against the `new-pr` branch.
 4. A reviewer picks it up; the permissions above are what they will ask about.

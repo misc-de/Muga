@@ -464,8 +464,22 @@ class Settings:
     # App-password keyring helpers (libsecret, falls back to nothing)
     # ------------------------------------------------------------------
 
-    _KEYRING_SCHEMA = "de.furilabs.muga.nextcloud"
+    _KEYRING_SCHEMA = "de.cais.Muga.nextcloud"
+    # The schema used to read de.furilabs.muga.nextcloud — the namespace of
+    # FuriLabs, who make the FuriPhone, not ours. It is only a lookup key, so
+    # the old entries stay readable; load_app_password moves them across.
+    _LEGACY_KEYRING_SCHEMA = "de.furilabs.muga.nextcloud"
     _CRED_FILE = CONFIG_DIR / "nc_password"
+
+    def _secret_schema(self, name: str):
+        """Build a libsecret schema. Raises if libsecret is unavailable."""
+        import gi; gi.require_version("Secret", "1")
+        from gi.repository import Secret
+        return Secret.Schema.new(
+            name, Secret.SchemaFlags.NONE,
+            {"server": Secret.SchemaAttributeType.STRING,
+             "user":   Secret.SchemaAttributeType.STRING},
+        )
 
     def save_app_password(self, password: str) -> bool:
         """Store app-password. Tries system keyring first, falls back to a 0600 file."""
@@ -545,22 +559,28 @@ class Settings:
             return False
 
     def load_app_password(self) -> str:
-        """Retrieve app-password. Tries system keyring first, falls back to file."""
+        """Retrieve app-password. Tries system keyring first, falls back to file.
+
+        A password stored under the old FuriLabs schema is moved across on the
+        way out, so the schema rename does not read as a lost connection: the
+        user would otherwise be asked to fetch a fresh app password from
+        Nextcloud for an account that was already set up.
+        """
         try:
             import gi; gi.require_version("Secret", "1")
             from gi.repository import Secret
-            schema = Secret.Schema.new(
-                self._KEYRING_SCHEMA, Secret.SchemaFlags.NONE,
-                {"server": Secret.SchemaAttributeType.STRING,
-                 "user":   Secret.SchemaAttributeType.STRING},
-            )
+            attrs = {"server": self.nextcloud_url, "user": self.nextcloud_user}
             result = Secret.password_lookup_sync(
-                schema,
-                {"server": self.nextcloud_url, "user": self.nextcloud_user},
-                None,
+                self._secret_schema(self._KEYRING_SCHEMA), attrs, None,
             )
             if result:
                 return result
+            legacy = Secret.password_lookup_sync(
+                self._secret_schema(self._LEGACY_KEYRING_SCHEMA), attrs, None,
+            )
+            if legacy:
+                self._migrate_keyring_entry(legacy)
+                return legacy
         except Exception:
             LOGGER.debug("Keyring lookup failed, falling back to file", exc_info=True)
         # Fallback: file
@@ -568,6 +588,30 @@ class Settings:
             return self._CRED_FILE.read_text(encoding="utf-8").strip()
         except OSError:
             return ""
+
+    def _migrate_keyring_entry(self, password: str) -> None:
+        """Re-store a password found under the legacy schema, then drop the old
+        entry. Best-effort: if the store fails the old entry is kept, so the
+        password is never dropped on the floor between the two schemas.
+        """
+        try:
+            import gi; gi.require_version("Secret", "1")
+            from gi.repository import Secret
+            attrs = {"server": self.nextcloud_url, "user": self.nextcloud_user}
+            stored = Secret.password_store_sync(
+                self._secret_schema(self._KEYRING_SCHEMA), attrs,
+                Secret.COLLECTION_DEFAULT,
+                "Muga – Nextcloud App-Passwort", password, None,
+            )
+            if not stored:
+                return
+            Secret.password_clear_sync(
+                self._secret_schema(self._LEGACY_KEYRING_SCHEMA), attrs, None,
+            )
+            LOGGER.info("Moved the Nextcloud password to the %s schema",
+                        self._KEYRING_SCHEMA)
+        except Exception:
+            LOGGER.debug("Keyring migration failed", exc_info=True)
 
     def clear_app_password(self) -> None:
         try:
@@ -578,10 +622,13 @@ class Settings:
                 {"server": Secret.SchemaAttributeType.STRING,
                  "user":   Secret.SchemaAttributeType.STRING},
             )
+            attrs = {"server": self.nextcloud_url, "user": self.nextcloud_user}
+            Secret.password_clear_sync(schema, attrs, None)
+            # Also clear the legacy schema: disconnecting must not leave the
+            # password behind under the old name for an install that never
+            # went through the migration in load_app_password.
             Secret.password_clear_sync(
-                schema,
-                {"server": self.nextcloud_url, "user": self.nextcloud_user},
-                None,
+                self._secret_schema(self._LEGACY_KEYRING_SCHEMA), attrs, None,
             )
         except Exception:
             LOGGER.debug("Keyring clear failed", exc_info=True)

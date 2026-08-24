@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.miscde.Muga</id>
+  <id>de.cais.Muga</id>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <name>Muga</name>
   <summary>Browse photos and videos</summary>
-  <developer id="io.github.miscde">
+  <developer id="de.cais">
     <name>miscde</name>
   </developer>
   <description>
@@ -21,7 +21,7 @@
       and geotagging workflows.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.miscde.Muga.desktop</launchable>
+  <launchable type="desktop-id">de.cais.Muga.desktop</launchable>
   <categories>
     <category>Graphics</category>
     <category>Photography</category>
