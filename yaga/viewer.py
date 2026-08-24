@@ -88,6 +88,26 @@ _SENSOR_ROTATION_DEG = {
     ORIENT_RIGHT_UP: 90,
 }
 
+
+def _motion_in_view_space(x: float, y: float, sensor_angle: int) -> tuple[float, float]:
+    """Map a gesture delta from window space into the space the user sees.
+
+    The viewer's swipe/drag controllers sit on the stack, so their deltas come
+    in window coordinates — but `RotatedContainer` turns the picture inside
+    that window when the device is held sideways with auto-rotate off. Without
+    undoing that rotation, "next photo" follows the window's x axis, which the
+    user experiences as up/down. Inverse of the transforms in
+    `RotatedContainer.do_size_allocate`.
+    """
+    if sensor_angle == 90:
+        return y, -x
+    if sensor_angle == 180:
+        return -x, -y
+    if sensor_angle == 270:
+        return -y, x
+    return x, y
+
+
 def _fmt_size(size: int) -> str:
     scaled = float(size)
     for unit in ("B", "KB", "MB", "GB"):
@@ -1270,6 +1290,8 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _navigate_from_horizontal_motion(self, x: float, y: float) -> None:
         if self.zoom_scale > 1.05:
             return
+        # Deltas arrive in window space; navigation follows the user's eyes.
+        x, y = _motion_in_view_space(x, y, self._sensor_angle)
         # Don't navigate if a pinch-zoom gesture is the real intent
         if self._zoom_committed:
             return
