@@ -51,6 +51,8 @@ watch videos directly in the app or hand them off to any external player
 long-press any photo to enter multi-select, then delete or move a whole batch at once
 - **Folder view**  
 drill into subfolders; folder tiles show a 2×2 preview mosaic
+- **MCP server**  
+let an AI assistant search your library — a built-in, read-only [MCP](https://modelcontextprotocol.io) endpoint over HTTP, off by default and reachable only with a token you issue
 
 ---
 
@@ -144,6 +146,42 @@ MUGA_CAMERA_DEBUG=1 python3 -m muga
 4. Hit **Connect**
 
 Photos are streamed directly over WebDAV. Thumbnails are cached locally; full files are only downloaded when you open them.
+
+---
+
+## MCP Server
+
+Muga can expose its media index to an MCP client — an AI assistant, a script,
+anything that speaks the protocol — so it can answer "which videos did I shoot
+last August?" without you opening the app.
+
+1. Open **Settings → MCP**
+2. **Add token** and name it after the client that will use it, then copy the token
+3. Flip **MCP server** on — the address it is reachable at appears right below
+
+The endpoint is Streamable HTTP at `http://<your-ip>:8765/mcp`, authenticated
+with `Authorization: Bearer <token>`. Point a client at it:
+
+```json
+{
+  "mcpServers": {
+    "muga": {
+      "type": "http",
+      "url": "http://192.168.1.42:8765/mcp",
+      "headers": { "Authorization": "Bearer muga_…" }
+    }
+  }
+}
+```
+
+Six tools, all read-only: `list_categories`, `list_media`, `search_media`,
+`list_folders`, `get_media`, `gallery_stats`. Nothing an MCP client can call
+changes, moves or deletes a file — it reads the index and nothing else.
+
+The server listens on every network interface so a client on your laptop can
+reach the phone, which means the token is what keeps the index private: it will
+not start until you have issued one, and deleting a token cuts that client off
+immediately. It is off by default and stays off until you turn it on.
 
 ---
 
