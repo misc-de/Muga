@@ -1,14 +1,18 @@
 """Guards for the gallery-thumbnail refresh after a viewer rotation is saved.
 
 When the user rotates a photo and saves it, the pixels are baked into the file
-on disk. The thumbnail, however, is keyed by the (unchanged) source path, so a
-plain ``ensure_thumbnail`` short-circuits on the still-existing stale file and
-hands back the pre-rotation image — the grid tile would stay sideways until a
-full rescan. ``ViewerWindow._refresh_thumbnail_after_rotation`` deletes the
-stale thumb, regenerates it, and pushes the fresh one to the gallery grid.
+on disk. The thumbnail is keyed by the (unchanged) source path, so it keeps its
+filename — ``Thumbnailer.ensure_thumbnail`` notices the rewritten source by its
+mtime and regenerates (see tests/test_thumbnail_freshness.py).
+
+``ViewerWindow._refresh_thumbnail_after_rotation`` adds the two things the
+thumbnailer cannot do by itself: writing the regenerated thumbnail back to the
+index, and turning the tile in the live grid instead of leaving it sideways
+until the next full rescan.
 """
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 
@@ -24,6 +28,12 @@ PILImage = pytest.importorskip("PIL.Image")
 
 def _make_image(path: Path, size: tuple[int, int], color: tuple[int, int, int]) -> None:
     PILImage.new("RGB", size, color).save(str(path), "JPEG", quality=90)
+
+
+def _touch_newer(path: Path, seconds: float = 10.0) -> None:
+    """Move *path*'s mtime *seconds* into the future, leaving atime alone."""
+    st = path.stat()
+    os.utime(path, (st.st_atime, st.st_mtime + seconds))
 
 
 class _FakeDatabase:
@@ -78,11 +88,11 @@ def test_rotation_regenerates_stale_thumbnail(thumbnailer: Thumbnailer, tmp_path
 
     # Simulate the rotation being baked into the file: swap in a portrait image.
     _make_image(source, (20, 40), (30, 30, 200))
-
-    # Sanity: without invalidation the thumbnailer hands back the STALE thumb —
-    # this is exactly the short-circuit the fix has to defeat.
-    assert thumbnailer.ensure_thumbnail(source, "image") == first_thumb
-    assert PILImage.open(first_thumb).size == landscape_size
+    # Push the source's mtime clear of the thumbnail's stamp. A real rotation is
+    # seconds of user interaction after the thumbnail was written; doing it
+    # explicitly keeps the test off filesystems whose timestamp granularity
+    # would land both writes in the same tick.
+    _touch_newer(source)
 
     parent = _FakeParent(thumbnailer)
     item = MediaItem(

@@ -122,9 +122,12 @@ class MediaScanner:
                         touch_batch = []
                     continue
                 if prev is not None and not unchanged and thumb_exists:
-                    # File changed in place. thumb_path_for keys on the *path*,
-                    # so the cached thumbnail is now stale — drop it so the
-                    # decode below regenerates it instead of serving the old one.
+                    # File changed in place, so the path-keyed thumbnail is
+                    # stale — drop it. ensure_thumbnail also self-invalidates on
+                    # mtime, but only in one direction (source newer than
+                    # thumbnail). This check compares against the mtime in the
+                    # index and fires on *any* difference, which is what catches
+                    # a file restored from a backup with an older timestamp.
                     try:
                         thumb_file.unlink()
                     except OSError:
@@ -169,9 +172,12 @@ class MediaScanner:
             media_type = media_type_for(Path(info["name"]))
             if not media_type:
                 continue
-            thumb = client.ensure_thumbnail(dav)
+            # The listing already carries the server's mtime, so a file that
+            # changed on the server gets a fresh thumbnail and a fresh cached
+            # copy instead of the pre-change ones.
+            thumb = client.ensure_thumbnail(dav, remote_mtime=info["mtime"])
             if not thumbnail_only:
-                client.download_file(dav)
+                client.download_file(dav, remote_mtime=info["mtime"])
             folder = self._nc_folder(dav, dav_root, photos_path)
             self.database.upsert_remote_media(
                 path=nc_path(dav),
@@ -384,7 +390,7 @@ class MediaScanner:
                 continue
             missing += 1
             dav = dav_path_from_nc(item.path)
-            thumb = client.ensure_thumbnail(dav)
+            thumb = client.ensure_thumbnail(dav, remote_mtime=item.mtime)
             if thumb:
                 loaded += 1
                 self.database.set_thumb(item.path, thumb, "nextcloud")
