@@ -27,6 +27,9 @@
     <category>Photography</category>
   </categories>
   <url type="homepage">https://github.com/misc-de/Muga</url>
+  <url type="bugtracker">https://github.com/misc-de/Muga/issues</url>
+  <url type="vcs-browser">https://github.com/misc-de/Muga</url>
+  <url type="translate">https://github.com/misc-de/Muga/tree/main/po</url>
   <provides>
     <binary>muga</binary>
   </provides>

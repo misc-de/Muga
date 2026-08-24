@@ -72,7 +72,16 @@ python3 -m muga
 bash uninstall.sh
 ```
 
-**Flatpak** — sandboxed, no Python dependencies on the host:
+**Flatpak** — sandboxed, no Python dependencies on the host. Prebuilt and
+signed for **x86_64** and **aarch64**:
+```bash
+flatpak remote-add --if-not-exists muga https://misc-de.github.io/Muga/io.github.miscde.Muga.flatpakrepo
+flatpak install muga io.github.miscde.Muga
+flatpak run io.github.miscde.Muga
+```
+Updates from then on with `flatpak update`.
+
+To build it yourself instead:
 ```bash
 flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
 flatpak-builder --user --install --force-clean build-dir io.github.miscde.Muga.yml
@@ -82,6 +91,10 @@ The Flatpak covers desktops and v4l2 webcams. The Halium / gst-droid camera
 path (FuriOS, Droidian) needs the Android HAL and sysfs torch nodes, which a
 sandbox cannot reach — on those phones use `install.sh` above. See
 [docs/compatibility.md](docs/compatibility.md).
+
+Packaging the repository yourself — both architectures, signing, gh-pages —
+is in the [Makefile](Makefile) (`make help`); the Flathub submission is
+described in [docs/flathub.md](docs/flathub.md).
 
 For camera release checks on phones and desktops, see
 [docs/camera-validation.md](docs/camera-validation.md).
