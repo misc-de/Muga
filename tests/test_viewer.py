@@ -127,6 +127,7 @@ def test_step_by_zero_is_the_current_item() -> None:
 def _gesture_win(**extra):
     defaults = dict(
         zoom_scale=1.0, _zoom_committed=False, last_gesture_nav_at=0,
+        _sensor_angle=0,
         previous=MagicMock(), next=MagicMock(),
     )
     defaults.update(extra)
@@ -193,6 +194,71 @@ def test_swipe_records_its_timestamp() -> None:
     win = _gesture_win()
     viewer.ViewerWindow._navigate_from_horizontal_motion(win, -300, 0)
     assert win.last_gesture_nav_at > 0
+
+
+# ---------------------------------------------------------------------------
+# Swipe navigation while the picture follows the device orientation
+# ---------------------------------------------------------------------------
+# The gesture controllers live on the stack, so their deltas are in window
+# space, while RotatedContainer turns the picture inside that window. These
+# pin the axes to what the *user* sees, whichever way the phone is held.
+
+def _rotated(angle):
+    win = _gesture_win(_sensor_angle=angle)
+    return win, lambda x, y: viewer.ViewerWindow._navigate_from_horizontal_motion(win, x, y)
+
+
+def test_left_up_landscape_swipes_along_the_users_horizon() -> None:
+    """Held sideways at 90 degrees, the user's right is the window's down."""
+    win, swipe = _rotated(90)
+    swipe(0, 200)  # window: down -> view: right
+    win.previous.assert_called_once()
+    win.next.assert_not_called()
+
+
+def test_left_up_landscape_swipe_the_other_way_goes_forward() -> None:
+    win, swipe = _rotated(90)
+    swipe(0, -200)
+    win.next.assert_called_once()
+
+
+def test_rotated_90_window_horizontal_is_no_longer_navigation() -> None:
+    """What used to page turn is now a vertical drag for the user."""
+    win, swipe = _rotated(90)
+    swipe(-200, 0)
+    win.next.assert_not_called()
+    win.previous.assert_not_called()
+
+
+def test_upside_down_swipes_are_mirrored() -> None:
+    win, swipe = _rotated(180)
+    swipe(-200, 0)  # window: left -> view: right
+    win.previous.assert_called_once()
+
+
+def test_right_up_landscape_swipes_along_the_users_horizon() -> None:
+    win, swipe = _rotated(270)
+    swipe(0, -200)  # window: up -> view: right
+    win.previous.assert_called_once()
+
+
+def test_right_up_landscape_swipe_the_other_way_goes_forward() -> None:
+    win, swipe = _rotated(270)
+    swipe(0, 200)
+    win.next.assert_called_once()
+
+
+def test_rotated_swipe_still_needs_to_clear_the_distance_threshold() -> None:
+    win, swipe = _rotated(90)
+    swipe(0, 50)
+    win.previous.assert_not_called()
+
+
+def test_rotated_swipe_still_needs_to_be_clearly_along_the_horizon() -> None:
+    """Diagonals stay diagonals — the check just runs in view space now."""
+    win, swipe = _rotated(90)
+    swipe(-150, 200)  # view: (200, 150) -> not clearly horizontal
+    win.previous.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
