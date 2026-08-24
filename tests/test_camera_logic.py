@@ -17,11 +17,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 # Frame->file, EXIF and the rotation tables moved into their own module.
-capture_io = pytest.importorskip("yaga.camera_capture_io")
+capture_io = pytest.importorskip("muga.camera_capture_io")
 
-from yaga.camera_orientation import (  # noqa: E402
+from muga.camera_orientation import (  # noqa: E402
     ORIENT_BOTTOM_UP,
     ORIENT_LEFT_UP,
     ORIENT_NORMAL,
@@ -555,11 +555,11 @@ def test_exif_patch_result_is_readable_by_pillow(tmp_path: Path) -> None:
 
     exif = PILImage.Exif()
     exif[274] = 6           # Orientation
-    exif[271] = "Yaga"      # Make
+    exif[271] = "Muga"      # Make
     capture_io._write_exif_app1_inplace(path, exif.tobytes())
 
     with PILImage.open(path) as img:
         assert img.size == (32, 24), "pixel data was disturbed"
         read_back = img.getexif()
         assert read_back[274] == 6
-        assert read_back[271] == "Yaga"
+        assert read_back[271] == "Muga"

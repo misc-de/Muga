@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Memory profiling script for Yaga.
+Memory profiling script for Muga.
 Measures RAM usage under different loads.
 """
 import tempfile
@@ -9,9 +9,9 @@ import time
 import tracemalloc
 import sys
 
-from yaga.database import Database
-from yaga.scanner import MediaScanner
-from yaga.thumbnails import Thumbnailer
+from muga.database import Database
+from muga.scanner import MediaScanner
+from muga.thumbnails import Thumbnailer
 
 
 def format_size(bytes_val: int) -> str:
@@ -111,7 +111,7 @@ def test_scanner_memory():
 
 def test_emoji_cache_memory():
     """Test: Build emoji sticker cache."""
-    from yaga.editor import _EMOJI_PIL_CACHE, _emoji_to_pil
+    from muga.editor import _EMOJI_PIL_CACHE, _emoji_to_pil
     
     def build_emoji_cache():
         _EMOJI_PIL_CACHE.clear()
@@ -189,7 +189,7 @@ def test_gridview_rendering_memory():
 
 
 if __name__ == "__main__":
-    print("🔍 Yaga Memory Profiling\n" + "=" * 50)
+    print("🔍 Muga Memory Profiling\n" + "=" * 50)
     
     if len(sys.argv) > 1 and sys.argv[1] == "--quick":
         # Quick tests for fast iteration

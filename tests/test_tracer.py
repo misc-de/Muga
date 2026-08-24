@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-tracer = pytest.importorskip("yaga.tracer")
+tracer = pytest.importorskip("muga.tracer")
 
 
 @pytest.fixture(autouse=True)
@@ -107,18 +107,18 @@ def test_a_frame_with_no_arguments() -> None:
 # Which frames get logged
 # ---------------------------------------------------------------------------
 
-def test_only_yaga_frames_are_logged() -> None:
+def test_only_muga_frames_are_logged() -> None:
     """Logging every call in the process — gi, pytest, the stdlib — buries the
     one line that matters."""
     import inspect
 
-    assert tracer._is_yaga_frame(inspect.currentframe()) is False   # tests/
+    assert tracer._is_muga_frame(inspect.currentframe()) is False   # tests/
 
 
-def test_a_yaga_frame_is_recognised() -> None:
+def test_a_muga_frame_is_recognised() -> None:
     import inspect
 
-    from yaga import models
+    from muga import models
 
     frame = None
 
@@ -137,9 +137,9 @@ def test_a_yaga_frame_is_recognised() -> None:
     # path instead — the predicate is a substring test on the filename.
     import os
 
-    assert tracer._is_yaga_frame(
+    assert tracer._is_muga_frame(
         type("F", (), {"f_code": type("C", (), {
-            "co_filename": f"{os.sep}yaga{os.sep}app.py"})()})())
+            "co_filename": f"{os.sep}muga{os.sep}app.py"})()})())
 
 
 # ---------------------------------------------------------------------------
@@ -161,15 +161,15 @@ def test_the_hook_ignores_everything_but_calls() -> None:
     tracer._trace_file = io.StringIO()
     import os
 
-    tracer._profile(_hook_frame(f"{os.sep}yaga{os.sep}app.py"), "return", None)
+    tracer._profile(_hook_frame(f"{os.sep}muga{os.sep}app.py"), "return", None)
     assert tracer._trace_file.getvalue() == ""
 
 
-def test_the_hook_writes_a_line_for_a_yaga_call() -> None:
+def test_the_hook_writes_a_line_for_a_muga_call() -> None:
     import os
 
     tracer._trace_file = io.StringIO()
-    tracer._profile(_hook_frame(f"{os.sep}yaga{os.sep}app.py", "refresh"), "call", None)
+    tracer._profile(_hook_frame(f"{os.sep}muga{os.sep}app.py", "refresh"), "call", None)
     written = tracer._trace_file.getvalue()
     assert "refresh" in written
     assert "app.py:42" in written
@@ -195,14 +195,14 @@ def test_the_hook_survives_a_closed_log() -> None:
     handle = io.StringIO()
     handle.close()
     tracer._trace_file = handle
-    tracer._profile(_hook_frame(f"{os.sep}yaga{os.sep}app.py"), "call", None)
+    tracer._profile(_hook_frame(f"{os.sep}muga{os.sep}app.py"), "call", None)
 
 
 def test_the_hook_works_without_a_log_file() -> None:
     import os
 
     tracer._trace_file = None
-    tracer._profile(_hook_frame(f"{os.sep}yaga{os.sep}app.py"), "call", None)
+    tracer._profile(_hook_frame(f"{os.sep}muga{os.sep}app.py"), "call", None)
 
 
 def test_the_hook_records_the_last_event_per_thread() -> None:
@@ -211,7 +211,7 @@ def test_the_hook_records_the_last_event_per_thread() -> None:
 
     tracer._trace_file = io.StringIO()
     tracer._last_event_repr.clear()
-    tracer._profile(_hook_frame(f"{os.sep}yaga{os.sep}viewer.py", "show_item"),
+    tracer._profile(_hook_frame(f"{os.sep}muga{os.sep}viewer.py", "show_item"),
                     "call", None)
     tid = threading.current_thread().ident
     assert "show_item" in tracer._last_event_repr[tid]
@@ -363,7 +363,7 @@ def test_install_opens_a_log_and_hooks_the_profiler(tmp_path: Path) -> None:
             tracer._trace_file.close()
             tracer._trace_file = None
 
-    assert "Yaga trace started" in target.read_text()
+    assert "Muga trace started" in target.read_text()
 
 
 def test_install_creates_the_log_directory(tmp_path: Path) -> None:

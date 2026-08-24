@@ -18,15 +18,15 @@ import pytest
 
 # --- test isolation ---------------------------------------------------------
 # Point the XDG roots at a throwaway directory before anything imports
-# yaga.config, which derives CONFIG_DIR / CACHE_DIR / DATA_DIR (and DB_PATH,
+# muga.config, which derives CONFIG_DIR / CACHE_DIR / DATA_DIR (and DB_PATH,
 # THUMB_DIR, the log paths) from them at import time. Setting the environment
 # rather than monkeypatching the constants covers every module that imported
 # them by value, and it covers the fixtures that build a real GalleryWindow.
 #
 # Without this a plain `pytest` run edits the developer's own gallery: the
 # update-flow tests call settings.save(), which rewrote settings.json, and the
-# scan tests wrote into the real yaga.sqlite3 and thumbnail cache.
-_XDG_SANDBOX = tempfile.mkdtemp(prefix="yaga-tests-")
+# scan tests wrote into the real muga.sqlite3 and thumbnail cache.
+_XDG_SANDBOX = tempfile.mkdtemp(prefix="muga-tests-")
 for _var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
     os.environ[_var] = os.path.join(_XDG_SANDBOX, _var[4:-5].lower())
 atexit.register(shutil.rmtree, _XDG_SANDBOX, True)
@@ -71,7 +71,7 @@ def _offscreen_raster_works() -> bool:
     GskCairoRenderer happily and then hand back a texture whose pixels are not
     what was painted. The tests that check "the rotation actually moves
     pixels" build their snapshot out of plain GTK primitives and never touch
-    Yaga code, so where this is broken they say nothing about the app; they
+    Muga code, so where this is broken they say nothing about the app; they
     only report that the environment cannot rasterise. Skipping is the honest
     answer there, and this is the check that decides it: paint one opaque red
     square, read one pixel back.
@@ -135,7 +135,7 @@ def gtk_app():
     from gi.repository import Adw
 
     Adw.init()
-    app = Adw.Application(application_id="io.github.miscde.YagaTests")
+    app = Adw.Application(application_id="io.github.miscde.MugaTests")
     app.register()
     return app
 
@@ -149,7 +149,7 @@ def gallery_window(gtk_app):
     """
     from unittest.mock import patch
 
-    import yaga.app as app_mod
+    import muga.app as app_mod
 
     with patch.object(app_mod.GalleryWindow, "refresh"):
         win = app_mod.GalleryWindow(gtk_app)

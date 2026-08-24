@@ -21,7 +21,7 @@ sysfs torch permissions, sensor orientation, or Phosh lifecycle behaviour.
   thumb-reachable and upright.
 - Enable geotagging, capture a photo, and verify GPS EXIF is written when
   GeoClue provides a fix.
-- Record at every quality preset and verify files play in Yaga and an external
+- Record at every quality preset and verify files play in Muga and an external
   player.
 
 ## Desktop / V4L2 / PipeWire
@@ -29,16 +29,16 @@ sysfs torch permissions, sensor orientation, or Phosh lifecycle behaviour.
 - Open Camera with an internal webcam and with an external USB webcam.
 - Capture photo at default resolution and one user-selected resolution.
 - Switch to video mode and record at least 10 s.
-- Confirm the saved `.mkv` opens in Yaga and an external player.
-- Unplug a USB camera while Yaga is closed, reopen, and confirm the app does
+- Confirm the saved `.mkv` opens in Muga and an external player.
+- Unplug a USB camera while Muga is closed, reopen, and confirm the app does
   not show stale devices.
 
 ## Diagnostics To Capture On Failure
 
-Run Yaga from a terminal with:
+Run Muga from a terminal with:
 
 ```bash
-YAGA_CAMERA_DEBUG=1 python3 -m yaga
+MUGA_CAMERA_DEBUG=1 python3 -m muga
 ```
 
 Save the terminal output, the device model, FuriOS/Distro version, and the

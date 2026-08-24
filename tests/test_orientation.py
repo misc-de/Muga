@@ -18,9 +18,9 @@ import math
 
 import pytest
 
-orientation = pytest.importorskip("yaga.camera_orientation")
+orientation = pytest.importorskip("muga.camera_orientation")
 
-from yaga.camera_orientation import (  # noqa: E402
+from muga.camera_orientation import (  # noqa: E402
     ORIENT_BOTTOM_UP,
     ORIENT_LEFT_UP,
     ORIENT_NORMAL,

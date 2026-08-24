@@ -21,7 +21,7 @@ import pytest
 
 from tests.conftest import requires_display
 
-sw = pytest.importorskip("yaga.settings_window")
+sw = pytest.importorskip("muga.settings_window")
 
 SettingsWindow = sw.SettingsWindow
 
@@ -93,7 +93,7 @@ def _update_win(last_check="") -> SimpleNamespace:
 
 
 def test_update_row_shows_the_version() -> None:
-    from yaga import updater
+    from muga import updater
 
     text = SettingsWindow._update_row_subtitle(_update_win())
     assert f"v{updater.get_current_version()}" in text
@@ -237,7 +237,7 @@ def test_settings_dialog_opens_on_any_page(settings_dialog, page) -> None:
 
 @requires_display
 def test_settings_dialog_shows_the_update_row(settings_dialog) -> None:
-    from yaga import updater
+    from muga import updater
 
     dialog = settings_dialog()
     assert f"v{updater.get_current_version()}" in dialog._update_row.get_subtitle()
@@ -247,7 +247,7 @@ def test_settings_dialog_shows_the_update_row(settings_dialog) -> None:
 def test_a_flatpak_gets_the_version_but_no_update_button(settings_dialog, monkeypatch) -> None:
     """Updates come from the host there, so the button is replaced by a hint.
     The row itself stays: the version is what a bug report needs."""
-    from yaga import updater
+    from muga import updater
 
     monkeypatch.setattr(updater, "is_flatpak", lambda: True)
     dialog = settings_dialog()
@@ -257,7 +257,7 @@ def test_a_flatpak_gets_the_version_but_no_update_button(settings_dialog, monkey
 
 @requires_display
 def test_a_normal_install_still_gets_the_update_button(settings_dialog, monkeypatch) -> None:
-    from yaga import updater
+    from muga import updater
 
     monkeypatch.setattr(updater, "is_flatpak", lambda: False)
     dialog = settings_dialog()
@@ -357,7 +357,7 @@ def test_qr_success_treats_plain_text_as_a_password(settings_dialog) -> None:
 
 @requires_display
 def test_update_check_offers_the_new_version(settings_dialog) -> None:
-    from yaga import updater
+    from muga import updater
 
     dialog = settings_dialog()
     dialog._on_check_update_done(updater.UpdateInfo(True, "0.9.9"), "2026-03-14T09:30:00")
@@ -367,7 +367,7 @@ def test_update_check_offers_the_new_version(settings_dialog) -> None:
 
 @requires_display
 def test_update_check_reports_being_current(settings_dialog) -> None:
-    from yaga import updater
+    from muga import updater
 
     dialog = settings_dialog()
     with patch.object(sw.GLib, "timeout_add_seconds", return_value=7):
@@ -381,7 +381,7 @@ def test_update_check_reports_being_current(settings_dialog) -> None:
 def test_update_check_rearms_the_button_afterwards(settings_dialog) -> None:
     """Left disabled, "Up to date" would be the last thing the button ever
     says for the rest of the session."""
-    from yaga import updater
+    from muga import updater
 
     dialog = settings_dialog()
     with patch.object(sw.GLib, "timeout_add_seconds", return_value=7) as timeout:
@@ -392,8 +392,8 @@ def test_update_check_rearms_the_button_afterwards(settings_dialog) -> None:
 
 @requires_display
 def test_update_check_persists_the_timestamp(settings_dialog, gallery_window) -> None:
-    from yaga import updater
-    from yaga.config import Settings
+    from muga import updater
+    from muga.config import Settings
 
     dialog = settings_dialog()
     with patch.object(Settings, "save"):
@@ -405,7 +405,7 @@ def test_update_check_persists_the_timestamp(settings_dialog, gallery_window) ->
 @requires_display
 def test_update_check_skips_a_closed_dialog(settings_dialog) -> None:
     """The check runs on a worker; the user can close Settings meanwhile."""
-    from yaga import updater
+    from muga import updater
 
     dialog = settings_dialog()
     dialog._closing = True
@@ -444,8 +444,8 @@ def test_applied_update_skips_a_closed_dialog(settings_dialog) -> None:
 @requires_display
 def test_update_check_end_to_end(settings_dialog, pump) -> None:
     """Button press to result, through the worker thread and back."""
-    from yaga import updater
-    from yaga.config import Settings
+    from muga import updater
+    from muga.config import Settings
 
     dialog = settings_dialog()
     with patch.object(updater, "check_for_update",
@@ -467,7 +467,7 @@ def test_update_check_end_to_end(settings_dialog, pump) -> None:
 
 @requires_display
 def test_nc_connect_success_enables_the_account(settings_dialog, gallery_window) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     with patch.object(Settings, "save"), \
@@ -508,7 +508,7 @@ def test_nc_connect_skips_a_closed_dialog(settings_dialog) -> None:
 def test_nc_disconnect_closes_the_shared_client(settings_dialog, gallery_window) -> None:
     """Otherwise a scripted call could still reach the server with the
     credentials the user just disconnected from."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     client = MagicMock()
@@ -525,7 +525,7 @@ def test_nc_disconnect_closes_the_shared_client(settings_dialog, gallery_window)
 @requires_display
 def test_nc_disconnect_is_persisted(settings_dialog, gallery_window) -> None:
     """The next launch has to come up disconnected too."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     with patch.object(Settings, "save") as save:
@@ -539,7 +539,7 @@ def test_nc_disconnect_leaves_the_account_configured(settings_dialog) -> None:
     """It is a soft action — cached thumbnails and the tab stay."""
     dialog = settings_dialog()
     dialog.settings.nextcloud_enabled = True
-    from yaga.config import Settings
+    from muga.config import Settings
 
     with patch.object(Settings, "save"):
         dialog._nc_disconnect(None)
@@ -548,7 +548,7 @@ def test_nc_disconnect_leaves_the_account_configured(settings_dialog) -> None:
 
 @requires_display
 def test_nc_disconnect_survives_a_dead_client(settings_dialog, gallery_window) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     client = MagicMock()
@@ -562,7 +562,7 @@ def test_nc_disconnect_survives_a_dead_client(settings_dialog, gallery_window) -
 @requires_display
 def test_nc_connect_clears_the_index_on_an_account_change(settings_dialog, gallery_window) -> None:
     """Rows from the old account would otherwise linger in the gallery."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     dialog.settings.nextcloud_url = "https://old.example.org"
@@ -579,7 +579,7 @@ def test_nc_connect_clears_the_index_on_an_account_change(settings_dialog, galle
 @requires_display
 def test_nc_connect_keeps_the_index_for_the_same_account(settings_dialog, gallery_window) -> None:
     """Re-entering the same password must not throw the whole index away."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     dialog.settings.nextcloud_url = "https://cloud.example.org"
@@ -595,7 +595,7 @@ def test_nc_connect_keeps_the_index_for_the_same_account(settings_dialog, galler
 
 @requires_display
 def test_nc_connect_stores_credentials_before_testing(settings_dialog) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     with patch.object(Settings, "save"), \
@@ -610,7 +610,7 @@ def test_nc_connect_stores_credentials_before_testing(settings_dialog) -> None:
 
 @requires_display
 def test_nc_connect_defaults_the_photos_path(settings_dialog) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     dialog = settings_dialog()
     dialog.settings.nextcloud_photos_path = "   "

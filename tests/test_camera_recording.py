@@ -2,7 +2,7 @@
 
 The Halium recorder exists because the obvious approach does not work there:
 gst-droid refuses ``start-capture`` on vidsrc with "Cannot record video in raw
-mode", so Yaga tees off the *viewfinder* pad instead and records MJPEG into
+mode", so Muga tees off the *viewfinder* pad instead and records MJPEG into
 Matroska, which needs no start-capture at all.
 
 The sample handlers are one-shot by construction. Both disconnect themselves
@@ -19,9 +19,9 @@ import pytest
 
 from tests.camera_fakes import FakeElement, FakeGst, FakePad, gst_win
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 # The recording pipeline lives in its own module now.
-camera_video = pytest.importorskip("yaga.camera_video")
+camera_video = pytest.importorskip("muga.camera_video")
 
 
 def _droid_pads(with_vfsrc=True):

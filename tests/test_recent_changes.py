@@ -44,7 +44,7 @@ def gallery_source() -> str:
     at all of them or it starts failing for the wrong reason — a moved method
     rather than a lost behaviour.
     """
-    root = Path(__file__).resolve().parent.parent / "yaga"
+    root = Path(__file__).resolve().parent.parent / "muga"
     return "\n".join(
         (root / name).read_text(encoding="utf-8")
         for name in (
@@ -62,7 +62,7 @@ def gallery_source() -> str:
 # ---------------------------------------------------------------------------
 
 def test_video_light_toggle_turns_torch_on_before_recording() -> None:
-    from yaga.camera import CameraWindow
+    from muga.camera import CameraWindow
 
     fake = SimpleNamespace(
         _capture_mode="video",
@@ -71,14 +71,14 @@ def test_video_light_toggle_turns_torch_on_before_recording() -> None:
         _pipeline=None,
     )
 
-    with patch("yaga.camera.set_torch_sysfs") as set_torch:
+    with patch("muga.camera.set_torch_sysfs") as set_torch:
         CameraWindow._apply_flash_to_pipeline(fake)
 
     set_torch.assert_called_once_with(True)
 
 
 def test_photo_mode_keeps_sysfs_torch_off() -> None:
-    from yaga.camera import CameraWindow
+    from muga.camera import CameraWindow
 
     fake = SimpleNamespace(
         _capture_mode="photo",
@@ -87,7 +87,7 @@ def test_photo_mode_keeps_sysfs_torch_off() -> None:
         _pipeline=None,
     )
 
-    with patch("yaga.camera.set_torch_sysfs") as set_torch:
+    with patch("muga.camera.set_torch_sysfs") as set_torch:
         CameraWindow._apply_flash_to_pipeline(fake)
 
     set_torch.assert_called_once_with(False)
@@ -102,7 +102,7 @@ def _thumb_cache_self():
 
 
 def test_thumb_exists_caches_positive_result(tmp_path: Path) -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _thumb_cache_self()
     real = tmp_path / "thumb.jpg"
     real.write_bytes(b"x")
@@ -113,7 +113,7 @@ def test_thumb_exists_caches_positive_result(tmp_path: Path) -> None:
 
 
 def test_thumb_exists_caches_negative_result(tmp_path: Path) -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _thumb_cache_self()
     missing = tmp_path / "nope.jpg"
     assert GalleryGrid._thumb_exists(fake, str(missing)) is False
@@ -126,12 +126,12 @@ def test_thumb_exists_caches_negative_result(tmp_path: Path) -> None:
 
 
 def test_thumb_exists_returns_false_for_empty_path() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     assert GalleryGrid._thumb_exists(_thumb_cache_self(), "") is False
 
 
 def test_thumb_exists_evicts_when_cache_is_full(tmp_path: Path) -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _thumb_cache_self()  # MAX = 8
     for i in range(fake._EXISTS_CACHE_MAX + 3):
         f = tmp_path / f"f{i}.jpg"
@@ -165,14 +165,14 @@ def _long_press_self():
 
 
 def test_long_press_timer_threshold_is_close_to_one_and_a_half_seconds() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     # Audit said 2000 ms felt like 3 s; we tuned to 1300 ms. Keep it
     # bracketed so future tweaks don't accidentally land on 0.3 s or 5 s.
     assert 800 <= GalleryGrid._LONG_PRESS_HOLD_MS <= 1500
 
 
 def test_motion_inside_threshold_does_not_abort() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _long_press_self()
     fake._abort_long_press = lambda g: setattr(g, "_long_press_timer_id", 0)
     g = _StubGesture()
@@ -184,7 +184,7 @@ def test_motion_inside_threshold_does_not_abort() -> None:
 
 
 def test_motion_beyond_threshold_aborts() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     aborted: list = []
     fake = _long_press_self()
     fake._abort_long_press = lambda g: aborted.append(g)
@@ -197,7 +197,7 @@ def test_motion_beyond_threshold_aborts() -> None:
 
 
 def test_abort_long_press_clears_timer_and_ignores_zero() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _long_press_self()
     g = _StubGesture()
     g._long_press_timer_id = 0
@@ -214,7 +214,7 @@ def test_abort_long_press_clears_timer_and_ignores_zero() -> None:
 def _long_press_self_with_owner(owner):
     """As _long_press_self, but with the helpers _fire_long_press needs
     to walk a list_item back to its MediaRow."""
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _long_press_self()
     fake.owner = owner
     # _fire_long_press calls self._get_tile_item — that's a pure helper
@@ -224,7 +224,7 @@ def _long_press_self_with_owner(owner):
 
 
 def test_fire_long_press_enters_selection_and_toggles() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     owner_calls = SimpleNamespace(entered=0, toggled=[])
 
     def enter():
@@ -258,7 +258,7 @@ def test_fire_long_press_enters_selection_and_toggles() -> None:
 
 
 def test_fire_long_press_skips_folders() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     owner = SimpleNamespace(
         _selection_mode=False,
         _enter_selection_mode=MagicMock(),
@@ -275,7 +275,7 @@ def test_fire_long_press_skips_folders() -> None:
 
 
 def test_fire_long_press_ignores_headers() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     owner = SimpleNamespace(
         _selection_mode=False,
         _enter_selection_mode=MagicMock(),
@@ -294,7 +294,7 @@ def test_fire_long_press_ignores_headers() -> None:
 # ---------------------------------------------------------------------------
 
 def test_refresh_selection_state_rebinds_every_bound_item() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     sentinel_a, sentinel_b, sentinel_c = object(), object(), object()
     rebound: list = []
     fake = SimpleNamespace(
@@ -306,14 +306,14 @@ def test_refresh_selection_state_rebinds_every_bound_item() -> None:
 
 
 def test_update_tile_for_path_returns_false_when_path_not_bound() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = SimpleNamespace(_bound_list_items=[], _apply_binding=MagicMock())
     assert GalleryGrid.update_tile_for_path(fake, "/nope.jpg") is False
     fake._apply_binding.assert_not_called()
 
 
 def test_update_tile_for_path_rebinds_only_matching_item() -> None:
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
 
     def make_li(path: str):
         item = SimpleNamespace(path=path)
@@ -336,7 +336,7 @@ def test_update_tile_for_path_rebinds_only_matching_item() -> None:
 def _update_thumb_self(item_index, bound_list_items, rebound):
     """SimpleNamespace self for update_item_thumb: O(1) index lookup +
     cache invalidation + targeted re-bind via update_tile_for_path."""
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = SimpleNamespace(
         _item_index=item_index,
         _exists_cache=collections.OrderedDict({"/old/thumb.jpg": (0.0, True)}),
@@ -354,8 +354,8 @@ def test_update_item_thumb_mutates_in_place_and_rebinds() -> None:
     """update_item_thumb used to splice the full GalleryRow; now an O(1)
     _item_index lookup swaps the MediaRow's frozen MediaItem for one carrying
     the new thumb_path and re-binds only the affected list_item."""
-    from yaga.gallery_grid import GalleryGrid
-    from yaga.models import MediaItem
+    from muga.gallery_grid import GalleryGrid
+    from muga.models import MediaItem
 
     def make_item(path: str, thumb: str | None = None) -> MediaItem:
         return MediaItem(
@@ -384,8 +384,8 @@ def test_update_item_thumb_mutates_when_scrolled_out_of_view() -> None:
     """When the path isn't in the bound viewport, the index still finds and
     mutates the MediaRow so a later scroll-in picks up the new thumb — with
     no re-bind (nothing visible)."""
-    from yaga.gallery_grid import GalleryGrid
-    from yaga.models import MediaItem
+    from muga.gallery_grid import GalleryGrid
+    from muga.models import MediaItem
 
     item = MediaItem(
         id=1, path="/scrolled-out.jpg", category="pictures", media_type="image",
@@ -403,7 +403,7 @@ def test_update_item_thumb_mutates_when_scrolled_out_of_view() -> None:
 
 def test_update_item_thumb_returns_false_for_unknown_path() -> None:
     """A thumb arrival for a path not in the current view is a no-op."""
-    from yaga.gallery_grid import GalleryGrid
+    from muga.gallery_grid import GalleryGrid
     fake = _update_thumb_self({}, [], [])
     assert GalleryGrid.update_item_thumb(fake, "/gone.jpg", "/t.jpg") is False
 
@@ -413,7 +413,7 @@ def test_update_item_thumb_returns_false_for_unknown_path() -> None:
 # ---------------------------------------------------------------------------
 
 def test_cancel_nc_thumb_queue_drains_and_signals() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(
         _nc_thumb_lock=threading.Lock(),
         _nc_thumb_queue=["/a", "/b", "/c"],
@@ -432,7 +432,7 @@ def test_cancel_nc_thumb_queue_drains_and_signals() -> None:
 
 
 def test_cancel_nc_thumb_queue_is_a_noop_when_empty() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(
         _nc_thumb_lock=threading.Lock(),
         _nc_thumb_queue=[],
@@ -447,7 +447,7 @@ def test_cancel_nc_thumb_queue_is_a_noop_when_empty() -> None:
 def test_local_thumb_worker_persists_and_enqueues_update() -> None:
     """On-demand local thumb: decode → write to DB → enqueue tile update, and
     always clear the pending marker so the path can be retried later."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     db_writes: list = []
     enqueued: list = []
     fake = SimpleNamespace(
@@ -466,7 +466,7 @@ def test_local_thumb_worker_persists_and_enqueues_update() -> None:
 
 
 def test_local_thumb_worker_clears_pending_when_generation_fails() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     db_writes: list = []
     enqueued: list = []
     fake = SimpleNamespace(
@@ -487,7 +487,7 @@ def test_local_thumb_worker_clears_pending_when_generation_fails() -> None:
 def test_request_local_thumbnail_dedups_in_flight_paths() -> None:
     """A tile rebinding repeatedly while its thumb is still decoding must not
     queue the same decode twice."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     submits: list = []
     fake = SimpleNamespace(
         _local_thumb_lock=threading.Lock(),
@@ -505,7 +505,7 @@ def test_request_local_thumbnail_dedups_in_flight_paths() -> None:
 def test_request_local_thumbnail_skips_known_failures() -> None:
     """A path whose generation already failed must not be re-queued on every
     subsequent rebind."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     submits: list = []
     fake = SimpleNamespace(
         _local_thumb_lock=threading.Lock(),
@@ -522,8 +522,8 @@ def test_scan_signature_ignores_display_only_settings() -> None:
     """Changing theme / columns / language / sort / cache must NOT trigger a
     rescan — those are pure display, and rescanning the library on each was
     the dominant settings-interaction latency."""
-    from yaga.app import GalleryWindow
-    from yaga.config import Settings
+    from muga.app import GalleryWindow
+    from muga.config import Settings
     a = Settings()
     b = Settings(**a.__dict__)
     b.grid_columns = a.grid_columns + 2
@@ -538,8 +538,8 @@ def test_scan_signature_ignores_display_only_settings() -> None:
 def test_scan_signature_changes_on_folder_or_nc_change() -> None:
     """A real change to the indexed file set (a folder root, or the Nextcloud
     connection) must change the signature so the scan does run."""
-    from yaga.app import GalleryWindow
-    from yaga.config import Settings
+    from muga.app import GalleryWindow
+    from muga.config import Settings
     a = Settings()
     folder = Settings(**a.__dict__)
     folder.photos_dir = "/somewhere/else"
@@ -552,7 +552,7 @@ def test_scan_signature_changes_on_folder_or_nc_change() -> None:
 def test_translator_caches_active_language_and_invalidates_on_change() -> None:
     """gettext is called hundreds of times per UI build; active_language is
     cached. The cache must still flip when `language` is reassigned."""
-    from yaga.i18n import Translator
+    from muga.i18n import Translator
     t = Translator("de")
     assert t.gettext("Settings") == "Einstellungen"
     t.language = "en"
@@ -564,13 +564,13 @@ def test_translator_caches_active_language_and_invalidates_on_change() -> None:
 # ---------------------------------------------------------------------------
 
 def test_share_dialog_response_passes_attach_per_local_path() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(
         _set_status=MagicMock(),
         _=lambda s: s,
     )
     paths = ["/home/u/a.jpg", "/home/u/b.jpg"]
-    with patch("yaga.app.subprocess.Popen") as popen:
+    with patch("muga.app.subprocess.Popen") as popen:
         GalleryWindow._on_share_dialog_response(fake, None, "email", paths)
     popen.assert_called_once()
     argv = popen.call_args[0][0]
@@ -581,9 +581,9 @@ def test_share_dialog_response_passes_attach_per_local_path() -> None:
 
 
 def test_share_dialog_response_no_op_on_cancel_or_empty() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(_set_status=MagicMock(), _=lambda s: s)
-    with patch("yaga.app.subprocess.Popen") as popen:
+    with patch("muga.app.subprocess.Popen") as popen:
         GalleryWindow._on_share_dialog_response(fake, None, "cancel", ["/a.jpg"])
         GalleryWindow._on_share_dialog_response(fake, None, "email", [])
     popen.assert_not_called()
@@ -592,7 +592,7 @@ def test_share_dialog_response_no_op_on_cancel_or_empty() -> None:
 def test_open_share_dialog_filters_nc_paths_at_helper_level() -> None:
     """open_share_dialog itself constructs Adw.AlertDialog (GTK-heavy);
     pin down the NC-filter contract via the helper that drives it."""
-    from yaga.nextcloud import is_nc_path, NC_PATH_PREFIX
+    from muga.nextcloud import is_nc_path, NC_PATH_PREFIX
     paths = [f"{NC_PATH_PREFIX}foo/bar.jpg", "/home/u/a.jpg"]
     locals_only = [p for p in paths if not is_nc_path(p)]
     assert locals_only == ["/home/u/a.jpg"]
@@ -603,7 +603,7 @@ def test_open_share_dialog_filters_nc_paths_at_helper_level() -> None:
 # ---------------------------------------------------------------------------
 
 def test_slideshow_tick_skips_videos() -> None:
-    from yaga.viewer import ViewerWindow
+    from muga.viewer import ViewerWindow
     fake = SimpleNamespace(
         _slideshow_active=True,
         items=[
@@ -626,7 +626,7 @@ def test_slideshow_tick_skips_videos() -> None:
 
 
 def test_slideshow_tick_stops_on_all_video_gallery() -> None:
-    from yaga.viewer import ViewerWindow
+    from muga.viewer import ViewerWindow
     fake = SimpleNamespace(
         _slideshow_active=True,
         items=[
@@ -645,7 +645,7 @@ def test_slideshow_tick_stops_on_all_video_gallery() -> None:
 
 
 def test_slideshow_tick_inactive_returns_immediately() -> None:
-    from yaga.viewer import ViewerWindow
+    from muga.viewer import ViewerWindow
     fake = SimpleNamespace(
         _slideshow_active=False,
         items=[],
@@ -666,7 +666,7 @@ def test_slideshow_tick_inactive_returns_immediately() -> None:
 
 def test_editor_history_callback_fires_on_snapshot_undo_redo(tmp_path: Path) -> None:
     pil = pytest.importorskip("PIL")
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
     img_path = tmp_path / "tiny.png"
     pil.Image.new("RGB", (16, 16), (200, 100, 50)).save(str(img_path))
 
@@ -739,7 +739,7 @@ def test_editor_history_callback_fires_on_snapshot_undo_redo(tmp_path: Path) -> 
 
 def test_editor_undo_reverts_parameter_edits(tmp_path: Path) -> None:
     pil = pytest.importorskip("PIL")
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
     img_path = tmp_path / "tiny.png"
     pil.Image.new("RGB", (16, 16), (200, 100, 50)).save(str(img_path))
 
@@ -835,7 +835,7 @@ def _make_editor_fake(pil, img_path):
 
 def test_obfuscate_drag_begin_snapshots_for_undo(tmp_path: Path) -> None:
     pil = pytest.importorskip("PIL")
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
     img_path = tmp_path / "t.png"
     pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
 
@@ -873,7 +873,7 @@ def test_obfuscate_drag_begin_snapshots_for_undo(tmp_path: Path) -> None:
 
 def test_sticker_drag_begin_snapshots_for_undo(tmp_path: Path) -> None:
     pil = pytest.importorskip("PIL")
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
     img_path = tmp_path / "t.png"
     pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
 
@@ -906,7 +906,7 @@ def test_sticker_drag_begin_snapshots_for_undo(tmp_path: Path) -> None:
 
 def test_sticker_zoom_begin_snapshots_for_undo(tmp_path: Path) -> None:
     pil = pytest.importorskip("PIL")
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
     img_path = tmp_path / "t.png"
     pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
 
@@ -934,7 +934,7 @@ def test_sticker_zoom_begin_snapshots_for_undo(tmp_path: Path) -> None:
 def test_sticker_zoom_begin_no_snapshot_when_no_active_source(tmp_path: Path) -> None:
     """If there is no active sticker, pinch begin must not create a phantom undo entry."""
     pil = pytest.importorskip("PIL")
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
     img_path = tmp_path / "t.png"
     pil.Image.new("RGB", (16, 16), (0, 0, 0)).save(str(img_path))
 
@@ -958,16 +958,16 @@ def test_sticker_zoom_begin_no_snapshot_when_no_active_source(tmp_path: Path) ->
 def test_save_app_password_writes_0600_into_0700_parent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cred = tmp_path / "yagacfg" / "nc_password"
-    monkeypatch.setattr("yaga.config.CONFIG_DIR", tmp_path / "yagacfg")
-    monkeypatch.setattr("yaga.config.Settings._CRED_FILE", cred)
+    cred = tmp_path / "mugacfg" / "nc_password"
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path / "mugacfg")
+    monkeypatch.setattr("muga.config.Settings._CRED_FILE", cred)
 
     # Stub libsecret out so we hit the file fallback deterministically.
     def _no_secret(*_a, **_kw):
         raise RuntimeError("no libsecret in test")
     monkeypatch.setattr("gi.require_version", _no_secret)
 
-    from yaga.config import Settings
+    from muga.config import Settings
     s = Settings()
     s.nextcloud_url = "https://nc.example"
     s.nextcloud_user = "alice"
@@ -990,7 +990,7 @@ def test_save_app_password_writes_0600_into_0700_parent(
 
 def test_pillow_max_image_pixels_is_capped() -> None:
     pytest.importorskip("PIL")
-    from yaga.editor._pil import PILImage, _PIL_OK
+    from muga.editor._pil import PILImage, _PIL_OK
     if not _PIL_OK:
         pytest.skip("Pillow not installed")
     assert PILImage.MAX_IMAGE_PIXELS is not None
@@ -1011,16 +1011,16 @@ def test_cleanup_abandoned_temp_files_does_not_touch_pictures(
     user_edit = pictures / "vacation_edit_2.jpg"
     user_edit.write_bytes(b"keep me")
 
-    cache = tmp_path / "cache" / "yaga"
+    cache = tmp_path / "cache" / "muga"
     nc_cache = cache / "nextcloud"
     nc_cache.mkdir(parents=True)
     nc_temp = nc_cache / "remote_edit_1.jpg"
     nc_temp.write_bytes(b"throwaway")
 
-    monkeypatch.setattr("yaga.config.CACHE_DIR", cache)
+    monkeypatch.setattr("muga.config.CACHE_DIR", cache)
     monkeypatch.setenv("HOME", str(home))
 
-    from yaga.app import _cleanup_abandoned_temp_files
+    from muga.app import _cleanup_abandoned_temp_files
     _cleanup_abandoned_temp_files()
 
     assert user_edit.exists()  # was a data-loss risk in the old version
@@ -1032,7 +1032,7 @@ def test_cleanup_abandoned_temp_files_does_not_touch_pictures(
 # ---------------------------------------------------------------------------
 
 def test_database_creates_fts_index_when_supported(tmp_path: Path) -> None:
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "fts.sqlite3")
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable on this SQLite build")
@@ -1051,7 +1051,7 @@ def test_search_returns_substring_match_via_fts(tmp_path: Path) -> None:
     """Trigram preserves the user's substring-match mental model: typing
     'ach' must still find 'Bachstrasse.png'. Validates the actual SQL
     path, not just clause-building."""
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "fts.sqlite3")
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable on this SQLite build")
@@ -1079,7 +1079,7 @@ def test_search_short_query_falls_back_to_like(tmp_path: Path) -> None:
     """Trigram FTS5 returns nothing for queries < 3 chars; the search
     clause must transparently fall back to LIKE so a 2-char query still
     finds matches."""
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "fts.sqlite3")
 
     folder = tmp_path / "p"
@@ -1099,7 +1099,7 @@ def test_search_short_query_falls_back_to_like(tmp_path: Path) -> None:
 def test_search_handles_fts_special_chars_in_filename(tmp_path: Path) -> None:
     """Filenames containing FTS5 reserved syntax (OR, NEAR, parens, …)
     must not crash the search or be reinterpreted as operators."""
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "fts.sqlite3")
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable on this SQLite build")
@@ -1128,7 +1128,7 @@ def test_evict_cache_async_drops_concurrent_calls() -> None:
     """Rapid folder hops fire evict_cache_async on every scan completion;
     without coalescing each call would walk THUMB_DIR + _NC_CACHE in its
     own daemon thread. Verify the in-flight guard suppresses duplicates."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(
         settings=SimpleNamespace(cache_max_mb=100),
         _EVICT_MIN_INTERVAL_SEC=GalleryWindow._EVICT_MIN_INTERVAL_SEC,
@@ -1136,7 +1136,7 @@ def test_evict_cache_async_drops_concurrent_calls() -> None:
     )
 
     started = []
-    with patch("yaga.app.threading.Thread") as Thread:
+    with patch("muga.app.threading.Thread") as Thread:
         def fake_thread_ctor(target=None, daemon=None, **_kw):
             started.append(target)
             return SimpleNamespace(start=lambda: None)
@@ -1155,7 +1155,7 @@ def test_evict_cache_async_throttle_blocks_followups() -> None:
     """After a worker finishes, follow-up calls within the throttle
     window are dropped (avoids re-walking on every scan in a session
     where the user is hopping folders quickly)."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(
         settings=SimpleNamespace(cache_max_mb=100),
         _EVICT_MIN_INTERVAL_SEC=GalleryWindow._EVICT_MIN_INTERVAL_SEC,
@@ -1164,7 +1164,7 @@ def test_evict_cache_async_throttle_blocks_followups() -> None:
         _evict_last_finished_at=time.monotonic(),  # just finished
     )
     started = []
-    with patch("yaga.app.threading.Thread") as Thread:
+    with patch("muga.app.threading.Thread") as Thread:
         Thread.side_effect = lambda target=None, daemon=None, **_kw: (
             started.append(target),
             SimpleNamespace(start=lambda: None),
@@ -1174,11 +1174,11 @@ def test_evict_cache_async_throttle_blocks_followups() -> None:
 
 
 def test_evict_cache_async_no_op_when_budget_disabled() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     fake = SimpleNamespace(
         settings=SimpleNamespace(cache_max_mb=0),
     )
-    with patch("yaga.app.threading.Thread") as Thread:
+    with patch("muga.app.threading.Thread") as Thread:
         GalleryWindow.evict_cache_async(fake)
     Thread.assert_not_called()
 
@@ -1190,7 +1190,7 @@ def test_evict_cache_async_no_op_when_budget_disabled() -> None:
 def _bare_db(tmp_path: Path):
     """Real Database instance — these tests need an actual SQLite to drive
     schema-aware code (FTS detection, column types). Cheap: <1ms."""
-    from yaga.database import Database
+    from muga.database import Database
     return Database(tmp_path / "search.sqlite3")
 
 
@@ -1260,7 +1260,7 @@ def test_search_clause_long_query_searches_exif(tmp_path: Path) -> None:
 def test_search_finds_item_by_exif_via_fts(tmp_path: Path) -> None:
     """End-to-end: EXIF text stored after the fact is searchable through
     the FTS index, exercising the AFTER UPDATE OF exif_data trigger."""
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "fts.sqlite3")
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable")
@@ -1283,7 +1283,7 @@ def test_search_finds_item_by_exif_via_fts(tmp_path: Path) -> None:
 def test_fresh_db_lands_on_latest_user_version(tmp_path: Path) -> None:
     """A newly created DB must end up at the most recent schema version
     so downstream code paths (exif_data column, FTS index) work."""
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "fresh.sqlite3")
     version = db.conn.execute("PRAGMA user_version").fetchone()[0]
     # v3 if FTS is available; v2 otherwise (FTS migration was skipped but
@@ -1324,7 +1324,7 @@ def test_migration_v1_to_v2_adds_exif_column(tmp_path: Path) -> None:
     raw.commit()
     raw.close()
 
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(db_path)
     cols = [r[1] for r in db.conn.execute("PRAGMA table_info(media)")]
     assert "exif_data" in cols
@@ -1369,7 +1369,7 @@ def test_migration_v2_to_v3_backfills_fts(tmp_path: Path) -> None:
     raw.commit()
     raw.close()
 
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(db_path)
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable")
@@ -1384,7 +1384,7 @@ def test_migration_v2_to_v3_backfills_fts(tmp_path: Path) -> None:
 
 def test_migration_v3_idempotent_does_not_duplicate(tmp_path: Path) -> None:
     """Opening an already-v3 DB must not double-populate the FTS index."""
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(tmp_path / "v3.sqlite3")
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable")
@@ -1446,7 +1446,7 @@ def test_migration_v5_to_v6_widens_fts_to_exif(tmp_path: Path) -> None:
     raw.commit()
     raw.close()
 
-    from yaga.database import Database
+    from muga.database import Database
     db = Database(db_path)
     if not getattr(db, "_has_fts", False):
         pytest.skip("FTS5/trigram unavailable")
@@ -1475,14 +1475,14 @@ def test_selection_mode_trash_packed_start_close_packed_end() -> None:
 # ---------------------------------------------------------------------------
 
 def test_settings_nav_position_default_is_top() -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
     assert Settings().nav_position == "top"
 
 
 def test_settings_nav_position_round_trips_through_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Saving and reloading must preserve the chosen nav position."""
-    monkeypatch.setattr("yaga.config.CONFIG_DIR", tmp_path)
-    from yaga.config import Settings
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
+    from muga.config import Settings
     s = Settings()
     s.nav_position = "right"
     s.save()
@@ -1496,12 +1496,12 @@ def test_settings_nav_position_rejects_invalid_values_on_load(
 ) -> None:
     """A typo in settings.json must not crash _build_ui — Settings.load()
     clamps unknown values back to "top"."""
-    monkeypatch.setattr("yaga.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
     import json
     (tmp_path / "settings.json").write_text(
         json.dumps({"nav_position": bad_value}), encoding="utf-8",
     )
-    from yaga.config import Settings
+    from muga.config import Settings
     assert Settings.load().nav_position == "top"
 
 
@@ -1529,7 +1529,7 @@ def test_app_build_ui_routes_nav_box_per_position() -> None:
 def test_settings_window_nav_option_sits_above_video_group() -> None:
     """User explicitly asked for the option to be 'oberhalb von Video-Option'.
     Pin the relative order so a future settings-page refactor doesn't move it."""
-    src = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    src = Path("muga/settings_window.py").read_text(encoding="utf-8")
     nav_group_idx   = src.index('"nav_position"')
     video_group_idx = src.index('title=self._("Video")')
     assert nav_group_idx < video_group_idx
@@ -1619,8 +1619,8 @@ def test_find_nav_button_at_walks_nav_box_children() -> None:
     """The helper finds the ToggleButton whose allocation contains a press
     point — used so the tap-fallback can fire the right button's toggled
     handler even though we claimed the sequence before the click saw it."""
-    import yaga.app as app_mod
-    from yaga.app import GalleryWindow
+    import muga.app as app_mod
+    from muga.app import GalleryWindow
 
     # Build a fake nav_box with two "buttons" at known positions.
     class _FakeToggleButton:
@@ -1663,7 +1663,7 @@ def test_date_header_arrow_visibility_is_neighbour_based() -> None:
     """Per-header behaviour: show ↑ when there's a previous header, show ↓
     when there's a next header, hide each when not. Pin the central
     visibility helper that bind and items-changed both call."""
-    from yaga.gallery_grid import GalleryGrid, GalleryRow
+    from muga.gallery_grid import GalleryGrid, GalleryRow
 
     rows = [
         GalleryRow.header("Mar"),
@@ -1717,7 +1717,7 @@ def test_pagination_append_refreshes_previously_last_header_arrow() -> None:
     Fix: items-changed triggers a refresh pass over all bound headers.
     Pin that the trigger is in place and the refresh is debounced via
     idle so a burst of appends only fires one pass."""
-    src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    src = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
     init_def = src.index("def __init__(self, owner")
     init_end = src.index("\n    def ", init_def + 1)
     init_body = src[init_def:init_end]
@@ -1749,7 +1749,7 @@ def test_header_nav_is_single_shot_no_retry_no_scroll_to() -> None:
     scroll_to, no two-phase flicker. Pin the absence of those patterns so
     a future 'improvement' can't reintroduce the bugs the user hit when
     we had them."""
-    src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    src = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
     nav_def = src.index("def _on_header_nav")
     nav_end = src.index("\n    def ", nav_def + 1)
     nav_body = src[nav_def:nav_end]
@@ -1771,7 +1771,7 @@ def test_header_nav_is_single_shot_no_retry_no_scroll_to() -> None:
 def test_find_adjacent_header_pos_walks_row_store() -> None:
     """Pure scan helper: skip tile rows, return the first header in the
     requested direction, or None at the boundary."""
-    from yaga.gallery_grid import GalleryGrid, GalleryRow
+    from muga.gallery_grid import GalleryGrid, GalleryRow
     rows = [
         GalleryRow.header("Mar"),
         GalleryRow.from_tiles([]),
@@ -1796,7 +1796,7 @@ def test_header_nav_writes_vadjustment_once_for_pixel_perfect_jump() -> None:
     """End-to-end behaviour of the rebuilt jump: measure source y → compute
     target y by summing measured row heights → write vadjustment exactly
     once. No scroll_to, no retry loop, no two-phase flicker."""
-    from yaga.gallery_grid import GalleryGrid, GalleryRow
+    from muga.gallery_grid import GalleryGrid, GalleryRow
 
     # 3 headers (pos 0, 3, 5) with 2 tile rows between each.
     rows = [
@@ -1860,7 +1860,7 @@ def test_header_nav_falls_back_to_cell_size_when_no_tile_row_bound() -> None:
     a single header is on screen), tile_h falls back to scroller_width /
     cols. Pin the fallback so a future refactor can't drop it and have
     the jump silently underestimate when there are no tile rows visible."""
-    from yaga.gallery_grid import GalleryGrid, GalleryRow
+    from muga.gallery_grid import GalleryGrid, GalleryRow
 
     rows = [
         GalleryRow.header("Mar"),
@@ -1907,7 +1907,7 @@ def test_header_nav_falls_back_to_cell_size_when_no_tile_row_bound() -> None:
 def test_header_nav_clamps_at_boundaries() -> None:
     """Jumping near the very top or bottom must not push vadjustment out
     of range."""
-    from yaga.gallery_grid import GalleryGrid, GalleryRow
+    from muga.gallery_grid import GalleryGrid, GalleryRow
 
     rows = [GalleryRow.header("a"), GalleryRow.header("b")]
     row_store = SimpleNamespace(
@@ -1947,7 +1947,7 @@ def test_date_header_nav_box_spacing_is_zero() -> None:
     """User later asked to pull the two arrows ~20px closer together —
     the previous 'min 20px auseinander' guidance is superseded. Pin the
     new spacing=0 so a future refactor can't silently widen the gap."""
-    src = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    src = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
     nav_box_def = src.index("nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL")
     # The Gtk.Box constructor passes spacing as a kwarg; the kwarg value sets
     # the gap between consecutive children.
@@ -1997,7 +1997,7 @@ def test_gallery_row_header_carries_year_and_month() -> None:
     rather than year/month, but the fields are still required so future
     needs (e.g. "skip empty months", or a date jump-list) can use them
     without re-parsing the markup."""
-    from yaga.gallery_grid import GalleryRow
+    from muga.gallery_grid import GalleryRow
     row = GalleryRow.header("text", year=2026, month=5)
     assert row.is_header is True
     assert row.header_year == 2026
@@ -2024,7 +2024,7 @@ def test_nav_drag_end_synthesises_px_per_second_velocity() -> None:
 
 
 def test_nav_swipe_horizontal_right_advances_to_next_category() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     fake, activated = _make_nav_swipe_fake(
         "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
@@ -2034,7 +2034,7 @@ def test_nav_swipe_horizontal_right_advances_to_next_category() -> None:
 
 
 def test_nav_swipe_horizontal_left_goes_to_previous_category() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     fake, activated = _make_nav_swipe_fake(
         "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
@@ -2046,7 +2046,7 @@ def test_nav_swipe_horizontal_left_goes_to_previous_category() -> None:
 def test_nav_swipe_vertical_uses_y_axis_for_direction() -> None:
     """On a side rail (vertical nav), only y-axis swipes count and they map
     to next/previous along the vertical stack."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     fake, activated = _make_nav_swipe_fake(
         "photos", ["pictures", "photos", "videos"], Gtk.Orientation.VERTICAL,
@@ -2062,7 +2062,7 @@ def test_nav_swipe_vertical_uses_y_axis_for_direction() -> None:
 def test_nav_swipe_below_velocity_threshold_is_ignored() -> None:
     """Stray finger drags shouldn't jump categories — match the 350 px/s
     threshold the folder-back swipe already uses."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     fake, activated = _make_nav_swipe_fake(
         "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
@@ -2074,7 +2074,7 @@ def test_nav_swipe_below_velocity_threshold_is_ignored() -> None:
 def test_nav_swipe_dominant_off_axis_velocity_is_ignored() -> None:
     """A diagonal-but-mostly-vertical swipe on a horizontal nav must NOT
     switch categories. Pin the abs(primary) <= abs(secondary) bail."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     fake, activated = _make_nav_swipe_fake(
         "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
@@ -2084,7 +2084,7 @@ def test_nav_swipe_dominant_off_axis_velocity_is_ignored() -> None:
 
 
 def test_nav_swipe_at_first_or_last_category_does_not_wrap() -> None:
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     cats = ["pictures", "photos", "videos"]
     # At the first category, a "previous" swipe is a no-op.
@@ -2100,7 +2100,7 @@ def test_nav_swipe_at_first_or_last_category_does_not_wrap() -> None:
 def test_nav_swipe_in_selection_mode_is_disabled() -> None:
     """Multi-select uses long-press + drag on tiles; a swipe on the nav while
     in selection mode mustn't tear the user out of their selection."""
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
     from gi.repository import Gtk
     fake, activated = _make_nav_swipe_fake(
         "photos", ["pictures", "photos", "videos"], Gtk.Orientation.HORIZONTAL,
@@ -2208,7 +2208,7 @@ def test_settings_pages_have_stable_names() -> None:
     """set_visible_page_name needs a name that doesn't depend on the
     translated title. Pin all three pages so a future translation change
     doesn't silently break the reopen-after-recreate flow."""
-    src = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    src = Path("muga/settings_window.py").read_text(encoding="utf-8")
     assert 'media.set_name("folders")' in src
     assert 'app.set_name("appearance")' in src
     assert 'page.set_name("nextcloud")' in src
@@ -2217,7 +2217,7 @@ def test_settings_pages_have_stable_names() -> None:
 def test_settings_window_initial_page_argument() -> None:
     """The initial_page kwarg must be honoured before the dialog is presented
     so the user lands on the requested page without a flash of page 1."""
-    src = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    src = Path("muga/settings_window.py").read_text(encoding="utf-8")
     init_def = src.index("def __init__(self, parent: GalleryWindow")
     init_end = src.index("\n    def ", init_def + 1)
     init_body = src[init_def:init_end]
@@ -2256,7 +2256,7 @@ def test_apply_settings_coalesces_repeated_calls() -> None:
 def test_editor_exif_for_save_resets_orientation_keeps_tags() -> None:
     from PIL import Image
 
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
 
     exif = Image.Exif()
     exif[0x0112] = 6                      # Orientation: rotate 90°
@@ -2279,10 +2279,10 @@ def test_editor_exif_for_save_writes_minimal_block_without_source_exif() -> None
     Delta Chat's core demotes an attachment from image to plain file when
     recoding fails *and* the file carries no EXIF, so a bare JPEG arrives as a
     file attachment. A minimal block states only what is true — the pixels are
-    upright, and Yaga wrote them. See tests/test_rotation_exif.py."""
+    upright, and Muga wrote them. See tests/test_rotation_exif.py."""
     from PIL import Image
 
-    from yaga.editor.view import EditorView
+    from muga.editor.view import EditorView
 
     for source in (None, b""):
         out = EditorView._exif_for_save(SimpleNamespace(_exif_bytes=source))
@@ -2290,7 +2290,7 @@ def test_editor_exif_for_save_writes_minimal_block_without_source_exif() -> None
         restored = Image.Exif()
         restored.load(out)
         assert restored[0x0112] == 1       # Orientation: upright
-        assert restored[0x0131] == "Yaga"  # Software
+        assert restored[0x0131] == "Muga"  # Software
 
 
 # ── GalleryWindow: teardown guard ────────────────────────────────────────
@@ -2305,7 +2305,7 @@ def test_editor_exif_for_save_writes_minimal_block_without_source_exif() -> None
 def test_gallery_idle_callbacks_bail_when_closing() -> None:
     from gi.repository import GLib
 
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
 
     fake = SimpleNamespace(_closing=True)
     assert GalleryWindow.refresh(fake, scan=True) is None
@@ -2322,7 +2322,7 @@ def test_gallery_idle_callbacks_bail_when_closing() -> None:
 def test_reenable_refresh_button_touches_button_when_live() -> None:
     from gi.repository import GLib
 
-    from yaga.app import GalleryWindow
+    from muga.app import GalleryWindow
 
     touched = SimpleNamespace(value=None)
     fake = SimpleNamespace(

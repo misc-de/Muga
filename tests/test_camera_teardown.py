@@ -20,7 +20,7 @@ import pytest
 
 from tests.camera_fakes import FakeElement, FakeGst, gst_win
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 
 
 # ---------------------------------------------------------------------------

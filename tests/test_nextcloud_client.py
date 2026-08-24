@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-nc = pytest.importorskip("yaga.nextcloud")
+nc = pytest.importorskip("muga.nextcloud")
 
 
 def _client(url="https://cloud.example.org", user="alice", pw="app-password"):
@@ -73,7 +73,7 @@ def test_client_sends_basic_auth() -> None:
 
 
 def test_client_identifies_itself() -> None:
-    assert _client()._headers()["User-Agent"].startswith("Yaga/")
+    assert _client()._headers()["User-Agent"].startswith("Muga/")
 
 
 def test_headers_accept_extras_without_losing_auth() -> None:

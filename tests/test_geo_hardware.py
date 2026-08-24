@@ -25,14 +25,14 @@ from tests.fixtures.hardware import (
     GEOCLUE_SETTABLE_PROPERTIES,
 )
 
-geo = pytest.importorskip("yaga.camera_geo")
+geo = pytest.importorskip("muga.camera_geo")
 
 from gi.repository import GLib  # noqa: E402
 
 
 def _client(**extra):
     client = geo.GeoClient.__new__(geo.GeoClient)
-    client.app_id = "yaga"
+    client.app_id = "muga"
     client._client_proxy = None
     client._client_path = None
     client._signal_id = None

@@ -21,11 +21,11 @@ import pytest
 
 from tests.conftest import requires_display
 
-app_mod = pytest.importorskip("yaga.app")
+app_mod = pytest.importorskip("muga.app")
 # The cache budget and thumbnail workers live in the mixin module now.
-thumbs_mod = pytest.importorskip("yaga.gallery_thumbnails")
+thumbs_mod = pytest.importorskip("muga.gallery_thumbnails")
 
-from yaga.models import MediaItem  # noqa: E402
+from muga.models import MediaItem  # noqa: E402
 
 GalleryWindow = app_mod.GalleryWindow
 
@@ -207,7 +207,7 @@ def test_nextcloud_errors_get_a_recovery_hint(error, title) -> None:
 
 def test_nextcloud_connection_error_subclass_is_recognised() -> None:
     """The client raises its own ConnectionError subclass for a dead server."""
-    from yaga.nextcloud import NextcloudConnectionError
+    from muga.nextcloud import NextcloudConnectionError
 
     win = _win(_show_error_dialog=MagicMock())
     GalleryWindow._handle_nextcloud_error(win, NextcloudConnectionError("down"))
@@ -378,7 +378,7 @@ def test_gallery_empty_state_toggles(gallery_window) -> None:
 # ---------------------------------------------------------------------------
 
 def _settings(**over):
-    from yaga.config import Settings
+    from muga.config import Settings
 
     base = Settings()
     for key, value in over.items():
@@ -446,14 +446,14 @@ def test_cache_size_counts_both_stores(tmp_path, monkeypatch) -> None:
     _fill(thumbs, "a.jpg", 1000, 1)
     _fill(nc_cache, "b.jpg", 2000, 1)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.cache_size_bytes(win) == 3000
 
 
 def test_cache_size_of_an_empty_cache(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 0)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", tmp_path / "missing")
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.cache_size_bytes(win) == 0
 
 
@@ -461,7 +461,7 @@ def test_eviction_is_off_at_an_unlimited_budget(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 0)
     _fill(thumbs, "a.jpg", 5_000_000, 1)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.evict_cache(win) == 0
     assert (thumbs / "a.jpg").exists()
 
@@ -470,7 +470,7 @@ def test_eviction_leaves_a_cache_under_budget_alone(tmp_path, monkeypatch) -> No
     win, thumbs, nc_cache = _cache_win(tmp_path, 10)
     _fill(thumbs, "a.jpg", 1000, 1)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.evict_cache(win) == 0
     assert (thumbs / "a.jpg").exists()
 
@@ -483,7 +483,7 @@ def test_eviction_drops_the_least_recently_used_first(tmp_path, monkeypatch) -> 
     recent = _fill(thumbs, "recent.jpg", 700_000, atime=2_000_000)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
 
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         freed = GalleryWindow.evict_cache(win)
 
     assert freed >= 700_000
@@ -497,7 +497,7 @@ def test_eviction_stops_once_under_budget(tmp_path, monkeypatch) -> None:
         _fill(thumbs, f"{i}.jpg", 300_000, atime=1_000_000 + i)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
 
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         GalleryWindow.evict_cache(win)
 
     remaining = sum(f.stat().st_size for f in thumbs.iterdir())
@@ -510,7 +510,7 @@ def test_eviction_covers_the_nextcloud_cache(tmp_path, monkeypatch) -> None:
     win, thumbs, nc_cache = _cache_win(tmp_path, 1)
     big = _fill(nc_cache, "download.jpg", 2_000_000, atime=1_000_000)
     monkeypatch.setattr(thumbs_mod, "THUMB_DIR", thumbs)
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache):
         assert GalleryWindow.evict_cache(win) > 0
     assert not big.exists()
 
@@ -530,7 +530,7 @@ def test_eviction_survives_a_vanishing_file(tmp_path, monkeypatch) -> None:
             raise FileNotFoundError("raced with the scanner")
         return real_unlink(self, *a, **kw)
 
-    with patch("yaga.nextcloud._NC_CACHE", nc_cache), patch.object(Path, "unlink", flaky):
+    with patch("muga.nextcloud._NC_CACHE", nc_cache), patch.object(Path, "unlink", flaky):
         GalleryWindow.evict_cache(win)   # must not raise
 
 
@@ -799,7 +799,7 @@ def test_search_replaces_a_pending_query(seeded_window) -> None:
 
 @requires_display
 def test_apply_settings_stores_and_saves(seeded_window) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     new = Settings(**seeded_window.settings.__dict__)
     new.grid_columns = 7
@@ -811,7 +811,7 @@ def test_apply_settings_stores_and_saves(seeded_window) -> None:
 
 @requires_display
 def test_apply_settings_skips_a_rescan_for_cosmetic_changes(seeded_window) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     new = Settings(**seeded_window.settings.__dict__)
     new.grid_columns = 9
@@ -823,7 +823,7 @@ def test_apply_settings_skips_a_rescan_for_cosmetic_changes(seeded_window) -> No
 
 @requires_display
 def test_apply_settings_requests_a_rescan_when_a_folder_changes(seeded_window, tmp_path) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     new = Settings(**seeded_window.settings.__dict__)
     new.photos_dir = str(tmp_path / "elsewhere")
@@ -834,7 +834,7 @@ def test_apply_settings_requests_a_rescan_when_a_folder_changes(seeded_window, t
 
 @requires_display
 def test_apply_settings_leaves_selection_mode(seeded_window) -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     seeded_window._selection_mode = True
     seeded_window._selected_paths = {"/x/a.jpg"}
@@ -848,7 +848,7 @@ def test_apply_settings_leaves_selection_mode(seeded_window) -> None:
 def test_apply_settings_drops_the_shared_nc_client(seeded_window) -> None:
     """URL or credentials may have changed; a cached client would keep using
     the old ones."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     client = MagicMock()
     seeded_window._nc_thumb_shared_client = client
@@ -862,7 +862,7 @@ def test_apply_settings_drops_the_shared_nc_client(seeded_window) -> None:
 def test_apply_settings_honours_a_manual_disconnect(seeded_window) -> None:
     """Settings is the source of truth — re-enabling NC behind the user's back
     after they disconnected would be a surprise."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     new = Settings(**seeded_window.settings.__dict__)
     new.nextcloud_enabled = True
@@ -966,7 +966,7 @@ def test_viewport_fill_does_not_reenter_a_running_load(seeded_window) -> None:
 
 def _scan_win(**extra):
     """A ``self`` for _scan_thread with the scanner and the UI stubbed."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     settings = Settings()
     settings.nextcloud_url = ""
@@ -1053,7 +1053,7 @@ def test_scan_skips_nextcloud_when_the_session_is_off() -> None:
 
 def test_scan_flags_a_missing_password_as_broken() -> None:
     """Silently skipping would leave the user staring at an empty NC tab."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     win = _scan_win(is_nc_active=lambda: True)
     win.settings.nextcloud_url = "https://cloud.example.org"
@@ -1066,7 +1066,7 @@ def test_scan_flags_a_missing_password_as_broken() -> None:
 def test_scan_reports_a_failed_nextcloud_sync() -> None:
     """It trips the breaker so on-demand thumbnail fetches stop blocking ~20 s
     each against a server known to be down."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     win = _scan_win(
         is_nc_active=lambda: True,
@@ -1081,7 +1081,7 @@ def test_scan_reports_a_failed_nextcloud_sync() -> None:
 
 
 def test_scan_clears_a_stale_broken_flag_after_recovery() -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     win = _scan_win(is_nc_active=lambda: True, _nc_unreachable=True)
     win.settings.nextcloud_url = "https://cloud.example.org"
@@ -1229,7 +1229,7 @@ def test_thumb_worker_retires_when_the_queue_stays_empty() -> None:
 def test_thumb_worker_bails_out_on_a_dead_server() -> None:
     """~20 s per tile, all failing the same way, is not worth grinding
     through — trip the breaker and retire instead."""
-    from yaga.nextcloud import NextcloudConnectionError
+    from muga.nextcloud import NextcloudConnectionError
 
     client = MagicMock()
     client.ensure_thumbnail.side_effect = NextcloudConnectionError("server down")
@@ -1327,7 +1327,7 @@ def test_thumb_client_is_shared_between_workers() -> None:
     """Each worker gets its own keep-alive socket through the client's
     thread-local connections; building one client per worker would throw that
     away."""
-    from yaga.config import Settings
+    from muga.config import Settings
 
     win = SimpleNamespace(_nc_thumb_shared_client=None, settings=Settings())
     win.settings.nextcloud_url = "https://cloud.example.org"
@@ -1339,7 +1339,7 @@ def test_thumb_client_is_shared_between_workers() -> None:
 
 
 def test_thumb_client_is_none_without_a_password() -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     win = SimpleNamespace(_nc_thumb_shared_client=None, settings=Settings())
     with patch.object(Settings, "load_app_password", return_value=""):

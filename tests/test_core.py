@@ -1,14 +1,14 @@
 from pathlib import Path
 import threading
 
-import yaga.config as config
-import yaga.thumbnails as thumbnails
-from yaga.database import Database
-from yaga.i18n import Translator
-from yaga.models import media_type_for
-from yaga.scanner import MediaScanner
-from yaga.config import Settings
-from yaga.thumbnails import Thumbnailer
+import muga.config as config
+import muga.thumbnails as thumbnails
+from muga.database import Database
+from muga.i18n import Translator
+from muga.models import media_type_for
+from muga.scanner import MediaScanner
+from muga.config import Settings
+from muga.thumbnails import Thumbnailer
 
 
 def gallery_source() -> str:
@@ -19,7 +19,7 @@ def gallery_source() -> str:
     at all of them or it starts failing for the wrong reason — a moved method
     rather than a lost behaviour.
     """
-    root = Path(__file__).resolve().parent.parent / "yaga"
+    root = Path(__file__).resolve().parent.parent / "muga"
     return "\n".join(
         (root / name).read_text(encoding="utf-8")
         for name in (
@@ -37,7 +37,7 @@ class FakeThumbnailer:
         # Real Thumbnailer returns a path under the cache dir; the scanner only
         # calls .exists() on it to decide whether a thumb is new. Point at a
         # location that never exists so every scanned file counts as new.
-        return Path("/nonexistent/yaga-test-thumbs") / f"{path.name}.jpg"
+        return Path("/nonexistent/muga-test-thumbs") / f"{path.name}.jpg"
 
     def ensure_thumbnail(self, path: Path, media_type: str) -> str:
         return f"thumb://{media_type}/{path.name}"
@@ -163,7 +163,7 @@ def test_scanner_indexes_all_files_across_thumbnail_chunks(tmp_path: Path) -> No
     """A scan larger than one thumbnail chunk (and thus the parallel-decode
     path) must still index every file exactly once with its thumbnail. Guards
     the chunked/threaded thumbnailing added for first-scan performance."""
-    from yaga.scanner import _THUMB_CHUNK
+    from muga.scanner import _THUMB_CHUNK
 
     db = Database(tmp_path / "test.sqlite3")
     root = tmp_path / "Pictures"
@@ -414,7 +414,7 @@ def test_thumbnailer_clear_recreates_cache_dir(tmp_path: Path, monkeypatch) -> N
 
 def test_gallery_media_area_is_configured_to_expand() -> None:
     app_source = gallery_source()
-    grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
 
     assert "self.grid_view.set_vexpand(True)" in grid_source
     assert "self.scroller.set_vexpand(True)" in grid_source
@@ -424,8 +424,8 @@ def test_gallery_media_area_is_configured_to_expand() -> None:
 def test_gallery_grid_defaults_to_four_compact_media_columns() -> None:
     settings = Settings()
     app_source = gallery_source()
-    grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
-    settings_source = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
+    settings_source = Path("muga/settings_window.py").read_text(encoding="utf-8")
 
     assert settings.grid_columns == 4
     assert "from .gallery_grid import GalleryGrid" in app_source
@@ -447,7 +447,7 @@ def test_gallery_tiles_are_sized_from_available_width() -> None:
 
 def test_gallery_folder_navigation_uses_swipe_without_visible_back_button() -> None:
     source = gallery_source()
-    grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
 
     assert "folder_swipe = Gtk.GestureSwipe()" in source
     assert 'folder_swipe.connect("swipe", self._on_folder_swipe)' in source
@@ -466,8 +466,8 @@ def test_nextcloud_folder_open_uses_on_demand_thumbnails() -> None:
     Bulk sync (scan_nc_structure) is reserved for the initial structure scan,
     not per-folder navigation."""
     # The thumbnail path was split out of GalleryWindow into a mixin module.
-    source = Path("yaga/gallery_thumbnails.py").read_text(encoding="utf-8")
-    grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    source = Path("muga/gallery_thumbnails.py").read_text(encoding="utf-8")
+    grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
 
     # Public entry point the grid calls when it needs a tile's thumbnail.
     assert "def request_nc_thumbnail" in source
@@ -481,7 +481,7 @@ def test_nextcloud_folder_open_uses_on_demand_thumbnails() -> None:
 
 def test_gallery_grid_is_split_out_of_app_module() -> None:
     app_source = gallery_source()
-    grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
 
     assert "from .gallery_grid import GalleryGrid" in app_source
     assert "class MediaRow" not in app_source
@@ -490,7 +490,7 @@ def test_gallery_grid_is_split_out_of_app_module() -> None:
 
 
 def test_viewer_has_close_header_but_no_navigation_buttons() -> None:
-    viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
+    viewer_source = Path("muga/viewer.py").read_text(encoding="utf-8")
 
     assert "Adw.HeaderBar()" in viewer_source
     assert "header.set_show_start_title_buttons(False)" in viewer_source
@@ -522,7 +522,7 @@ def test_viewer_has_close_header_but_no_navigation_buttons() -> None:
 
 
 def test_viewer_exposes_info_edit_and_delete_actions() -> None:
-    viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
+    viewer_source = Path("muga/viewer.py").read_text(encoding="utf-8")
 
     assert 'Gtk.Button.new_from_icon_name("help-about-symbolic")' in viewer_source
     assert 'Gtk.Button.new_from_icon_name("document-edit-symbolic")' in viewer_source
@@ -540,7 +540,7 @@ def test_viewer_exposes_info_edit_and_delete_actions() -> None:
 
 
 def test_viewer_disables_own_gestures_in_editor_mode() -> None:
-    viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
+    viewer_source = Path("muga/viewer.py").read_text(encoding="utf-8")
 
     assert "def _set_view_gestures_enabled" in viewer_source
     assert "Gtk.PropagationPhase.NONE" in viewer_source
@@ -550,7 +550,7 @@ def test_viewer_disables_own_gestures_in_editor_mode() -> None:
 
 def test_navigation_uses_spinner_broken_icon_and_pull_refresh() -> None:
     app_source = gallery_source()
-    config_source = Path("yaga/config.py").read_text(encoding="utf-8")
+    config_source = Path("muga/config.py").read_text(encoding="utf-8")
 
     assert "DEBUG_LOG_PATH" in config_source
     assert "RotatingFileHandler(DEBUG_LOG_PATH" in app_source
@@ -571,14 +571,14 @@ def test_navigation_uses_spinner_broken_icon_and_pull_refresh() -> None:
 
 
 def test_settings_search_is_disabled() -> None:
-    settings_source = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    settings_source = Path("muga/settings_window.py").read_text(encoding="utf-8")
 
     assert "self.set_search_enabled(False)" in settings_source
 
 
 def test_gallery_supports_date_group_sorting_headers() -> None:
     app_source = gallery_source()
-    grid_source = Path("yaga/gallery_grid.py").read_text(encoding="utf-8")
+    grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
 
     # "date" is a first-class sort key in the dropdown, paired with the
     # ascending/descending direction button via _SORT_TO_INTERNAL.
@@ -598,7 +598,7 @@ def test_gallery_supports_date_group_sorting_headers() -> None:
 
 
 def test_viewer_supports_pinch_zoom_and_double_tap_reset() -> None:
-    viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
+    viewer_source = Path("muga/viewer.py").read_text(encoding="utf-8")
 
     assert "self.zoom_scale = 1.0" in viewer_source
     assert "self.zoom_start_scale = 1.0" in viewer_source
@@ -614,7 +614,7 @@ def test_viewer_supports_pinch_zoom_and_double_tap_reset() -> None:
 
 
 def test_viewer_delete_uses_confirmation_and_cleans_index_and_thumbnail() -> None:
-    viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
+    viewer_source = Path("muga/viewer.py").read_text(encoding="utf-8")
 
     assert "Adw.AlertDialog" in viewer_source
     assert "Adw.ResponseAppearance.DESTRUCTIVE" in viewer_source
@@ -629,7 +629,7 @@ def test_viewer_delete_uses_confirmation_and_cleans_index_and_thumbnail() -> Non
 def test_editor_is_split_out_of_app_module() -> None:
     app_source = gallery_source()
     # The editor became a package; the GTK widget lives in editor/view.py.
-    view_source = Path("yaga/editor/view.py").read_text(encoding="utf-8")
+    view_source = Path("muga/editor/view.py").read_text(encoding="utf-8")
 
     assert "from .editor import EditorView, PILImage, _PIL_OK" not in app_source
     assert "class EditorView" not in app_source
@@ -639,7 +639,7 @@ def test_editor_is_split_out_of_app_module() -> None:
 
 
 def test_editor_frames_are_decorative_not_plain_color_bands() -> None:
-    from yaga.editor import _FRAME_THEMES, _frame_pil
+    from muga.editor import _FRAME_THEMES, _frame_pil
 
     frame = _frame_pil(240, 180, "christmas")
     assert frame is not None
@@ -654,7 +654,7 @@ def test_editor_frames_are_decorative_not_plain_color_bands() -> None:
     assert len(set(edge_pixels)) > 4
 
     # Frame decorators live in editor/frames.py after the split.
-    source = Path("yaga/editor/frames.py").read_text(encoding="utf-8")
+    source = Path("muga/editor/frames.py").read_text(encoding="utf-8")
     assert "_decorate_christmas" in source
     assert "_decorate_winter" in source
     assert len(_FRAME_THEMES) >= 8
@@ -662,7 +662,7 @@ def test_editor_frames_are_decorative_not_plain_color_bands() -> None:
 
 def test_editor_has_resettable_sliders_color_picker_and_multiple_stickers() -> None:
     # Editor UI now lives in editor/view.py.
-    source = Path("yaga/editor/view.py").read_text(encoding="utf-8")
+    source = Path("muga/editor/view.py").read_text(encoding="utf-8")
 
     assert 'Gtk.Button.new_from_icon_name("edit-undo-symbolic")' in source
     assert "def _reset_slider" in source
@@ -675,7 +675,7 @@ def test_editor_has_resettable_sliders_color_picker_and_multiple_stickers() -> N
 
 def test_settings_window_is_split_out_of_app_module() -> None:
     app_source = gallery_source()
-    settings_source = Path("yaga/settings_window.py").read_text(encoding="utf-8")
+    settings_source = Path("muga/settings_window.py").read_text(encoding="utf-8")
 
     assert "from .settings_window import SettingsWindow" in app_source
     assert "class SettingsWindow" not in app_source
@@ -684,7 +684,7 @@ def test_settings_window_is_split_out_of_app_module() -> None:
 
 def test_viewer_is_split_out_of_app_module() -> None:
     app_source = gallery_source()
-    viewer_source = Path("yaga/viewer.py").read_text(encoding="utf-8")
+    viewer_source = Path("muga/viewer.py").read_text(encoding="utf-8")
 
     assert "from .viewer import ViewerWindow" in app_source
     assert "class ViewerWindow" not in app_source

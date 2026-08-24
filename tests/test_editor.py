@@ -28,9 +28,9 @@ pytest.importorskip("PIL.Image")
 
 from PIL import Image as PILImage  # noqa: E402
 
-from yaga.models import MediaItem  # noqa: E402
+from muga.models import MediaItem  # noqa: E402
 
-view = pytest.importorskip("yaga.editor.view")
+view = pytest.importorskip("muga.editor.view")
 
 
 def _item(tmp_path: Path, size=(200, 150), name="photo.jpg") -> MediaItem:
@@ -158,7 +158,7 @@ def test_exif_for_save_writes_a_minimal_block_without_a_source() -> None:
     result = PILImage.Exif()
     result.load(out)
     assert result[0x0112] == 1
-    assert result[0x0131] == "Yaga"
+    assert result[0x0131] == "Muga"
 
 
 def test_exif_for_save_survives_a_corrupt_source() -> None:
@@ -478,7 +478,7 @@ def test_neutral_channel_gains_leave_the_pixels_exact() -> None:
 def test_filters_can_be_skipped() -> None:
     """The preview caches the filtered base separately, so it asks for the
     rest of the pipeline without re-running the slow stage."""
-    from yaga.editor import _FILTER_DEFS
+    from muga.editor import _FILTER_DEFS
 
     mode = next((k for k, _l, f in _FILTER_DEFS if f), None)
     if mode is None:
@@ -500,7 +500,7 @@ def test_an_unknown_filter_is_a_no_op() -> None:
 def test_filter_only_stage_matches_the_full_pipeline() -> None:
     """The preview splits the pipeline in two for caching; the halves have to
     agree with the whole or the preview lies about the result."""
-    from yaga.editor import _FILTER_DEFS
+    from muga.editor import _FILTER_DEFS
 
     mode = next((k for k, _l, f in _FILTER_DEFS if f), None)
     if mode is None:
@@ -540,7 +540,7 @@ def test_multiple_obfuscate_strokes_all_apply() -> None:
 
 
 def _a_frame_theme() -> str:
-    from yaga.editor.frames import _FRAME_THEMES
+    from muga.editor.frames import _FRAME_THEMES
 
     return _FRAME_THEMES[0][0]
 

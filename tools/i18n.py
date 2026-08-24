@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Translation maintenance for Yaga.
+"""Translation maintenance for Muga.
 
-    tools/i18n.py extract     rebuild po/yaga.pot from the sources
+    tools/i18n.py extract     rebuild po/muga.pot from the sources
     tools/i18n.py update      merge the .pot into every po/*.po
-    tools/i18n.py compile     build yaga/data/locale/<lang>/LC_MESSAGES/yaga.mo
+    tools/i18n.py compile     build muga/data/locale/<lang>/LC_MESSAGES/muga.mo
     tools/i18n.py stat        show translation coverage per language
 
 `compile` is what an install needs; the app falls back to reading po/*.po
@@ -24,21 +24,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PO_DIR = ROOT / "po"
-LOCALE_DIR = ROOT / "yaga" / "data" / "locale"
-POT = PO_DIR / "yaga.pot"
-DOMAIN = "yaga"
+LOCALE_DIR = ROOT / "muga" / "data" / "locale"
+POT = PO_DIR / "muga.pot"
+DOMAIN = "muga"
 
 
 def _sources() -> list[str]:
-    return sorted(str(p.relative_to(ROOT)) for p in (ROOT / "yaga").rglob("*.py"))
+    return sorted(str(p.relative_to(ROOT)) for p in (ROOT / "muga").rglob("*.py"))
 
 
 def extract() -> int:
     PO_DIR.mkdir(exist_ok=True)
     subprocess.run(
         ["xgettext", "--language=Python", "--keyword=_", "--from-code=UTF-8",
-         "--package-name=Yaga", "--sort-output",
-         "--msgid-bugs-address=https://github.com/misc-de/Yaga/issues",
+         "--package-name=Muga", "--sort-output",
+         "--msgid-bugs-address=https://github.com/misc-de/Muga/issues",
          "-o", str(POT), *_sources()],
         cwd=ROOT, check=True,
     )
@@ -95,7 +95,7 @@ def _parse_po(text: str) -> dict[str, str]:
 
 
 def _unquote(chunk: str) -> str:
-    """Same reading as yaga/i18n.py — one left-to-right pass, no unicode_escape."""
+    """Same reading as muga/i18n.py — one left-to-right pass, no unicode_escape."""
     joined = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', chunk))
     escapes = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
     out: list[str] = []

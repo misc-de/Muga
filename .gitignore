@@ -19,5 +19,5 @@ build-dir/
 
 # Compiled translation catalogues — po/*.po is the source of truth,
 # tools/i18n.py compile regenerates these.
-yaga/data/locale/
+muga/data/locale/
 *.mo

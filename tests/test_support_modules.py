@@ -16,8 +16,8 @@ import pytest
 
 from tests.conftest import requires_display
 
-controls = pytest.importorskip("yaga.camera_controls")
-tracer = pytest.importorskip("yaga.tracer")
+controls = pytest.importorskip("muga.camera_controls")
+tracer = pytest.importorskip("muga.tracer")
 
 
 # ---------------------------------------------------------------------------
@@ -202,11 +202,11 @@ def test_thread_name_lookup() -> None:
     assert tracer._thread_name_for(-1) == "?"
 
 
-def test_frame_filter_only_matches_yaga_code() -> None:
+def test_frame_filter_only_matches_muga_code() -> None:
     import inspect
 
     frame = inspect.currentframe()
-    assert tracer._is_yaga_frame(frame) is False   # this file lives in tests/
+    assert tracer._is_muga_frame(frame) is False   # this file lives in tests/
 
 
 def test_argument_formatter_truncates_long_values() -> None:
@@ -243,7 +243,7 @@ def test_install_writes_a_trace_header(tmp_path: Path) -> None:
         if tracer._trace_file is not None:
             tracer._trace_file.close()
             tracer._trace_file = None
-    assert "Yaga trace started" in target.read_text()
+    assert "Muga trace started" in target.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +256,7 @@ def test_install_writes_a_trace_header(tmp_path: Path) -> None:
     [(0, 0), (90, 90), (180, 180), (270, 270), (360, 0), (-90, 270), (450, 90)],
 )
 def test_rotated_container_normalises_the_angle(given, expected) -> None:
-    from yaga.rotated_container import RotatedContainer
+    from muga.rotated_container import RotatedContainer
 
     container = RotatedContainer()
     container.set_rotation(given)
@@ -268,7 +268,7 @@ def test_rotated_container_normalises_the_angle(given, expected) -> None:
 def test_rotated_container_snaps_off_axis_angles_to_zero(given) -> None:
     """The layout maths only handles quarter turns; anything else would skew
     the child."""
-    from yaga.rotated_container import RotatedContainer
+    from muga.rotated_container import RotatedContainer
 
     container = RotatedContainer()
     container.set_rotation(given)
@@ -281,7 +281,7 @@ def test_rotated_container_holds_one_child() -> None:
     gi.require_version("Gtk", "4.0")
     from gi.repository import Gtk
 
-    from yaga.rotated_container import RotatedContainer
+    from muga.rotated_container import RotatedContainer
 
     container = RotatedContainer()
     first, second = Gtk.Label(label="a"), Gtk.Label(label="b")
@@ -299,7 +299,7 @@ def test_rotated_container_holds_one_child() -> None:
 @requires_display
 def test_text_sticker_renders_to_rgba() -> None:
     pytest.importorskip("PIL.Image")
-    from yaga.editor.text import _make_text_pil
+    from muga.editor.text import _make_text_pil
 
     img = _make_text_pil("Hallo", 32, (255, 0, 0))
     assert img.mode == "RGBA"
@@ -310,7 +310,7 @@ def test_text_sticker_renders_to_rgba() -> None:
 @requires_display
 def test_text_sticker_grows_with_the_font_size() -> None:
     pytest.importorskip("PIL.Image")
-    from yaga.editor.text import _make_text_pil
+    from muga.editor.text import _make_text_pil
 
     small = _make_text_pil("Hallo", 16, (255, 255, 255))
     large = _make_text_pil("Hallo", 48, (255, 255, 255))
@@ -320,7 +320,7 @@ def test_text_sticker_grows_with_the_font_size() -> None:
 @requires_display
 def test_text_sticker_handles_empty_text() -> None:
     pytest.importorskip("PIL.Image")
-    from yaga.editor.text import _make_text_pil
+    from muga.editor.text import _make_text_pil
 
     img = _make_text_pil("", 32, (255, 255, 255))
     assert img.width >= 1 and img.height >= 1

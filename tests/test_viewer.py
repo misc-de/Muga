@@ -19,9 +19,9 @@ import pytest
 
 from tests.conftest import requires_display
 
-viewer = pytest.importorskip("yaga.viewer")
+viewer = pytest.importorskip("muga.viewer")
 
-from yaga.models import MediaItem  # noqa: E402
+from muga.models import MediaItem  # noqa: E402
 
 
 def _item(path="/x/a.jpg", name="a.jpg", media_type="image") -> MediaItem:
@@ -546,8 +546,8 @@ def test_exif_readout_with_only_a_model(tmp_path: Path) -> None:
 
 
 def test_exif_readout_with_only_a_make(tmp_path: Path) -> None:
-    path = _photo_with_exif(tmp_path, {271: "Yaga"})
-    assert viewer._extract_exif(path)["Camera"] == "Yaga"
+    path = _photo_with_exif(tmp_path, {271: "Muga"})
+    assert viewer._extract_exif(path)["Camera"] == "Muga"
 
 
 def test_exif_readout_strips_padding(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ import pytest
 
 from tests.conftest import requires_display
 
-widgets = pytest.importorskip("yaga.camera_widgets")
+widgets = pytest.importorskip("muga.camera_widgets")
 
 
 class RecordingContext:

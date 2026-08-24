@@ -15,10 +15,10 @@ These tests pin the new contract:
 """
 import pytest
 
-from yaga import nextcloud
-from yaga.database import Database
-from yaga.nextcloud import NextcloudClient, NextcloudConnectionError
-from yaga.scanner import MediaScanner
+from muga import nextcloud
+from muga.database import Database
+from muga.nextcloud import NextcloudClient, NextcloudConnectionError
+from muga.scanner import MediaScanner
 
 
 def _scanner(tmp_path) -> MediaScanner:

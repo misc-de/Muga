@@ -23,7 +23,7 @@ import pytest
 
 from tests.conftest import requires_display
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 
 pytestmark = requires_display
 
@@ -146,7 +146,7 @@ def test_window_uses_the_translator(make_window) -> None:
 
 
 def test_window_starts_upright_and_unlaid_out(make_window) -> None:
-    from yaga.camera_orientation import ORIENT_NORMAL
+    from muga.camera_orientation import ORIENT_NORMAL
     win = make_window()
     assert win._device_orientation == ORIENT_NORMAL
     assert win._capture_orientation == ORIENT_NORMAL
@@ -207,7 +207,7 @@ def test_controls_popover_builds_without_v4l2_controls(make_window) -> None:
 
 
 def test_controls_popover_builds_with_controls(make_window) -> None:
-    from yaga.camera_controls import V4l2Control
+    from muga.camera_controls import V4l2Control
 
     win = make_window()
     brightness = V4l2Control(name="brightness", type="int")
@@ -297,7 +297,7 @@ def test_resolution_picker_keeps_the_extremes_when_thinning(make_window) -> None
     device = dict(FAKE_V4L2, caps=_caps_for(sizes))
     camera.CameraWindow._populate_resolutions(win, device)
 
-    offered = [getattr(row, "_yaga_res", None) for row in _popover_rows(win)]
+    offered = [getattr(row, "_muga_res", None) for row in _popover_rows(win)]
     areas = [w * h for w, h in offered if w]
     assert max(areas) == max(w * h for w, h in sizes), "the largest mode was dropped"
     assert min(areas) == min(w * h for w, h in sizes), "the smallest mode was dropped"
@@ -326,7 +326,7 @@ def test_timer_button_shows_the_delay(make_window, seconds) -> None:
 
 def test_timer_button_child_rotates_with_the_device(make_window) -> None:
     """The label has to turn with the phone like every other glyph."""
-    from yaga.camera_orientation import ORIENT_LEFT_UP
+    from muga.camera_orientation import ORIENT_LEFT_UP
 
     win = make_window()
     win._device_orientation = ORIENT_LEFT_UP

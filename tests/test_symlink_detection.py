@@ -2,9 +2,9 @@
 import tempfile
 from pathlib import Path
 
-from yaga.database import Database
-from yaga.scanner import MediaScanner
-from yaga.thumbnails import Thumbnailer
+from muga.database import Database
+from muga.scanner import MediaScanner
+from muga.thumbnails import Thumbnailer
 
 
 def test_scanner_skips_symlinks():

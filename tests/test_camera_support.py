@@ -18,9 +18,9 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-devices = pytest.importorskip("yaga.camera_devices")
-widgets = pytest.importorskip("yaga.camera_widgets")
-torch = pytest.importorskip("yaga.camera_torch")
+devices = pytest.importorskip("muga.camera_devices")
+widgets = pytest.importorskip("muga.camera_widgets")
+torch = pytest.importorskip("muga.camera_torch")
 
 
 # ---------------------------------------------------------------------------

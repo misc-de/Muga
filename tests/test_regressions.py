@@ -17,17 +17,17 @@ from pathlib import Path
 
 import pytest
 
-import yaga
+import muga
 
 
-_PKG_ROOT = Path(yaga.__file__).parent
+_PKG_ROOT = Path(muga.__file__).parent
 
 
 def _iter_module_names() -> list[str]:
     return [
         name
         for _finder, name, _ispkg in pkgutil.walk_packages(
-            yaga.__path__, prefix="yaga."
+            muga.__path__, prefix="muga."
         )
     ]
 
@@ -83,7 +83,7 @@ def _po_entries(text: str) -> dict[str, str]:
     """
     import re
 
-    from yaga.i18n import _po_unquote
+    from muga.i18n import _po_unquote
 
     pairs = re.findall(
         r'^msgid((?:[ \t]*"(?:[^"\\]|\\.)*"[ \t]*\n?)+)'
@@ -97,7 +97,7 @@ def _po_entries(text: str) -> dict[str, str]:
 
 
 def test_catalogues_cover_exactly_the_template() -> None:
-    """Every po/*.po must carry the same msgids as po/yaga.pot.
+    """Every po/*.po must carry the same msgids as po/muga.pot.
 
     A missing msgid leaks the English source string into a localised UI; a
     stray one is dead weight, and usually means a real translation was lost
@@ -105,8 +105,8 @@ def test_catalogues_cover_exactly_the_template() -> None:
     step — this is the guard that says whether someone forgot to run it.
     """
     po_dir = Path(__file__).resolve().parent.parent / "po"
-    template = set(_po_entries((po_dir / "yaga.pot").read_text(encoding="utf-8")))
-    assert template, "po/yaga.pot is empty — run tools/i18n.py extract"
+    template = set(_po_entries((po_dir / "muga.pot").read_text(encoding="utf-8")))
+    assert template, "po/muga.pot is empty — run tools/i18n.py extract"
 
     problems: list[str] = []
     for po in sorted(po_dir.glob("*.po")):
@@ -144,7 +144,7 @@ def test_translations_keep_their_format_placeholders() -> None:
 
 def test_every_catalogue_language_is_offered_and_loadable() -> None:
     """A shipped catalogue the user cannot select is invisible work."""
-    from yaga.i18n import SOURCE_LANGUAGE, Translator, available_languages
+    from muga.i18n import SOURCE_LANGUAGE, Translator, available_languages
 
     langs = available_languages()
     assert SOURCE_LANGUAGE in langs
@@ -166,7 +166,7 @@ def test_po_unquote_handles_escapes_and_non_ascii() -> None:
       * Chained ``str.replace`` calls unescape ``\\\\`` last, so a literal
         backslash-n arrives as a newline.
     """
-    from yaga.i18n import _po_unquote
+    from muga.i18n import _po_unquote
 
     assert _po_unquote('"ab"') == "ab"
     assert _po_unquote('"a\\nb"') == "a\nb"          # \n is a newline
@@ -181,7 +181,7 @@ def test_catalogues_carry_no_double_encoded_text() -> None:
     """A msgid that went through a bad decode never matches the source string.
 
     "â" plus a control byte is the fingerprint of UTF-8 read as Latin-1; it
-    cannot occur in Yaga's real UI strings, so its presence means a catalogue
+    cannot occur in Muga's real UI strings, so its presence means a catalogue
     was written by a broken tool.
     """
     po_dir = Path(__file__).resolve().parent.parent / "po"
@@ -195,7 +195,7 @@ def test_catalogues_carry_no_double_encoded_text() -> None:
 
 
 def test_every_literal_passed_to_translate_is_in_the_template() -> None:
-    """A string literal handed to _() must exist in po/yaga.pot.
+    """A string literal handed to _() must exist in po/muga.pot.
 
     Without this the failure is invisible: an untemplated string simply shows
     up in English, in an otherwise German UI, and nobody notices until a user
@@ -207,10 +207,10 @@ def test_every_literal_passed_to_translate_is_in_the_template() -> None:
     "referenced indirectly" comment instead.
     """
     root = Path(__file__).resolve().parent.parent
-    template = set(_po_entries((root / "po" / "yaga.pot").read_text(encoding="utf-8")))
+    template = set(_po_entries((root / "po" / "muga.pot").read_text(encoding="utf-8")))
 
     missing: list[str] = []
-    for path in sorted((root / "yaga").rglob("*.py")):
+    for path in sorted((root / "muga").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -227,7 +227,7 @@ def test_every_literal_passed_to_translate_is_in_the_template() -> None:
                 if arg.value and arg.value not in template:
                     missing.append(f"{path.relative_to(root)}:{arg.lineno}: {arg.value!r}")
     assert not missing, (
-        "strings passed to _() but absent from po/yaga.pot — run "
+        "strings passed to _() but absent from po/muga.pot — run "
         "`tools/i18n.py extract && tools/i18n.py update`:\n" + "\n".join(missing)
     )
 
@@ -274,7 +274,7 @@ def test_the_builtin_mo_writer_matches_msgfmt() -> None:
             assert not differing, f"{po.name}: {len(differing)} entries differ, e.g. {differing[:3]}"
 
 
-def test_only_the_yaga_package_is_installed() -> None:
+def test_only_the_muga_package_is_installed() -> None:
     """setuptools' auto-discovery must not treat every top-level dir as a package.
 
     Without an include filter, `pip install .` put tests/, data/, tools/, po/
@@ -288,7 +288,7 @@ def test_only_the_yaga_package_is_installed() -> None:
     with open(root / "pyproject.toml", "rb") as fh:
         config = tomllib.load(fh)
     find = config["tool"]["setuptools"]["packages"]["find"]
-    assert find.get("include") == ["yaga*"], (
-        "packages.find must be restricted to the yaga package; "
+    assert find.get("include") == ["muga*"], (
+        "packages.find must be restricted to the muga package; "
         f"got {find.get('include')!r}"
     )

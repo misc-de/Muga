@@ -1,16 +1,16 @@
-# Yaga — Photo Gallery & Camera
+# Muga — Photo Gallery & Camera
 
 A fast, clean photo and video gallery for Linux desktops and Linux phones (Phosh / FuriOS), built with GTK 4 and libadwaita.  
   
 ⚠️ **AI-assisted project**  
   
-![Yaga](yaga.png)
+![Muga](muga.png)
 
 ---
 
-## What is Yaga?
+## What is Muga?
 
-Yaga is a gallery app that feels right at home on a modern GNOME desktop and adapts to Linux phones running Phosh (FuriOS, Droidian, UBports). It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. It now also includes a built-in **Camera** that captures photos and video — on phones running Halium / gst-droid the camera taps directly into the hardware (flash, torch, sensors). In addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
+Muga is a gallery app that feels right at home on a modern GNOME desktop and adapts to Linux phones running Phosh (FuriOS, Droidian, UBports). It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. It now also includes a built-in **Camera** that captures photos and video — on phones running Halium / gst-droid the camera taps directly into the hardware (flash, torch, sensors). In addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
 
 ---
 
@@ -60,11 +60,11 @@ drill into subfolders; folder tiles show a 2×2 preview mosaic
 ```bash
 bash install.sh
 ```
-Then launch **Yaga** from your app menu, or type `yaga` in a terminal.
+Then launch **Muga** from your app menu, or type `muga` in a terminal.
 
 **Run directly without installing:**
 ```bash
-python3 -m yaga
+python3 -m muga
 ```
 
 **Uninstall:**
@@ -75,8 +75,8 @@ bash uninstall.sh
 **Flatpak** — sandboxed, no Python dependencies on the host:
 ```bash
 flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
-flatpak-builder --user --install --force-clean build-dir io.github.miscde.Yaga.yml
-flatpak run io.github.miscde.Yaga
+flatpak-builder --user --install --force-clean build-dir io.github.miscde.Muga.yml
+flatpak run io.github.miscde.Muga
 ```
 The Flatpak covers desktops and v4l2 webcams. The Halium / gst-droid camera
 path (FuriOS, Droidian) needs the Android HAL and sysfs torch nodes, which a
@@ -86,22 +86,22 @@ sandbox cannot reach — on those phones use `install.sh` above. See
 For camera release checks on phones and desktops, see
 [docs/camera-validation.md](docs/camera-validation.md).
 For the module layout, see [docs/architecture.md](docs/architecture.md); for
-the GTK/libadwaita versions Yaga targets, [docs/compatibility.md](docs/compatibility.md).
+the GTK/libadwaita versions Muga targets, [docs/compatibility.md](docs/compatibility.md).
 
 ## Translating
 
 Catalogues are standard gettext, in [po/](po/) — usable with Poedit, Weblate or
-`msgmerge`. To add a language, copy `po/yaga.pot` to `po/<code>.po` and
+`msgmerge`. To add a language, copy `po/muga.pot` to `po/<code>.po` and
 translate it; it is selectable in Settings as soon as the file exists.
 
 Compiling is handled for you: `pip install .` builds the catalogues during the
 install, and `install.sh` does the same. Running from a checkout needs no build
-step at all — Yaga reads `po/*.po` directly when no compiled catalogue is
+step at all — Muga reads `po/*.po` directly when no compiled catalogue is
 present. `tools/i18n.py` carries its own MO writer, so none of this requires
 gettext to be installed.
 
 ```bash
-tools/i18n.py extract    # rebuild po/yaga.pot from the sources
+tools/i18n.py extract    # rebuild po/muga.pot from the sources
 tools/i18n.py update     # merge the template into every po/*.po
 tools/i18n.py compile    # build the .mo files an install ships
 tools/i18n.py stat       # coverage per language
@@ -118,7 +118,7 @@ sysfs paths. It does **not** include passwords or app tokens.
 
 For camera debugging from a terminal, run:
 ```bash
-YAGA_CAMERA_DEBUG=1 python3 -m yaga
+MUGA_CAMERA_DEBUG=1 python3 -m muga
 ```
 
 ---

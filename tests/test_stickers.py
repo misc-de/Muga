@@ -18,7 +18,7 @@ pytest.importorskip("PIL.Image")
 
 from tests.conftest import requires_display  # noqa: E402
 
-stickers = pytest.importorskip("yaga.editor.stickers")
+stickers = pytest.importorskip("muga.editor.stickers")
 
 
 def _alpha_bounds(img):

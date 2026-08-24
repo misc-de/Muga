@@ -2,7 +2,7 @@
 
 The phone this data came from exposes cameras twice over — through
 droidcamsrc (gst-droid talking to the Android HAL) and through libcamera on
-PipeWire — and Yaga deliberately takes the first. That choice is only correct
+PipeWire — and Muga deliberately takes the first. That choice is only correct
 because the /dev/video* nodes on Halium are ISP and encoder helpers rather
 than capture devices, which is not something the enumeration can detect for
 itself. Worth a test that says so.
@@ -26,7 +26,7 @@ from tests.fixtures.hardware import (
     V4L2_CAPS_STRING,
 )
 
-devices = pytest.importorskip("yaga.camera_devices")
+devices = pytest.importorskip("muga.camera_devices")
 
 
 def _gst(*, droidcam=True, pspec_max=DROIDCAM_PSPEC_MAXIMUM, monitor_devices=()):

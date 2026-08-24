@@ -5,7 +5,7 @@ Tests: Open NC folder → Load thumbnails → Edit image → Save
 from pathlib import Path
 import tempfile
 
-from yaga.database import Database
+from muga.database import Database
 
 
 class MockNextcloudClient:
