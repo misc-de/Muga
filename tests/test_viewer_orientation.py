@@ -21,11 +21,11 @@ from pathlib import Path
 
 from tests.conftest import requires_display
 
-import yaga
-from yaga.camera_orientation import ALL_ORIENTATIONS
-from yaga.viewer import _SENSOR_ROTATION_DEG
+import muga
+from muga.camera_orientation import ALL_ORIENTATIONS
+from muga.viewer import _SENSOR_ROTATION_DEG
 
-_PKG_ROOT = Path(yaga.__file__).parent
+_PKG_ROOT = Path(muga.__file__).parent
 
 
 def _extract_name_keyed_dict(module_file: str, var_name: str) -> dict[str, int]:
@@ -77,7 +77,7 @@ def test_rotated_container_snaps_to_quarter_turns() -> None:
     aborts the process, and the try/except this replaces could never catch
     that — running the suite headless took the whole run down here.
     """
-    from yaga.rotated_container import RotatedContainer
+    from muga.rotated_container import RotatedContainer
 
     rc = RotatedContainer()
     assert rc.get_rotation() == 0

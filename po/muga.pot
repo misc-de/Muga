@@ -1,0 +1,1543 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the Muga package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: Muga\n"
+"Report-Msgid-Bugs-To: https://github.com/misc-de/Muga/issues\n"
+"POT-Creation-Date: 2026-08-24 07:22+0200\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: muga/gallery_selection.py:489
+#, python-format
+msgid "%d Nextcloud item(s) skipped (not downloaded locally)."
+msgstr ""
+
+#: muga/settings_window.py:203
+msgid "0 = unlimited"
+msgstr ""
+
+#: muga/camera_menus.py:526
+msgid "2K"
+msgstr ""
+
+#: muga/app.py:1205
+#, python-format
+msgid "A folder named %s already exists here."
+msgstr ""
+
+#: muga/editor/view.py:579
+msgid "Add"
+msgstr ""
+
+#: muga/settings_window.py:130
+msgid "Add location"
+msgstr ""
+
+#: muga/editor/view.py:218
+msgid "Adjust"
+msgstr ""
+
+#: muga/settings_window.py:993
+msgid "All other folders combined"
+msgstr ""
+
+#: muga/app.py:415
+msgid "An error occurred while accessing Nextcloud."
+msgstr ""
+
+#: muga/app.py:384
+msgid "An unexpected error occurred."
+msgstr ""
+
+#: muga/settings_window.py:574
+msgid "App password"
+msgstr ""
+
+#: muga/settings_window.py:272
+msgid "App version"
+msgstr ""
+
+#: muga/settings_window.py:137 muga/settings_window.py:140
+msgid "Appearance"
+msgstr ""
+
+#: muga/editor/view.py:691
+msgid "Apply"
+msgstr ""
+
+#: muga/app.py:738
+msgid "Ascending"
+msgstr ""
+
+#: muga/camera_menus.py:158 muga/camera_menus.py:182 muga/camera_menus.py:194
+#: muga/camera_menus.py:216
+msgid "Auto"
+msgstr ""
+
+#: muga/app.py:441
+msgid "Back"
+msgstr ""
+
+#: muga/settings_window.py:1445 muga/settings_window.py:1659
+msgid "Both"
+msgstr ""
+
+#: muga/camera_menus.py:233
+msgid "Brightness"
+msgstr ""
+
+#: muga/editor/view.py:721
+msgid "Brush size"
+msgstr ""
+
+#: muga/settings_window.py:196
+msgid "Cache"
+msgstr ""
+
+#: muga/camera.py:202 muga/viewer.py:1722 muga/viewer.py:1727
+msgid "Camera"
+msgstr ""
+
+#: muga/camera.py:1368
+msgid ""
+"Camera and preview pipeline couldn't agree on a format. Pick a lower "
+"resolution from the menu."
+msgstr ""
+
+#: muga/camera.py:545
+msgid "Camera controls"
+msgstr ""
+
+#: muga/camera.py:1354
+#, python-format
+msgid ""
+"Camera node%s isn't a v4l2 capture device. Try the switch-camera button or "
+"open a different node."
+msgstr ""
+
+#: muga/camera.py:1359
+#, python-format
+msgid "Camera%s is in use by another app — close it and retry."
+msgstr ""
+
+#: muga/app.py:1148 muga/gallery_selection.py:244 muga/gallery_selection.py:492
+#: muga/settings_window.py:638 muga/settings_window.py:779
+#: muga/settings_window.py:886 muga/settings_window.py:1270
+#: muga/settings_window.py:1460 muga/settings_window.py:1510
+#: muga/settings_window.py:1677 muga/viewer.py:302 muga/viewer.py:608
+#: muga/viewer.py:1059 muga/viewer.py:1601
+msgid "Cancel"
+msgstr ""
+
+#: muga/app.py:506
+msgid "Cancel selection"
+msgstr ""
+
+#: muga/settings_window.py:791
+msgid "Cancelled"
+msgstr ""
+
+#: muga/app.py:1131
+msgid "Cannot create folder"
+msgstr ""
+
+#: muga/gallery_selection.py:417
+msgid "Cannot delete"
+msgstr ""
+
+#: muga/gallery_selection.py:477
+msgid "Cannot share Nextcloud items directly — open them first to download."
+msgstr ""
+
+#: muga/camera.py:637
+msgid "Capture"
+msgstr ""
+
+#: muga/camera.py:2868
+#, python-format
+msgid "Capture failed: %s"
+msgstr ""
+
+#: muga/camera.py:1162
+msgid "Capture unavailable"
+msgstr ""
+
+#: muga/camera.py:399
+msgid "Capturing…"
+msgstr ""
+
+#: muga/settings_window.py:286 muga/settings_window.py:311
+msgid "Check for updates"
+msgstr ""
+
+#: muga/settings_window.py:317
+msgid "Checking…"
+msgstr ""
+
+#: muga/gallery_selection.py:310 muga/gallery_selection.py:432
+#: muga/settings_window.py:971 muga/settings_window.py:1141
+#: muga/settings_window.py:1212 muga/settings_window.py:1370
+#: muga/settings_window.py:1388 muga/settings_window.py:1621
+msgid "Choose folder"
+msgstr ""
+
+#: muga/gallery_selection.py:486
+msgid "Choose how to share:"
+msgstr ""
+
+#: muga/settings_window.py:209
+msgid "Clear cache"
+msgstr ""
+
+#: muga/app.py:354 muga/viewer.py:273 muga/viewer.py:1470
+msgid "Close"
+msgstr ""
+
+#: muga/settings_window.py:550
+msgid "Connect"
+msgstr ""
+
+#: muga/settings_window.py:780
+msgid "Connect anyway"
+msgstr ""
+
+#: muga/viewer.py:609
+msgid "Connect once"
+msgstr ""
+
+#: muga/viewer.py:610
+msgid "Connect permanently"
+msgstr ""
+
+#: muga/settings_window.py:532
+msgid "Connect to your Nextcloud"
+msgstr ""
+
+#: muga/settings_window.py:744
+msgid "Connected ✓"
+msgstr ""
+
+#: muga/settings_window.py:812
+msgid "Connecting…"
+msgstr ""
+
+#: muga/app.py:408 muga/settings_window.py:848
+msgid "Connection failed"
+msgstr ""
+
+#: muga/camera_menus.py:234
+msgid "Contrast"
+msgstr ""
+
+#: muga/camera_menus.py:417
+msgid "Controls reset"
+msgstr ""
+
+#: muga/settings_window.py:421
+msgid "Copied"
+msgstr ""
+
+#: muga/settings_window.py:242 muga/settings_window.py:422
+msgid "Copy"
+msgstr ""
+
+#: muga/settings_window.py:233
+msgid "Copy this when reporting camera, Nextcloud, or media-scan issues."
+msgstr ""
+
+#: muga/app.py:378
+msgid "Could not access the file due to a system error."
+msgstr ""
+
+#: muga/app.py:365
+msgid ""
+"Could not access the file. It may have been moved, deleted, or you don't "
+"have permission."
+msgstr ""
+
+#: muga/gallery_selection.py:447 muga/gallery_selection.py:517
+#: muga/viewer.py:1620
+msgid "Could not complete action"
+msgstr ""
+
+#: muga/app.py:1048
+msgid "Could not connect to Nextcloud"
+msgstr ""
+
+#: muga/app.py:409
+msgid ""
+"Could not connect to Nextcloud. Check your internet connection and server "
+"URL."
+msgstr ""
+
+#: muga/app.py:1210 muga/app.py:1250
+msgid "Could not create folder"
+msgstr ""
+
+#: muga/gallery_selection.py:294
+msgid "Could not delete all files. Check file permissions or disk state."
+msgstr ""
+
+#: muga/viewer.py:720
+msgid "Could not load file"
+msgstr ""
+
+#: muga/gallery_selection.py:371
+msgid "Could not move files. Check file permissions and disk space."
+msgstr ""
+
+#: muga/gallery_selection.py:424
+msgid "Could not move the file to trash."
+msgstr ""
+
+#: muga/viewer.py:1394 muga/viewer.py:1413 muga/viewer.py:1467
+msgid "Could not open editor"
+msgstr ""
+
+#: muga/camera_capture_io.py:289
+msgid "Could not read frame"
+msgstr ""
+
+#: muga/viewer.py:1544
+msgid "Could not save edited image"
+msgstr ""
+
+#: muga/camera.py:1142
+msgid "Could not start camera"
+msgstr ""
+
+#: muga/app.py:1149
+msgid "Create"
+msgstr ""
+
+#: muga/app.py:1145
+#, python-format
+msgid "Create a new folder in %s"
+msgstr ""
+
+#: muga/settings_window.py:542
+msgid "Credentials"
+msgstr ""
+
+#: muga/editor/view.py:221 muga/editor/view.py:688
+msgid "Crop"
+msgstr ""
+
+#: muga/settings_window.py:208
+msgid "Current cache size"
+msgstr ""
+
+#: muga/gallery_selection.py:245 muga/viewer.py:278 muga/viewer.py:1602
+msgid "Delete"
+msgstr ""
+
+#: muga/gallery_selection.py:293 muga/gallery_selection.py:423
+msgid "Delete failed"
+msgstr ""
+
+#: muga/viewer.py:1598
+msgid "Delete media?"
+msgstr ""
+
+#: muga/app.py:484
+msgid "Delete selected"
+msgstr ""
+
+#: muga/gallery_selection.py:241
+msgid "Delete selection?"
+msgstr ""
+
+#: muga/viewer.py:1599
+msgid "Delete this item from the gallery?"
+msgstr ""
+
+#: muga/gallery_selection.py:300
+#, python-format
+msgid "Deleted %d/%d items (%d failed)"
+msgstr ""
+
+#: muga/gallery_selection.py:256
+#, python-format
+msgid "Deleting %d items…"
+msgstr ""
+
+#: muga/app.py:1420
+msgid "Deleting Photos"
+msgstr ""
+
+#: muga/app.py:738
+msgid "Descending"
+msgstr ""
+
+#: muga/settings_window.py:239
+msgid "Diagnostic report"
+msgstr ""
+
+#: muga/settings_window.py:222 muga/settings_window.py:231
+msgid "Diagnostics"
+msgstr ""
+
+#: muga/viewer.py:1718
+msgid "Dimensions"
+msgstr ""
+
+#: muga/viewer.py:1057
+msgid "Discard"
+msgstr ""
+
+#: muga/settings_window.py:557
+msgid "Disconnect"
+msgstr ""
+
+#: muga/settings_window.py:746 muga/settings_window.py:872
+msgid "Disconnected"
+msgstr ""
+
+#: muga/settings_window.py:197
+msgid ""
+"Disk cache for thumbnails and downloaded Nextcloud files. When the limit is "
+"reached, the least-recently-used files are deleted first."
+msgstr ""
+
+#: muga/settings_window.py:1648
+msgid "Don't inherit"
+msgstr ""
+
+#: muga/camera.py:1033
+msgid "Downstream element has no sink pad"
+msgstr ""
+
+#: muga/settings_window.py:1087
+msgid "Drag to reorder"
+msgstr ""
+
+#: muga/app.py:1396
+msgid "EXIF Data"
+msgstr ""
+
+#: muga/camera_menus.py:501 muga/camera_menus.py:546
+msgid "Eco"
+msgstr ""
+
+#: muga/settings_window.py:1111 muga/settings_window.py:1147
+#: muga/settings_window.py:1151 muga/viewer.py:291
+msgid "Edit"
+msgstr ""
+
+#: muga/settings_window.py:1440 muga/settings_window.py:1605
+msgid "Edit folder"
+msgstr ""
+
+#: muga/editor/view.py:219
+msgid "Effects"
+msgstr ""
+
+#: muga/gallery_selection.py:494
+msgid "Email"
+msgstr ""
+
+#: muga/viewer.py:605
+msgid "Enable the connection now so the image can be loaded."
+msgstr ""
+
+#: muga/settings_window.py:522
+msgid "Enables or disables all Nextcloud functions"
+msgstr ""
+
+#: muga/app.py:383
+msgid "Error"
+msgstr ""
+
+#: muga/camera_menus.py:153
+msgid "Exposure"
+msgstr ""
+
+#: muga/settings_window.py:189
+msgid "External player command"
+msgstr ""
+
+#: muga/camera_menus.py:527
+msgid "FHD"
+msgstr ""
+
+#: muga/camera_capture_io.py:303 muga/camera_capture_io.py:327
+#: muga/camera_capture_io.py:337
+#, python-format
+msgid "Failed to save: %s"
+msgstr ""
+
+#: muga/camera_capture_io.py:330
+msgid "Failed to save: too many collisions"
+msgstr ""
+
+#: muga/app.py:364
+msgid "File not found"
+msgstr ""
+
+#: muga/app.py:516
+msgid "Filename, date, month, EXIF…"
+msgstr ""
+
+#: muga/editor/view.py:217
+msgid "Filter"
+msgstr ""
+
+#: muga/camera.py:1958
+msgid "Flash off"
+msgstr ""
+
+#: muga/camera.py:1958
+msgid "Flash on"
+msgstr ""
+
+#: muga/camera_menus.py:214
+msgid "Focus"
+msgstr ""
+
+#: muga/viewer.py:1678
+msgid "Folder"
+msgstr ""
+
+#: muga/app.py:346
+#, python-format
+msgid "Folder %s not found"
+msgstr ""
+
+#: muga/app.py:1204
+msgid "Folder exists"
+msgstr ""
+
+#: muga/app.py:1137
+msgid "Folder name"
+msgstr ""
+
+#: muga/app.py:1183
+msgid "Folder names cannot contain slashes."
+msgstr ""
+
+#: muga/settings_window.py:100 muga/settings_window.py:105
+msgid "Folders"
+msgstr ""
+
+#: muga/viewer.py:1724 muga/viewer.py:1728
+msgid "GPS"
+msgstr ""
+
+#: muga/settings_window.py:892
+msgid ""
+"GStreamer camera support missing.\n"
+"Install: apt install gstreamer1.0-plugins-bad\n"
+"                    python3-gst-1.0"
+msgstr ""
+
+#: muga/camera_menus.py:232
+msgid "Gain"
+msgstr ""
+
+#: muga/camera_menus.py:609
+msgid "Geotagging"
+msgstr ""
+
+#: muga/camera.py:494 muga/settings_window.py:145
+msgid "Grid"
+msgstr ""
+
+#: muga/camera_menus.py:528
+msgid "HD"
+msgstr ""
+
+#: muga/camera_menus.py:583 muga/settings_window.py:169
+msgid "Handedness"
+msgstr ""
+
+#: muga/settings_window.py:1120
+msgid "Hide"
+msgstr ""
+
+#: muga/camera_menus.py:503 muga/camera_menus.py:548
+msgid "High"
+msgstr ""
+
+#: muga/settings_window.py:633
+msgid ""
+"How would you like to connect to your Nextcloud?\n"
+"\n"
+"You can find the app-password QR code in your Nextcloud under:\n"
+"Settings → Security → App passwords → \"Create new app password\"."
+msgstr ""
+
+#: muga/camera_menus.py:243
+msgid "Image"
+msgstr ""
+
+#: muga/settings_window.py:1445 muga/settings_window.py:1659
+msgid "Images only"
+msgstr ""
+
+#: muga/settings_window.py:240
+msgid "Includes paths, runtime versions, camera plugins, and status flags."
+msgstr ""
+
+#: muga/viewer.py:285
+msgid "Info"
+msgstr ""
+
+#: muga/app.py:1182
+msgid "Invalid folder name"
+msgstr ""
+
+#: muga/settings_window.py:1508
+msgid ""
+"It will disappear from the gallery navigation. The files on disk are not "
+"deleted."
+msgstr ""
+
+#: muga/settings_window.py:297
+msgid "Last checked: "
+msgstr ""
+
+#: muga/settings_window.py:399
+msgid "Later"
+msgstr ""
+
+#: muga/settings_window.py:186
+msgid "Leave empty to use built-in playback"
+msgstr ""
+
+#: muga/camera_menus.py:590
+msgid "Left"
+msgstr ""
+
+#: muga/camera.py:1956
+msgid "Light off"
+msgstr ""
+
+#: muga/camera.py:1956
+msgid "Light on"
+msgstr ""
+
+#: muga/settings_window.py:592
+msgid "Load thumbnails only"
+msgstr ""
+
+#: muga/viewer.py:1687
+msgid "Loading…"
+msgstr ""
+
+#: muga/settings_window.py:281
+msgid "Managed by Flatpak"
+msgstr ""
+
+#: muga/settings_window.py:639
+msgid "Manually"
+msgstr ""
+
+#: muga/camera_menus.py:504 muga/camera_menus.py:525 muga/camera_menus.py:549
+msgid "Max"
+msgstr ""
+
+#: muga/settings_window.py:202
+msgid "Maximum cache size (MB)"
+msgstr ""
+
+#: muga/settings_window.py:601
+msgid "Merge Nextcloud items into the Overview (thumbnails load on demand)"
+msgstr ""
+
+#: muga/viewer.py:1680
+msgid "Modified"
+msgstr ""
+
+#: muga/gallery_selection.py:370
+msgid "Move failed"
+msgstr ""
+
+#: muga/app.py:491
+msgid "Move selected"
+msgstr ""
+
+#: muga/gallery_selection.py:445
+msgid "Moved"
+msgstr ""
+
+#: muga/gallery_selection.py:367
+#, python-format
+msgid "Moved %d items"
+msgstr ""
+
+#: muga/gallery_selection.py:376
+#, python-format
+msgid "Moved %d items (%d failed)"
+msgstr ""
+
+#: muga/gallery_selection.py:330
+#, python-format
+msgid "Moving %d items…"
+msgstr ""
+
+#: muga/settings_window.py:1609 muga/viewer.py:1677
+msgid "Name"
+msgstr ""
+
+#: muga/settings_window.py:154
+msgid "Navigation"
+msgstr ""
+
+#: muga/camera_menus.py:591
+msgid "Neutral"
+msgstr ""
+
+#: muga/app.py:452 muga/app.py:1144
+msgid "New folder"
+msgstr ""
+
+#: muga/app.py:1441
+msgid "Nextcloud Integration"
+msgstr ""
+
+#: muga/settings_window.py:521
+msgid "Nextcloud active"
+msgstr ""
+
+#: muga/app.py:392 muga/app.py:1045
+msgid "Nextcloud authentication failed"
+msgstr ""
+
+#: muga/viewer.py:603
+msgid "Nextcloud connection disabled"
+msgstr ""
+
+#: muga/app.py:414
+msgid "Nextcloud error"
+msgstr ""
+
+#: muga/app.py:1221
+msgid "Nextcloud password is unavailable."
+msgstr ""
+
+#: muga/app.py:1448
+msgid ""
+"Nextcloud passwords are stored in your system keyring (or local file with "
+"restricted permissions). Ensure your Nextcloud instance uses HTTPS to "
+"protect data in transit."
+msgstr ""
+
+#: muga/app.py:398 muga/app.py:1047
+msgid "Nextcloud path not found"
+msgstr ""
+
+#: muga/camera.py:737
+msgid "No camera detected"
+msgstr ""
+
+#: muga/camera.py:954
+msgid "No camera source element available"
+msgstr ""
+
+#: muga/editor/view.py:516
+msgid "No frame"
+msgstr ""
+
+#: muga/camera.py:2435 muga/camera.py:2445 muga/camera.py:2834
+#: muga/camera.py:2844 muga/camera_capture_io.py:284
+msgid "No frame available"
+msgstr ""
+
+#: muga/camera.py:1363
+#, python-format
+msgid ""
+"No permission to open %s. Add yourself to the 'video' group: sudo usermod -a "
+"-G video $USER"
+msgstr ""
+
+#: muga/app.py:348
+msgid "No pictures found"
+msgstr ""
+
+#: muga/app.py:1220
+msgid "Not connected"
+msgstr ""
+
+#: muga/app.py:1466
+msgid "OK"
+msgstr ""
+
+#: muga/app.py:473
+msgid "Open camera"
+msgstr ""
+
+#: muga/settings_window.py:1441
+msgid "Overview shows the combined content of every other folder."
+msgstr ""
+
+#: muga/settings_window.py:1650
+msgid "Parent folders won't include this folder's content during scans."
+msgstr ""
+
+#: muga/settings_window.py:1611
+msgid "Path"
+msgstr ""
+
+#: muga/settings_window.py:1260
+msgid "Path of the Photos folder on your Nextcloud server."
+msgstr ""
+
+#: muga/settings_window.py:588
+msgid "Performance"
+msgstr ""
+
+#: muga/app.py:370
+msgid "Permission denied"
+msgstr ""
+
+#: muga/gallery_selection.py:418
+msgid "Permission denied. The file or folder is protected."
+msgstr ""
+
+#: muga/camera_menus.py:737
+msgid "Photo mode"
+msgstr ""
+
+#: muga/camera_menus.py:499
+msgid "Photo quality"
+msgstr ""
+
+#: muga/camera_menus.py:520
+msgid "Photo size"
+msgstr ""
+
+#: muga/settings_window.py:1259
+msgid "Photos folder on Nextcloud"
+msgstr ""
+
+#: muga/app.py:1403
+msgid ""
+"Photos often contain sensitive metadata (EXIF data):\n"
+"• Camera make & model\n"
+"• GPS coordinates and location history\n"
+"• Timestamp and date taken\n"
+"\n"
+"This app displays EXIF data in the Image Info panel. Be careful when sharing "
+"photos online, as metadata can reveal your location and privacy details."
+msgstr ""
+
+#: muga/settings_window.py:148
+msgid "Photos per row"
+msgstr ""
+
+#: muga/gallery_selection.py:242
+msgid "Photos will be moved to trash."
+msgstr ""
+
+#: muga/app.py:271
+msgid "Pillow is outdated — please update it."
+msgstr ""
+
+#: muga/settings_window.py:754
+msgid "Please fill in all fields."
+msgstr ""
+
+#: muga/camera_menus.py:225
+msgid "Position"
+msgstr ""
+
+#: muga/app.py:1384
+msgid "Privacy & Help"
+msgstr ""
+
+#: muga/settings_window.py:949
+msgid "QR code scan error"
+msgstr ""
+
+#: muga/settings_window.py:944
+msgid "QR code scanned successfully ✓"
+msgstr ""
+
+#: muga/settings_window.py:941
+msgid "QR code scanned – credentials entered ✓"
+msgstr ""
+
+#: muga/camera.py:575
+msgid "Quality"
+msgstr ""
+
+#: muga/viewer.py:1408
+msgid "RAW images cannot be edited with the built-in editor"
+msgstr ""
+
+#: muga/camera_video.py:484
+msgid "Recording failed"
+msgstr ""
+
+#: muga/camera_video.py:498
+#, python-format
+msgid "Recording failed: %s"
+msgstr ""
+
+#: muga/camera_video.py:277 muga/camera_video.py:413
+msgid "Recording…"
+msgstr ""
+
+#: muga/viewer.py:318
+msgid "Redo"
+msgstr ""
+
+#: muga/app.py:436
+msgid "Refresh"
+msgstr ""
+
+#: muga/settings_window.py:1133 muga/settings_window.py:1511
+msgid "Remove"
+msgstr ""
+
+#: muga/settings_window.py:1507
+msgid "Remove this folder?"
+msgstr ""
+
+#: muga/editor/view.py:450 muga/editor/view.py:695
+msgid "Reset"
+msgstr ""
+
+#: muga/editor/view.py:715
+msgid "Reset brush strokes"
+msgstr ""
+
+#: muga/camera_menus.py:252
+msgid "Reset to defaults"
+msgstr ""
+
+#: muga/camera.py:535
+msgid "Resolution"
+msgstr ""
+
+#: muga/settings_window.py:396
+msgid "Restart Muga?"
+msgstr ""
+
+#: muga/settings_window.py:400
+msgid "Restart now"
+msgstr ""
+
+#: muga/settings_window.py:380
+msgid "Restart required"
+msgstr ""
+
+#: muga/camera_menus.py:589
+msgid "Right"
+msgstr ""
+
+#: muga/viewer.py:297
+msgid "Rotate clockwise"
+msgstr ""
+
+#: muga/camera_menus.py:235
+msgid "Saturation"
+msgstr ""
+
+#: muga/settings_window.py:1271 muga/settings_window.py:1461
+#: muga/settings_window.py:1678 muga/viewer.py:324 muga/viewer.py:1058
+msgid "Save"
+msgstr ""
+
+#: muga/viewer.py:1117
+msgid "Save failed"
+msgstr ""
+
+#: muga/viewer.py:1054
+msgid "Save rotation?"
+msgstr ""
+
+#: muga/camera_capture_io.py:342 muga/camera_video.py:477
+#, python-format
+msgid "Saved %s"
+msgstr ""
+
+#: muga/settings_window.py:577 muga/settings_window.py:640
+#: muga/settings_window.py:878
+msgid "Scan QR code"
+msgstr ""
+
+#: muga/app.py:448
+msgid "Search"
+msgstr ""
+
+#: muga/camera.py:500
+msgid "Self-timer"
+msgstr ""
+
+#: muga/camera.py:1869
+msgid "Self-timer off"
+msgstr ""
+
+#: muga/camera.py:1882
+#, python-format
+msgid "Self-timer: %d seconds"
+msgstr ""
+
+#: muga/settings_window.py:564
+msgid "Server URL"
+msgstr ""
+
+#: muga/settings_window.py:534
+msgid "Set up"
+msgstr ""
+
+#: muga/settings_window.py:531 muga/settings_window.py:631
+msgid "Set up connection"
+msgstr ""
+
+#: muga/app.py:460 muga/camera.py:594 muga/settings_window.py:70
+msgid "Settings"
+msgstr ""
+
+#: muga/viewer.py:337
+msgid "Share"
+msgstr ""
+
+#: muga/gallery_selection.py:484
+#, python-format
+msgid "Share %d images"
+msgstr ""
+
+#: muga/gallery_selection.py:482
+msgid "Share image"
+msgstr ""
+
+#: muga/app.py:497
+msgid "Share selected"
+msgstr ""
+
+#: muga/settings_window.py:1120 muga/settings_window.py:1450
+#: muga/settings_window.py:1664
+msgid "Show"
+msgstr ""
+
+#: muga/settings_window.py:600
+msgid "Show in Overview"
+msgstr ""
+
+#: muga/viewer.py:1679
+msgid "Size"
+msgstr ""
+
+#: muga/settings_window.py:593
+msgid "Skip downloading full files during sync"
+msgstr ""
+
+#: muga/app.py:465
+msgid "Sort"
+msgstr ""
+
+#: muga/camera.py:1022
+msgid "Source element has no usable output pad"
+msgstr ""
+
+#: muga/viewer.py:331 muga/viewer.py:1792
+msgid "Start slideshow"
+msgstr ""
+
+#: muga/camera_menus.py:502 muga/camera_menus.py:547
+msgid "Std"
+msgstr ""
+
+#: muga/editor/view.py:220
+msgid "Sticker"
+msgstr ""
+
+#: muga/viewer.py:1785
+msgid "Stop slideshow"
+msgstr ""
+
+#: muga/camera.py:606
+msgid "Switch camera"
+msgstr ""
+
+#: muga/app.py:377
+msgid "System error"
+msgstr ""
+
+#: muga/camera_menus.py:204
+msgid "Temperature"
+msgstr ""
+
+#: muga/editor/view.py:577
+msgid "Text color"
+msgstr ""
+
+#: muga/editor/view.py:568
+msgid "Text input…"
+msgstr ""
+
+#: muga/app.py:1251
+#, python-format
+msgid "The Nextcloud server rejected the new folder %s."
+msgstr ""
+
+#: muga/app.py:393
+msgid ""
+"The app password is incorrect or the account has been revoked. Check "
+"Nextcloud settings."
+msgstr ""
+
+#: muga/app.py:1132
+msgid "The current location is not available."
+msgstr ""
+
+#: muga/app.py:399
+msgid ""
+"The folder or file doesn't exist on the Nextcloud server. It may have been "
+"deleted."
+msgstr ""
+
+#: muga/viewer.py:1468
+msgid ""
+"The image editor could not start. This may be due to insufficient memory or "
+"unsupported image format."
+msgstr ""
+
+#: muga/viewer.py:1055
+msgid "The image has been rotated. Save the change?"
+msgstr ""
+
+#: muga/app.py:280
+msgid "The media index was damaged and is being rebuilt."
+msgstr ""
+
+#: muga/settings_window.py:1606
+msgid "The name appears as the entry label in the gallery navigation."
+msgstr ""
+
+#: muga/viewer.py:1118
+msgid "The rotation could not be saved. The photo on disk is unchanged."
+msgstr ""
+
+#: muga/settings_window.py:773
+msgid ""
+"The server URL starts with http:// — your password and photos will be "
+"transmitted unencrypted. Anyone on the same network can read them. Use "
+"https:// unless you have a specific reason not to."
+msgstr ""
+
+#: muga/settings_window.py:397
+msgid "The update was installed. Restart Muga to use the new version."
+msgstr ""
+
+#: muga/viewer.py:582
+msgid ""
+"This image is stored in your Nextcloud.\n"
+"The connection is currently disabled."
+msgstr ""
+
+#: muga/camera_menus.py:168
+msgid "Time"
+msgstr ""
+
+#: muga/viewer.py:311
+msgid "Undo"
+msgstr ""
+
+#: muga/settings_window.py:771
+msgid "Unencrypted connection"
+msgstr ""
+
+#: muga/settings_window.py:351
+msgid "Up to date"
+msgstr ""
+
+#: muga/settings_window.py:390
+msgid "Update failed"
+msgstr ""
+
+#: muga/settings_window.py:342
+#, python-format
+msgid "Update to v%s"
+msgstr ""
+
+#: muga/settings_window.py:270
+msgid "Updates"
+msgstr ""
+
+#: muga/settings_window.py:361
+msgid "Updating…"
+msgstr ""
+
+#: muga/settings_window.py:569
+msgid "Username"
+msgstr ""
+
+#: muga/settings_window.py:185
+msgid "Video"
+msgstr ""
+
+#: muga/camera.py:2000
+msgid "Video light unavailable"
+msgstr ""
+
+#: muga/camera_menus.py:737
+msgid "Video mode"
+msgstr ""
+
+#: muga/camera_menus.py:544
+msgid "Video quality"
+msgstr ""
+
+#: muga/settings_window.py:1445 muga/settings_window.py:1659
+msgid "Videos only"
+msgstr ""
+
+#: muga/app.py:1427
+msgid ""
+"When you delete photos in Muga, they are moved to trash. They can typically "
+"be recovered from your system trash until it is permanently emptied. For "
+"secure deletion, consider using specialized tools or encrypted storage."
+msgstr ""
+
+#: muga/settings_window.py:155
+msgid "Where the category bar is shown around the gallery."
+msgstr ""
+
+#: muga/settings_window.py:1451 muga/settings_window.py:1665
+msgid "Which media types appear when this folder is opened."
+msgstr ""
+
+#: muga/settings_window.py:171
+msgid "Which side thumb-reachable camera controls sit on."
+msgstr ""
+
+#: muga/camera_menus.py:178
+msgid "White balance"
+msgstr ""
+
+#: muga/app.py:371
+msgid "You don't have permission to access this file."
+msgstr ""
+
+#: muga/app.py:276
+msgid "Your settings could not be read and were reset to defaults."
+msgstr ""
+
+#: muga/camera.py:1365
+msgid "camera"
+msgstr ""
+
+#: muga/gallery_selection.py:229
+msgid "selected"
+msgstr ""
+
+#: muga/camera.py:425
+msgid "←  swipe  →"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "%d hits"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "All media"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "April"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "August"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Birthday"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Black"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Blue"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Christmas"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Clear thumbnail cache"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Create app password"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Dark"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Date"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "December"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Deleted"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Deleted %d items"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Easter"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Emotions"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Empty"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "English"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Exit fullscreen"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "February"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Folder structure"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Frame"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Fullscreen"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "German"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Green"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "January"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "July"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "June"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Language"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Light"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Locations"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "March"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "May"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Media folders"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Move"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "New Year"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Newest first"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Nextcloud"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Nextcloud → Settings → Security → App passwords"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "No configured folder exists yet."
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "No results"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "None"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "November"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "October"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Oldest first"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Open"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Open externally"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Optional locations"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Overview"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Overview folder"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Photos"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Photos folder"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Photos on Nextcloud"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Pictures"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Pictures folder"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Red"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Screenshots"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Screenshots folder"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Search: %d hits"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "September"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Smileys"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Spring"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Summer"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Symbols"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "System"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Text"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Theme"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Thumbnails"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Use system language"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Videos"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Videos folder"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Wedding"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "White"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Winter"
+msgstr ""
+
+#. Referenced indirectly — passed to _() as a variable.
+msgid "Yellow"
+msgstr ""

@@ -86,7 +86,7 @@ DROIDCAM_PAD_TEMPLATES = ("imgsrc", "vfsrc", "vidsrc")
 # ---------------------------------------------------------------------------
 
 # What the monitor reports here. Note the phone offers both paths — libcamera
-# through PipeWire *and* droidcamsrc — and Yaga deliberately prefers
+# through PipeWire *and* droidcamsrc — and Muga deliberately prefers
 # droidcamsrc, because the /dev/video* nodes on Halium are ISP and encoder
 # helpers rather than capture devices.
 LIBCAMERA_DEVICES = (

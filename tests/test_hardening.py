@@ -52,7 +52,7 @@ def test_rotation_leaves_original_intact_when_every_encoder_fails(tmp_path: Path
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GdkPixbuf
 
-    from yaga.viewer import ViewerWindow
+    from muga.viewer import ViewerWindow
 
     src = tmp_path / "urlaub.jpg"
     original = _jpeg(src)
@@ -79,7 +79,7 @@ def test_rotation_falls_back_to_gdkpixbuf_on_an_intact_source(tmp_path: Path) ->
     handed a corrupt file and failed too — silently.
     """
     PILImage = pytest.importorskip("PIL.Image")
-    from yaga.viewer import ViewerWindow
+    from muga.viewer import ViewerWindow
 
     src = tmp_path / "urlaub.jpg"
     _jpeg(src, (400, 300))
@@ -100,7 +100,7 @@ def test_rotation_falls_back_to_gdkpixbuf_on_an_intact_source(tmp_path: Path) ->
 def test_rotation_preserves_file_mode(tmp_path: Path) -> None:
     """os.replace carries the temp file's mode, so it has to be copied over."""
     pytest.importorskip("PIL.Image")
-    from yaga.viewer import ViewerWindow
+    from muga.viewer import ViewerWindow
 
     src = tmp_path / "privat.jpg"
     _jpeg(src)
@@ -114,7 +114,7 @@ def test_rotation_preserves_file_mode(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_move_does_not_clobber_a_same_named_file(tmp_path: Path) -> None:
-    from yaga.gallery_selection import _move_file_no_clobber
+    from muga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "album"
     src.mkdir(), dst.mkdir()
@@ -130,7 +130,7 @@ def test_move_does_not_clobber_a_same_named_file(tmp_path: Path) -> None:
 
 
 def test_move_keeps_finding_free_names(tmp_path: Path) -> None:
-    from yaga.gallery_selection import _move_file_no_clobber
+    from muga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "album"
     src.mkdir(), dst.mkdir()
@@ -144,7 +144,7 @@ def test_move_keeps_finding_free_names(tmp_path: Path) -> None:
 
 def test_move_crosses_a_filesystem_boundary(tmp_path: Path) -> None:
     """EXDEV used to fail every single file — moving to an SD card never worked."""
-    from yaga.gallery_selection import _move_file_no_clobber
+    from muga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "card"
     src.mkdir(), dst.mkdir()
@@ -164,7 +164,7 @@ def test_move_crosses_a_filesystem_boundary(tmp_path: Path) -> None:
 
 
 def test_move_keeps_the_source_when_the_copy_fails(tmp_path: Path) -> None:
-    from yaga.gallery_selection import _move_file_no_clobber
+    from muga.gallery_selection import _move_file_no_clobber
 
     src, dst = tmp_path / "cam", tmp_path / "card"
     src.mkdir(), dst.mkdir()
@@ -200,7 +200,7 @@ def test_move_keeps_the_source_when_the_copy_fails(tmp_path: Path) -> None:
     ],
 )
 def test_settings_load_survives_hand_edits(tmp_path: Path, monkeypatch, payload, note) -> None:
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -216,7 +216,7 @@ def test_settings_load_survives_hand_edits(tmp_path: Path, monkeypatch, payload,
 
 def test_settings_load_keeps_valid_neighbours_of_a_bad_key(tmp_path: Path, monkeypatch) -> None:
     """One bad key must cost that key's value, not the whole file."""
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -235,7 +235,7 @@ def test_settings_load_keeps_valid_neighbours_of_a_bad_key(tmp_path: Path, monke
 
 def test_settings_save_reports_failure_instead_of_raising(tmp_path: Path, monkeypatch) -> None:
     """save() is called from ~24 UI callbacks; it must not abort them."""
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -248,15 +248,15 @@ def test_settings_save_reports_failure_instead_of_raising(tmp_path: Path, monkey
 
 
 def test_database_rebuilds_itself_when_the_file_is_not_a_database(tmp_path: Path) -> None:
-    from yaga.database import Database
+    from muga.database import Database
 
-    path = tmp_path / "yaga.sqlite3"
+    path = tmp_path / "muga.sqlite3"
     path.write_text("this is not a database" * 100)
 
     db = Database(path)  # used to raise sqlite3.DatabaseError and kill startup
 
     assert db.list_media("photos", "newest") == []
-    assert (tmp_path / "yaga.sqlite3.corrupt").exists(), "damaged file not kept for inspection"
+    assert (tmp_path / "muga.sqlite3.corrupt").exists(), "damaged file not kept for inspection"
 
 
 # ---------------------------------------------------------------------------
@@ -265,12 +265,12 @@ def test_database_rebuilds_itself_when_the_file_is_not_a_database(tmp_path: Path
 
 def _fake_install(root: Path) -> dict:
     files = {
-        "yaga/__init__.py": 'VERSION = "0.2.0"',
-        "yaga/app.py": "# old app",
-        "yaga/viewer.py": "# old viewer",
+        "muga/__init__.py": 'VERSION = "0.2.0"',
+        "muga/app.py": "# old app",
+        "muga/viewer.py": "# old viewer",
         "README.md": "old readme",
     }
-    (root / "yaga").mkdir(parents=True)
+    (root / "muga").mkdir(parents=True)
     for name, body in files.items():
         (root / name).write_text(body)
     return files
@@ -278,14 +278,14 @@ def _fake_install(root: Path) -> dict:
 
 def _fake_update_zip(path: Path) -> None:
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("Yaga-main/yaga/__init__.py", 'VERSION = "0.3.0"')
-        zf.writestr("Yaga-main/yaga/app.py", "# new app")
-        zf.writestr("Yaga-main/yaga/viewer.py", "# new viewer")
-        zf.writestr("Yaga-main/README.md", "new readme")
+        zf.writestr("Muga-main/muga/__init__.py", 'VERSION = "0.3.0"')
+        zf.writestr("Muga-main/muga/app.py", "# new app")
+        zf.writestr("Muga-main/muga/viewer.py", "# new viewer")
+        zf.writestr("Muga-main/README.md", "new readme")
 
 
 def test_failed_update_rolls_back_completely(tmp_path: Path, monkeypatch) -> None:
-    from yaga import updater
+    from muga import updater
 
     app = tmp_path / "app"
     before = _fake_install(app)
@@ -317,7 +317,7 @@ def test_failed_update_rolls_back_completely(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_successful_update_applies_every_file(tmp_path: Path, monkeypatch) -> None:
-    from yaga import updater
+    from muga import updater
 
     app = tmp_path / "app"
     _fake_install(app)
@@ -331,18 +331,18 @@ def test_successful_update_applies_every_file(tmp_path: Path, monkeypatch) -> No
     )
 
     assert updater._apply_zip() is True
-    assert (app / "yaga" / "__init__.py").read_text() == 'VERSION = "0.3.0"'
-    assert (app / "yaga" / "app.py").read_text() == "# new app"
+    assert (app / "muga" / "__init__.py").read_text() == 'VERSION = "0.3.0"'
+    assert (app / "muga" / "app.py").read_text() == "# new app"
 
 
 def test_update_refuses_a_decompression_bomb(tmp_path: Path, monkeypatch) -> None:
-    from yaga import updater
+    from muga import updater
 
     app = tmp_path / "app"
     _fake_install(app)
     bomb = tmp_path / "bomb.zip"
     with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("Yaga-main/big.bin", b"\0" * (updater._MAX_UNPACKED_BYTES + 1024))
+        zf.writestr("Muga-main/big.bin", b"\0" * (updater._MAX_UNPACKED_BYTES + 1024))
 
     monkeypatch.setattr(updater, "_APP_DIR", app)
     monkeypatch.setattr(
@@ -351,7 +351,7 @@ def test_update_refuses_a_decompression_bomb(tmp_path: Path, monkeypatch) -> Non
     )
 
     assert updater._apply_zip() is False
-    assert (app / "yaga" / "__init__.py").read_text() == 'VERSION = "0.2.0"'
+    assert (app / "muga" / "__init__.py").read_text() == 'VERSION = "0.2.0"'
 
 
 @pytest.mark.parametrize(
@@ -367,7 +367,7 @@ def test_update_refuses_a_decompression_bomb(tmp_path: Path, monkeypatch) -> Non
     ],
 )
 def test_only_a_newer_remote_counts_as_an_update(remote, local, expected) -> None:
-    from yaga.updater import _is_newer
+    from muga.updater import _is_newer
 
     assert _is_newer(remote, local) is expected
 
@@ -381,7 +381,7 @@ def test_pixel_cap_is_low_enough_to_matter() -> None:
     allocation, which no phone survives. The cap has to bound a decode to
     something the target hardware can actually hold."""
     PILImage = pytest.importorskip("PIL.Image")
-    from yaga.thumbnails import MAX_IMAGE_PIXELS
+    from muga.thumbnails import MAX_IMAGE_PIXELS
 
     assert PILImage.MAX_IMAGE_PIXELS == MAX_IMAGE_PIXELS
     # 120 MP: covers a 108 MP phone sensor, bounds an RGB decode at ~360 MB.
@@ -393,7 +393,7 @@ def test_budget_gate_runs_before_any_decoder(tmp_path: Path) -> None:
     any other caller of warnings.resetwarnings) clears."""
     import warnings
 
-    from yaga.thumbnails import Thumbnailer
+    from muga.thumbnails import Thumbnailer
 
     bomb = tmp_path / "bomb.png"
     ihdr = (b"\x00\x00\x00\x0dIHDR"
@@ -418,7 +418,7 @@ def test_budget_gate_runs_before_any_decoder(tmp_path: Path) -> None:
 )
 def test_header_parser_reads_dimensions(tmp_path: Path, fmt, suffix, size) -> None:
     PILImage = pytest.importorskip("PIL.Image")
-    from yaga.thumbnails import _dimensions_from_header
+    from muga.thumbnails import _dimensions_from_header
 
     path = tmp_path / f"img.{suffix}"
     PILImage.new("RGB", size, (10, 20, 30)).save(path, fmt)
@@ -431,7 +431,7 @@ def test_header_parser_reads_dimensions(tmp_path: Path, fmt, suffix, size) -> No
 )
 def test_header_parser_never_blocks_unreadable_files(tmp_path: Path, payload) -> None:
     """Undecodable input is the caller's problem; this gate only judges size."""
-    from yaga.thumbnails import _dimensions_from_header, image_within_pixel_budget
+    from muga.thumbnails import _dimensions_from_header, image_within_pixel_budget
 
     path = tmp_path / "weird.bin"
     path.write_bytes(payload)
@@ -445,7 +445,7 @@ def test_oversized_image_is_refused_without_decoding(tmp_path: Path) -> None:
     the bomb (1.5 GB on this input)."""
     import resource
 
-    from yaga.thumbnails import Thumbnailer, image_within_pixel_budget
+    from muga.thumbnails import Thumbnailer, image_within_pixel_budget
 
     # Hand-built 20000×20000 PNG header: no decoder involved on either side.
     bomb = tmp_path / "bomb.png"
@@ -463,7 +463,7 @@ def test_oversized_image_is_refused_without_decoding(tmp_path: Path) -> None:
 
 def test_normal_photo_still_thumbnails(tmp_path: Path) -> None:
     PILImage = pytest.importorskip("PIL.Image")
-    from yaga.thumbnails import Thumbnailer
+    from muga.thumbnails import Thumbnailer
 
     photo = tmp_path / "photo.jpg"
     PILImage.new("RGB", (4000, 3000), (30, 90, 140)).save(photo, quality=90)
@@ -494,7 +494,7 @@ class _FakeResponse:
 
 
 def test_propfind_body_is_capped(monkeypatch) -> None:
-    from yaga import nextcloud
+    from muga import nextcloud
 
     monkeypatch.setattr(nextcloud, "_MAX_PROPFIND_BYTES", 4096)
     client = nextcloud.NextcloudClient("https://cloud.example.org", "alice", "pw")
@@ -508,7 +508,7 @@ def test_propfind_body_is_capped(monkeypatch) -> None:
 
 
 def test_propfind_body_under_the_cap_reads_normally() -> None:
-    from yaga.nextcloud import NextcloudClient
+    from muga.nextcloud import NextcloudClient
 
     client = NextcloudClient("https://cloud.example.org", "alice", "pw")
     body = b"y" * 3000
@@ -520,13 +520,13 @@ def test_propfind_body_under_the_cap_reads_normally() -> None:
 # ---------------------------------------------------------------------------
 
 def test_cache_budget_defaults_to_a_bounded_value() -> None:
-    from yaga.config import Settings
+    from muga.config import Settings
 
     assert Settings().cache_max_mb > 0, "eviction never runs at 0 (= unlimited)"
 
 
 def test_unlimited_cache_from_an_older_install_is_migrated(tmp_path: Path, monkeypatch) -> None:
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -539,7 +539,7 @@ def test_unlimited_cache_from_an_older_install_is_migrated(tmp_path: Path, monke
 
 
 def test_deliberately_chosen_unlimited_cache_is_respected(tmp_path: Path, monkeypatch) -> None:
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -551,10 +551,10 @@ def test_deliberately_chosen_unlimited_cache_is_respected(tmp_path: Path, monkey
 
 
 def test_a_fresh_install_starts_in_english(tmp_path: Path, monkeypatch) -> None:
-    """English is the source language, so it is what Yaga shows until a
+    """English is the source language, so it is what Muga shows until a
     translation is picked."""
-    from yaga import config
-    from yaga.i18n import SOURCE_LANGUAGE
+    from muga import config
+    from muga.i18n import SOURCE_LANGUAGE
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -563,9 +563,9 @@ def test_a_fresh_install_starts_in_english(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_language_following_the_system_is_migrated_to_english(tmp_path: Path, monkeypatch) -> None:
-    """"system" was the old default rather than a choice: it started Yaga in
+    """"system" was the old default rather than a choice: it started Muga in
     German on a German desktop. Lift it to English once, and persist that."""
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -582,7 +582,7 @@ def test_language_following_the_system_is_migrated_to_english(tmp_path: Path, mo
 def test_deliberately_chosen_system_language_is_respected(tmp_path: Path, monkeypatch) -> None:
     """Picking "Use system language" in Settings sets the flag — the migration
     must not override it."""
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -594,7 +594,7 @@ def test_deliberately_chosen_system_language_is_respected(tmp_path: Path, monkey
 
 
 def test_a_chosen_translation_is_left_alone(tmp_path: Path, monkeypatch) -> None:
-    from yaga import config
+    from muga import config
 
     cfg = tmp_path / "config"
     cfg.mkdir()
@@ -611,7 +611,7 @@ def test_writes_go_through_a_single_connection(tmp_path: Path) -> None:
     """Per-thread write connections deadlocked against each other: most write
     methods leave the transaction open for the scanner to batch, so one thread
     held SQLite's write lock and every other thread's write raised."""
-    from yaga.database import Database
+    from muga.database import Database
 
     db = Database(tmp_path / "t.sqlite3")
     seen = []
@@ -646,14 +646,14 @@ def test_writes_go_through_a_single_connection(tmp_path: Path) -> None:
 
 
 def test_reads_and_writes_use_different_connections(tmp_path: Path) -> None:
-    from yaga.database import Database
+    from muga.database import Database
 
     db = Database(tmp_path / "t.sqlite3")
     assert db.conn is not db.wconn
 
 
 def test_busy_database_is_retried(tmp_path: Path) -> None:
-    from yaga.database import Database
+    from muga.database import Database
 
     db = Database(tmp_path / "t.sqlite3")
     attempts = {"n": 0}
@@ -669,7 +669,7 @@ def test_busy_database_is_retried(tmp_path: Path) -> None:
 
 
 def test_non_busy_errors_are_not_retried(tmp_path: Path) -> None:
-    from yaga.database import Database
+    from muga.database import Database
 
     db = Database(tmp_path / "t.sqlite3")
     attempts = {"n": 0}
@@ -692,9 +692,9 @@ def _declared_versions() -> dict[str, str]:
     import tomllib
 
     root = Path(__file__).resolve().parent.parent
-    xml = (root / "data" / "io.github.miscde.Yaga.metainfo.xml").read_text()
+    xml = (root / "data" / "io.github.miscde.Muga.metainfo.xml").read_text()
     return {
-        "yaga.VERSION": __import__("yaga").VERSION,
+        "muga.VERSION": __import__("muga").VERSION,
         "pyproject": tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"],
         "metainfo": re.search(r'<release version="([^"]+)"', xml).group(1),
     }
@@ -702,7 +702,7 @@ def _declared_versions() -> dict[str, str]:
 
 def test_the_version_is_the_same_everywhere() -> None:
     """Three files carry it and each drives something different: the updater
-    compares yaga.VERSION against the remote, pip resolves pyproject, and the
+    compares muga.VERSION against the remote, pip resolves pyproject, and the
     software centre reads the metainfo. A bump that misses one means the
     in-app update check disagrees with what is installed."""
     versions = _declared_versions()
@@ -713,15 +713,15 @@ def test_the_newest_metainfo_release_is_the_current_version() -> None:
     """AppStream lists releases newest-first, so the top entry is what the
     software centre shows as installed."""
     versions = _declared_versions()
-    assert versions["metainfo"] == versions["yaga.VERSION"]
+    assert versions["metainfo"] == versions["muga.VERSION"]
 
 
 def test_the_version_parses_as_a_release() -> None:
     """_is_newer compares it numerically; a non-numeric version silently falls
     back to "different means newer", which is how a downgrade slips through."""
-    from yaga.updater import _version_tuple
+    from muga.updater import _version_tuple
 
-    version = _declared_versions()["yaga.VERSION"]
+    version = _declared_versions()["muga.VERSION"]
     parts = _version_tuple(version)
     assert all(part[0] >= 0 for part in parts), f"{version} has non-numeric parts"
 
@@ -731,10 +731,102 @@ def test_the_version_is_newer_than_the_previous_release() -> None:
     downgrade to whoever is already on the newer one."""
     import re
 
-    from yaga.updater import _is_newer
+    from muga.updater import _is_newer
 
     root = Path(__file__).resolve().parent.parent
-    xml = (root / "data" / "io.github.miscde.Yaga.metainfo.xml").read_text()
+    xml = (root / "data" / "io.github.miscde.Muga.metainfo.xml").read_text()
     listed = re.findall(r'<release version="([^"]+)"', xml)
     assert len(listed) >= 2, "only one release listed"
     assert _is_newer(listed[0], listed[1]), f"{listed[0]} is not newer than {listed[1]}"
+
+
+# ---------------------------------------------------------------------------
+# The Yaga -> Muga rename must not look like data loss
+# ---------------------------------------------------------------------------
+
+def _legacy_install(base: Path) -> None:
+    """A pre-rename install: settings, media index and a warm cache."""
+    (base / "config" / "yaga").mkdir(parents=True)
+    (base / "config" / "yaga" / "settings.json").write_text(
+        json.dumps({"theme": "dark", "grid_columns": 6}),
+    )
+    (base / "data" / "yaga").mkdir(parents=True)
+    (base / "data" / "yaga" / "yaga.sqlite3").write_bytes(b"SQLite format 3\x00")
+    (base / "cache" / "yaga" / "thumbnails").mkdir(parents=True)
+    (base / "cache" / "yaga" / "thumbnails" / "abc.jpg").write_bytes(b"\xff\xd8")
+
+
+def _point_config_at(monkeypatch, base: Path) -> None:
+    from muga import config
+
+    monkeypatch.setattr(config, "CONFIG_DIR", base / "config" / "muga")
+    monkeypatch.setattr(config, "CACHE_DIR", base / "cache" / "muga")
+    monkeypatch.setattr(config, "DATA_DIR", base / "data" / "muga")
+    monkeypatch.setattr(config, "DB_PATH", base / "data" / "muga" / "muga.sqlite3")
+
+
+def test_the_rename_carries_the_users_data_across(tmp_path: Path, monkeypatch) -> None:
+    from muga import config
+
+    _legacy_install(tmp_path)
+    _point_config_at(monkeypatch, tmp_path)
+
+    config.migrate_legacy_dirs()
+
+    assert config.Settings.load().grid_columns == 6, "settings were lost"
+    assert config.DB_PATH.is_file(), "the media index would come up empty"
+    assert (config.CACHE_DIR / "thumbnails" / "abc.jpg").is_file(), "cache went cold"
+
+
+def test_the_database_is_renamed_not_just_moved(tmp_path: Path, monkeypatch) -> None:
+    """DB_PATH looks for muga.sqlite3 — moving the directory alone would leave
+    a full index sitting there unread."""
+    from muga import config
+
+    _legacy_install(tmp_path)
+    (tmp_path / "data" / "yaga" / "yaga.sqlite3-wal").write_bytes(b"wal")
+    _point_config_at(monkeypatch, tmp_path)
+
+    config.migrate_legacy_dirs()
+
+    assert config.DB_PATH.is_file()
+    assert (config.DB_PATH.parent / f"{config.DB_PATH.name}-wal").is_file(), \
+        "a left-behind write-ahead log loses whatever it still holds"
+    assert not (config.DATA_DIR / "yaga.sqlite3").exists()
+
+
+def test_migration_leaves_an_existing_install_alone(tmp_path: Path, monkeypatch) -> None:
+    """Only ever fires into an empty slot — a fresh Muga install with its own
+    data must not be overwritten by whatever is next door."""
+    from muga import config
+
+    _legacy_install(tmp_path)
+    _point_config_at(monkeypatch, tmp_path)
+    config.CONFIG_DIR.mkdir(parents=True)
+    (config.CONFIG_DIR / "settings.json").write_text(json.dumps({"grid_columns": 3}))
+
+    config.migrate_legacy_dirs()
+
+    assert config.Settings.load().grid_columns == 3
+    assert (tmp_path / "config" / "yaga").is_dir(), "the old directory was consumed"
+
+
+def test_migration_is_idempotent(tmp_path: Path, monkeypatch) -> None:
+    from muga import config
+
+    _legacy_install(tmp_path)
+    _point_config_at(monkeypatch, tmp_path)
+
+    config.migrate_legacy_dirs()
+    config.migrate_legacy_dirs()
+
+    assert config.Settings.load().grid_columns == 6
+    assert config.DB_PATH.is_file()
+
+
+def test_a_fresh_install_has_nothing_to_migrate(tmp_path: Path, monkeypatch) -> None:
+    from muga import config
+
+    _point_config_at(monkeypatch, tmp_path)
+    config.migrate_legacy_dirs()  # must not raise
+    assert not config.CONFIG_DIR.exists()

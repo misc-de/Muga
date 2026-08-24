@@ -22,9 +22,9 @@ import pytest
 
 from tests.camera_fakes import FakeElement, FakeGst, FakePad, FakePipeline, bind
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 # The recording pipeline lives in its own module now.
-camera_video = pytest.importorskip("yaga.camera_video")
+camera_video = pytest.importorskip("muga.camera_video")
 
 
 def _win(gst: FakeGst, **attrs) -> SimpleNamespace:

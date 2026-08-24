@@ -1,0 +1,98 @@
+# Flatpak manifest for Muga.
+#
+# Build and install locally:
+#   flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
+#   flatpak-builder --user --install --force-clean build-dir io.github.miscde.Muga.yml
+#   flatpak run io.github.miscde.Muga
+#
+# Camera note: v4l2 webcams work. The Halium / gst-droid path (FuriOS,
+# Droidian) does NOT — it needs the Android HAL and sysfs torch nodes that a
+# sandbox does not reach. On those phones install from source with install.sh.
+# See docs/compatibility.md.
+id: io.github.miscde.Muga
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: muga
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Cameras (/dev/video*). --device=camera is portal-mediated and does not
+  # cover the direct v4l2 control ioctls Muga uses for focus and exposure.
+  - --device=all
+  # Nextcloud sync and the in-app update check.
+  - --share=network
+  # The media roots Muga scans. Extra folders the user adds in Settings go
+  # through the file-chooser portal and need no static permission.
+  - --filesystem=xdg-pictures
+  - --filesystem=xdg-videos
+  - --filesystem=xdg-download
+  # Nextcloud app password lives in the system keyring, not in a file.
+  - --talk-name=org.freedesktop.secrets
+  # Optional geotagging.
+  - --system-talk-name=org.freedesktop.GeoClue2
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: python3-defusedxml
+    buildsystem: simple
+    build-commands:
+      - pip3 install --exists-action=i --no-index --no-build-isolation
+        --prefix=${FLATPAK_DEST} defusedxml-0.7.1.tar.gz
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/0f/d5/c66da9b79e5bdb124974bfe172b4daf3c984ebd9c2a06e2b8a4dc7331c72/defusedxml-0.7.1.tar.gz
+        sha256: 1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69
+
+  - name: python3-pybind11
+    # Pillow 12.x builds its C extensions through pybind11, so it has to exist
+    # before Pillow is built (--no-build-isolation means pip will not fetch it).
+    # Header-only, so the py3-none-any wheel serves x86_64 and aarch64 alike.
+    buildsystem: simple
+    build-commands:
+      - pip3 install --exists-action=i --no-index --no-build-isolation
+        --prefix=${FLATPAK_DEST} pybind11-3.1.0-py3-none-any.whl
+    cleanup:
+      - '*'
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/33/fd/8762f7ee3e4e4be6d1d846cffb4916dd9bb02b2f800d3603718a0efe494c/pybind11-3.1.0-py3-none-any.whl
+        sha256: b8488090f8acffbcb6b5d6a85571a6827a0a2981ffb75e5a0b27b87c4a6b7dd0
+
+  - name: python3-pillow
+    # Built from the sdist rather than a wheel: Muga targets aarch64 phones as
+    # well as x86_64 desktops, and the sdist is the one source that serves both.
+    buildsystem: simple
+    build-commands:
+      - pip3 install --exists-action=i --no-index --no-build-isolation
+        --prefix=${FLATPAK_DEST} pillow-12.3.0.tar.gz
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/1c/3d/bb7fca845737cf9d7dbde16ed1843984665ff2e0a518f5db43e77ec540b9/pillow-12.3.0.tar.gz
+        sha256: 3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce
+
+  - name: muga
+    buildsystem: simple
+    build-commands:
+      # The gettext catalogues are compiled by setup.py during the install
+      # (it carries its own MO writer, so the SDK needs no gettext).
+      - pip3 install --exists-action=i --no-index --no-build-isolation
+        --prefix=${FLATPAK_DEST} .
+      - install -Dm644 data/io.github.miscde.Muga.desktop
+        ${FLATPAK_DEST}/share/applications/io.github.miscde.Muga.desktop
+      - install -Dm644 data/io.github.miscde.Muga.metainfo.xml
+        ${FLATPAK_DEST}/share/metainfo/io.github.miscde.Muga.metainfo.xml
+      - install -Dm644 muga/data/icons/hicolor/128x128/apps/io.github.miscde.Muga.png
+        ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/io.github.miscde.Muga.png
+    sources:
+      - type: dir
+        path: .

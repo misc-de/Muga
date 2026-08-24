@@ -17,9 +17,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 # Frame->file, EXIF and the rotation tables moved into their own module.
-capture_io = pytest.importorskip("yaga.camera_capture_io")
+capture_io = pytest.importorskip("muga.camera_capture_io")
 
 
 class _MapInfo:
@@ -169,8 +169,8 @@ def test_exif_basics_defaults_to_upright(tmp_path: Path) -> None:
     win = _win(tmp_path)
     basics = camera.CameraWindow._current_exif_basics(win)
     assert basics["orientation"] == 1
-    assert basics["make"] == "Yaga"
-    assert basics["software"] == "Yaga"
+    assert basics["make"] == "Muga"
+    assert basics["software"] == "Muga"
     assert basics["model"] == ""
 
 
@@ -222,9 +222,9 @@ def test_pillow_exif_writes_the_basic_tags(tmp_path: Path) -> None:
 
     with PILImage.open(path) as img:
         exif = img.getexif()
-        assert exif[0x010F] == "Yaga"          # Make
+        assert exif[0x010F] == "Muga"          # Make
         assert exif[0x0110] == "TestCam"       # Model
-        assert exif[0x0131] == "Yaga"          # Software
+        assert exif[0x0131] == "Muga"          # Software
         assert exif[0x0112] == 1               # Orientation
         assert exif[0x0132]                    # DateTime
         assert img.size == (48, 32), "the writer re-encoded the pixels"

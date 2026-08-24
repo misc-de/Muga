@@ -1,6 +1,6 @@
 # Runtime baseline
 
-Yaga runs on two quite different stacks, and the older one sets the floor.
+Muga runs on two quite different stacks, and the older one sets the floor.
 
 | Component   | Minimum | Why that number                                                        |
 |-------------|---------|------------------------------------------------------------------------|
@@ -16,7 +16,7 @@ replacement does not exist on a phone yet.
 
 ## Deprecated APIs kept on purpose
 
-**`Adw.PreferencesWindow`** (`yaga/settings_window.py`) — deprecated in
+**`Adw.PreferencesWindow`** (`muga/settings_window.py`) — deprecated in
 libadwaita 1.6 in favour of `Adw.PreferencesDialog`, which needs 1.5. Below
 that it does not exist at all. The two also differ in lifecycle: a dialog is
 not a `Gtk.Window`, so `close-request` / `destroy` become `closed`, and
@@ -37,7 +37,7 @@ swapped outright:
 | `Image.getdata` (tests)          | `Image.get_flattened_data`           | Pillow 12.3     |
 
 `GLib.unix_signal_add_full` and the `asyncio` event-loop-policy warnings come
-from PyGObject itself (`gi/events.py`), not from Yaga.
+from PyGObject itself (`gi/events.py`), not from Muga.
 
 ## Checking against the baseline
 

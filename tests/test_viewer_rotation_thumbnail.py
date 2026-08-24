@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-import yaga.thumbnails as thumbnails
-from yaga.models import MediaItem
-from yaga.thumbnails import Thumbnailer
-from yaga.viewer import ViewerWindow
+import muga.thumbnails as thumbnails
+from muga.models import MediaItem
+from muga.thumbnails import Thumbnailer
+from muga.viewer import ViewerWindow
 
 PILImage = pytest.importorskip("PIL.Image")
 

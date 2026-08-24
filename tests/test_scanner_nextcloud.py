@@ -24,11 +24,11 @@ from unittest.mock import patch
 
 import pytest
 
-scanner_mod = pytest.importorskip("yaga.scanner")
+scanner_mod = pytest.importorskip("muga.scanner")
 
-from yaga.database import Database  # noqa: E402
-from yaga.nextcloud import nc_path  # noqa: E402
-from yaga.thumbnails import Thumbnailer  # noqa: E402
+from muga.database import Database  # noqa: E402
+from muga.nextcloud import nc_path  # noqa: E402
+from muga.thumbnails import Thumbnailer  # noqa: E402
 
 DAV_ROOT = "/remote.php/dav/files/alice"
 

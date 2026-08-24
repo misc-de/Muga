@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from yaga.camera_orientation import (
+from muga.camera_orientation import (
     ALL_ORIENTATIONS,
     ORIENT_BOTTOM_UP,
     ORIENT_LEFT_UP,
@@ -32,11 +32,11 @@ from yaga.camera_orientation import (
 
 PILImage = pytest.importorskip("PIL.Image")
 camera = pytest.importorskip(
-    "yaga.camera", reason="camera module needs the GStreamer bindings"
+    "muga.camera", reason="camera module needs the GStreamer bindings"
 )
 # Frame->file, EXIF and the rotation tables moved into their own module.
 capture_io = pytest.importorskip(
-    "yaga.camera_capture_io", reason="camera module needs the GStreamer bindings"
+    "muga.camera_capture_io", reason="camera module needs the GStreamer bindings"
 )
 
 

@@ -27,7 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 PILImage = pytest.importorskip("PIL.Image")
-viewer = pytest.importorskip("yaga.viewer", reason="viewer needs the GTK stack")
+viewer = pytest.importorskip("muga.viewer", reason="viewer needs the GTK stack")
 from PIL.TiffImagePlugin import IFDRational  # noqa: E402
 
 
@@ -46,9 +46,9 @@ def _photo_with_exif(tmp_path, orientation: int = 1, width=60, height=40):
         for y in range(6):
             img.putpixel((x, y), (255, 0, 0))
     exif = PILImage.Exif()
-    exif[_MAKE] = "Yaga"
+    exif[_MAKE] = "Muga"
     exif[_MODEL] = "TestPhone X1"
-    exif[_SOFTWARE] = "Yaga"
+    exif[_SOFTWARE] = "Muga"
     exif[_DATETIME] = "2026:08:21 10:00:00"
     exif[_ORIENTATION] = orientation
     exif.get_ifd(0x8769)[_DATETIME_ORIGINAL] = "2026:08:21 10:00:00"
@@ -61,7 +61,7 @@ def _photo_with_exif(tmp_path, orientation: int = 1, width=60, height=40):
 
 
 def _photo_without_exif(tmp_path, width=60, height=40):
-    """A JPEG as Yaga's own rotation used to leave it: pixels, no metadata."""
+    """A JPEG as Muga's own rotation used to leave it: pixels, no metadata."""
     img = PILImage.new("RGB", (width, height), (30, 90, 150))
     path = tmp_path / "bare.jpg"
     img.save(path, quality=95)
@@ -120,7 +120,7 @@ def test_rotation_gives_a_bare_photo_minimal_exif(tmp_path) -> None:
     assert "exif" in PILImage.open(path).info
     exif = _read(path)
     assert exif[_ORIENTATION] == 1
-    assert exif[_SOFTWARE] == "Yaga"
+    assert exif[_SOFTWARE] == "Muga"
 
 
 def test_zero_rotation_leaves_the_file_alone(tmp_path) -> None:
@@ -165,13 +165,13 @@ def test_helper_never_returns_empty_for_a_bare_image() -> None:
 def test_editor_writes_exif_even_without_a_source_block() -> None:
     """Same gap on the editor's save path — an edited photo whose source had
     no EXIF used to be written without any."""
-    editor = pytest.importorskip("yaga.editor.view")
+    editor = pytest.importorskip("muga.editor.view")
     blob = editor.EditorView._exif_for_save(SimpleNamespace(_exif_bytes=None))
     assert blob
     out = PILImage.Exif()
     out.load(blob)
     assert out[_ORIENTATION] == 1
-    assert out[_SOFTWARE] == "Yaga"
+    assert out[_SOFTWARE] == "Muga"
 
 
 # --------------------------------------------------------------------
@@ -181,9 +181,9 @@ def test_editor_writes_exif_even_without_a_source_block() -> None:
 
 def _gps_ifd_from_camera(location):
     """Run the camera's GPS writer against a fresh GPS IFD."""
-    camera = pytest.importorskip("yaga.camera")
+    camera = pytest.importorskip("muga.camera")
     exif = PILImage.Exif()
-    exif[_MAKE] = "Yaga"
+    exif[_MAKE] = "Muga"
     exif[_ORIENTATION] = 1
     gps = exif.get_ifd(0x8825)
     camera.CameraWindow._pillow_set_gps(SimpleNamespace(), gps, location)
@@ -201,7 +201,7 @@ def test_geotag_does_not_destroy_the_whole_exif_block() -> None:
     blob = exif.tobytes()  # must not raise
     out = PILImage.Exif()
     out.load(blob)
-    assert out[_MAKE] == "Yaga"
+    assert out[_MAKE] == "Muga"
     assert out[_ORIENTATION] == 1
 
 

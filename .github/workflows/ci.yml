@@ -49,7 +49,7 @@ jobs:
         # --system-site-packages for PyGObject, which drags in every apt
         # python3-* on the runner. --strict then fails on the first one that
         # is not on PyPI (bcc, in practice) — a fact about the runner image,
-        # not about Yaga's dependencies.
+        # not about Muga's dependencies.
         run: |
           python3 -m venv .audit
           .audit/bin/pip install --upgrade pip pip-audit
@@ -79,7 +79,7 @@ jobs:
           .venv/bin/pip install --upgrade pip
           .venv/bin/pip install pytest pytest-cov 'Pillow>=12.3' defusedxml
       - name: Compile translation catalogues
-        # Exercises the .mo path in yaga/i18n.py; without this the suite would
+        # Exercises the .mo path in muga/i18n.py; without this the suite would
         # only ever see the po/*.po fallback.
         run: python3 tools/i18n.py compile
       - name: Run tests under Xvfb
@@ -87,5 +87,5 @@ jobs:
         # which would quietly halve the suite's reach. Xvfb keeps them honest.
         # The floor sits a little under the current ~70% so a large untested
         # addition shows up in the PR instead of months later.
-        run: xvfb-run -a .venv/bin/pytest -q --cov=yaga --cov-report=term --cov-fail-under=65
+        run: xvfb-run -a .venv/bin/pytest -q --cov=muga --cov-report=term --cov-fail-under=65
 

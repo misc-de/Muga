@@ -1,7 +1,7 @@
 """Test data recorded from real hardware.
 
 Everything in here was read off a FuriPhone running FuriOS 14.0 (Halium,
-aarch64, kernel 4.19) on 2026-08-21 — the class of device Yaga's camera code
+aarch64, kernel 4.19) on 2026-08-21 — the class of device Muga's camera code
 is written for, and the one where the desktop cannot stand in: droidcamsrc
 instead of v4l2, sensorfwd instead of iio-sensor-proxy.
 

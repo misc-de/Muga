@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Muga
+GenericName=Photo Gallery
+Comment=Browse photos and videos
+Exec=muga
+Icon=io.github.miscde.Muga
+Terminal=false
+Categories=GNOME;GTK;Graphics;Photography;
+Keywords=photo;gallery;camera;video;nextcloud;
+StartupNotify=true

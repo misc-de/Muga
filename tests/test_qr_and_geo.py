@@ -19,8 +19,8 @@ import pytest
 
 from tests.camera_fakes import FakeElement, FakeGst
 
-qr = pytest.importorskip("yaga.qr")
-geo = pytest.importorskip("yaga.camera_geo")
+qr = pytest.importorskip("muga.qr")
+geo = pytest.importorskip("muga.camera_geo")
 
 
 # ---------------------------------------------------------------------------

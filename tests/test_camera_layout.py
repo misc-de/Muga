@@ -17,11 +17,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-camera = pytest.importorskip("yaga.camera")
+camera = pytest.importorskip("muga.camera")
 
 from gi.repository import Gtk  # noqa: E402
 
-from yaga.camera_orientation import (  # noqa: E402
+from muga.camera_orientation import (  # noqa: E402
     ORIENT_BOTTOM_UP,
     ORIENT_LEFT_UP,
     ORIENT_NORMAL,

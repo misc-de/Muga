@@ -1,6 +1,6 @@
 # Module layout
 
-Yaga's two main windows were single classes of ~3000 and ~4300 lines. Both are
+Muga's two main windows were single classes of ~3000 and ~4300 lines. Both are
 now split across mixin modules — the class is still one object at runtime, but
 each file holds one concern and can be read on its own.
 

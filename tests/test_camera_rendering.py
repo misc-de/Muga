@@ -28,7 +28,7 @@ from tests.conftest import requires_display, requires_offscreen_raster
 
 PILImage = pytest.importorskip("PIL.Image")
 
-widgets = pytest.importorskip("yaga.camera_widgets")
+widgets = pytest.importorskip("muga.camera_widgets")
 
 pytestmark = requires_display
 

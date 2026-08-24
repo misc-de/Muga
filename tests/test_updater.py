@@ -2,8 +2,8 @@
 git — the subprocess/HTTP helpers are monkeypatched)."""
 from __future__ import annotations
 
-from yaga import updater
-from yaga.updater import UpdateInfo
+from muga import updater
+from muga.updater import UpdateInfo
 
 
 def test_parse_version_extracts_from_init_text() -> None:
@@ -15,7 +15,7 @@ def test_parse_version_extracts_from_init_text() -> None:
 
 
 def test_get_current_version_matches_package() -> None:
-    from yaga import VERSION
+    from muga import VERSION
     assert updater.get_current_version() == VERSION
 
 
@@ -95,7 +95,7 @@ def test_flatpak_is_detected_from_either_signal(monkeypatch) -> None:
     assert updater.is_flatpak() is True
 
     monkeypatch.setattr(updater.os.path, "exists", lambda p: False)
-    monkeypatch.setenv("FLATPAK_ID", "io.github.miscde.Yaga")
+    monkeypatch.setenv("FLATPAK_ID", "io.github.miscde.Muga")
     assert updater.is_flatpak() is True
 
 

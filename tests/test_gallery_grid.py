@@ -21,9 +21,9 @@ import pytest
 
 from tests.conftest import requires_display
 
-gg = pytest.importorskip("yaga.gallery_grid")
+gg = pytest.importorskip("muga.gallery_grid")
 
-from yaga.models import MediaItem  # noqa: E402
+from muga.models import MediaItem  # noqa: E402
 
 
 def _item(name="a.jpg", path=None, thumb=None) -> MediaItem:

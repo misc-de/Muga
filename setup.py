@@ -32,7 +32,7 @@ def _compile_catalogues() -> None:
         print("i18n: no po/ or tools/i18n.py, skipping catalogue compilation")
         return
 
-    spec = importlib.util.spec_from_file_location("_yaga_i18n_tool", tool_path)
+    spec = importlib.util.spec_from_file_location("_muga_i18n_tool", tool_path)
     if spec is None or spec.loader is None:      # pragma: no cover - defensive
         print("i18n: could not load tools/i18n.py, skipping")
         return
