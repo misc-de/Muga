@@ -41,6 +41,11 @@ touch "$worktree/.nojekyll"
 cp data/io.github.miscde.Muga.flatpakrepo data/io.github.miscde.Muga.gpg "$worktree/"
 cp -r "$repo_dir" "$worktree/repo"
 
+# The metainfo points its <screenshot> images at
+# https://misc-de.github.io/Muga/screenshots/ — AppStream needs them reachable
+# over HTTPS, and a software centre shows nothing without them.
+cp -r data/screenshots "$worktree/screenshots"
+
 cat > "$worktree/index.html" <<'HTML'
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

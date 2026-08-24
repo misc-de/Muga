@@ -52,16 +52,13 @@ These are what still stands between the manifest and a submission:
    works perfectly well there, and the Flatpaks currently published under it
    are fine. It only blocks Flathub.
 
-2. **Screenshots are missing from the metainfo.** Flathub requires at least one
-   `<screenshot>` in `data/io.github.miscde.Muga.metainfo.xml`, served over
-   HTTPS from a stable address. The shots in the README are GitHub
-   `user-attachments` URLs that were uploaded to the then-private Yaga
-   repository and now answer 404 — they cannot be reused. Take fresh ones,
-   commit them under `data/screenshots/`, and reference them at
-   `https://misc-de.github.io/Muga/screenshots/<name>.png`; `publish-pages.sh`
-   has to copy that directory into the branch as well. One shot must carry
-   `<caption>`, and Flathub wants a desktop-shaped one (`type="default"`)
-   alongside the phone-shaped ones.
+2. **Two screenshots still show the old name.** The metainfo carries all eight
+   shots, served from `https://misc-de.github.io/Muga/screenshots/`, and
+   `appstreamcli validate` passes. But `overview.jpg` and `date-grouping.jpg`
+   were taken before the rename and show "Yaga" in the header bar. Flathub will
+   not reject them, yet they are the first thing a visitor sees. Retake those
+   two on the phone and overwrite the files — no other change is needed, the
+   names and captions stay.
 
 3. **The `v0.3.1` tag does not exist yet.** The manifest names it; Flathub
    builds only from published states. Tag the release and push the tag, then
