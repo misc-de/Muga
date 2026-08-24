@@ -61,7 +61,15 @@ class Settings:
     sort_mode: str = "newest"
     sort_modes: dict = field(default_factory=dict)
     theme: str = "system"
-    language: str = "system"
+    # English is the source language (the msgids themselves), so it is what
+    # Yaga shows unless a translation is picked. "system" stays selectable in
+    # Settings — it is just no longer the default, see language_default_migrated.
+    language: str = "en"
+    # One-shot marker for the "system" → "en" default change. Installs that
+    # predate it have "system" in settings.json that was never a real choice:
+    # it silently started Yaga in German on a German desktop. Picking a
+    # language in Settings sets this, so a deliberate "system" survives.
+    language_default_migrated: bool = False
     external_video_player: str = ""
     grid_columns: int = 4
     last_category: str = ""
@@ -225,6 +233,19 @@ class Settings:
             settings.cache_budget_migrated = True
             LOGGER.info(
                 "Cache budget was unlimited — defaulting to %d MB", settings.cache_max_mb,
+            )
+            settings.save()
+        if not settings.language_default_migrated and settings.language == "system":
+            from .i18n import SOURCE_LANGUAGE
+
+            # Same reasoning as the cache budget above: "system" was the old
+            # default rather than a choice. Selecting it in Settings sets the
+            # flag there, so this never overrides the user twice.
+            settings.language = SOURCE_LANGUAGE
+            settings.language_default_migrated = True
+            LOGGER.info(
+                "Language was following the system by default — defaulting to %r",
+                settings.language,
             )
             settings.save()
         settings.grid_columns = min(max(int(settings.grid_columns), 2), 10)

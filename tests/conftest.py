@@ -9,7 +9,27 @@ process down.
 
 from __future__ import annotations
 
+import atexit
+import os
+import shutil
+import tempfile
+
 import pytest
+
+# --- test isolation ---------------------------------------------------------
+# Point the XDG roots at a throwaway directory before anything imports
+# yaga.config, which derives CONFIG_DIR / CACHE_DIR / DATA_DIR (and DB_PATH,
+# THUMB_DIR, the log paths) from them at import time. Setting the environment
+# rather than monkeypatching the constants covers every module that imported
+# them by value, and it covers the fixtures that build a real GalleryWindow.
+#
+# Without this a plain `pytest` run edits the developer's own gallery: the
+# update-flow tests call settings.save(), which rewrote settings.json, and the
+# scan tests wrote into the real yaga.sqlite3 and thumbnail cache.
+_XDG_SANDBOX = tempfile.mkdtemp(prefix="yaga-tests-")
+for _var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
+    os.environ[_var] = os.path.join(_XDG_SANDBOX, _var[4:-5].lower())
+atexit.register(shutil.rmtree, _XDG_SANDBOX, True)
 
 
 def _has_display() -> bool:

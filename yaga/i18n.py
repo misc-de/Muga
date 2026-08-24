@@ -140,7 +140,9 @@ def system_language() -> str:
 
 @dataclass
 class Translator:
-    language: str = "system"
+    # Mirrors Settings.language: English unless a translation is asked for.
+    # "system" remains a valid value and still resolves via system_language().
+    language: str = SOURCE_LANGUAGE
     _cached_lang: str | None = field(default=None, init=False, repr=False, compare=False)
     _cached_active: str = field(default=SOURCE_LANGUAGE, init=False, repr=False, compare=False)
 
