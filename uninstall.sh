@@ -13,7 +13,8 @@ rm -f "${LOCAL}/bin/muga"
 echo "  ✓ removed launcher"
 
 rm -f "${LOCAL}/share/icons/hicolor/128x128/apps/de.cais.Muga.png"
-echo "  ✓ removed icon"
+rm -f "${LOCAL}/share/icons/hicolor/256x256/apps/de.cais.Muga.png"
+echo "  ✓ removed icons"
 
 rm -f "${LOCAL}/share/applications/de.cais.Muga.desktop"
 echo "  ✓ removed desktop entry"
