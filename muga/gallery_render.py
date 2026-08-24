@@ -83,6 +83,7 @@ class GalleryRenderMixin:
         def _set_empty_state(self, visible: bool) -> None: ...
         def _should_merge_nc(self) -> bool: ...
         def _sync_sort_controls(self) -> None: ...
+        def _sync_new_folder_button(self) -> None: ...
 
     def _render(self) -> None:
         # Preserve scroll position when refreshing the same view (e.g. after scan)
@@ -105,6 +106,8 @@ class GalleryRenderMixin:
         # Back arrow surfaces whenever the user has drilled into a
         # subfolder. Selection mode flips it back off in _enter_selection_mode.
         self.back_button.set_visible(self.current_folder is not None)
+        # Overview has no directory of its own to create a folder in.
+        self._sync_new_folder_button()
         if self._search_query:
             self._render_search(sort_mode)
         elif sort_mode in ("folder", "folder_desc"):

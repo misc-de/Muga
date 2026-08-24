@@ -16,9 +16,10 @@ gi.require_version("Adw", "1")
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
-from . import updater
+from . import mcp_server, updater
 from .camera_torch import TORCH_SYSFS_PATHS
 from .gtk_util import idle_once
+from .mcp_tokens import Token, TokenStore
 from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
 
 if TYPE_CHECKING:
@@ -78,6 +79,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._closing = False
         # Debounce id for the grid-columns SpinRow — see _columns_changed.
         self._columns_debounce_id = 0
+        # Same, for the MCP port SpinRow — see _mcp_port_changed.
+        self._mcp_port_debounce_id = 0
         self.connect("destroy", self._on_destroy)
         self._build()
         if initial_page:
@@ -215,6 +218,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._refresh_cache_size_display()
 
         self._build_nextcloud_page()
+        self._build_mcp_page()
         self._build_diagnostics_page()
 
     def _build_diagnostics_page(self) -> None:
@@ -425,6 +429,8 @@ class SettingsWindow(Adw.PreferencesWindow):
         gst_info = self._gst_diagnostics()
         s = self.settings
         parent = self.parent_window
+        server = mcp_server.instance()
+        mcp_running = bool(server is not None and server.running)
         lines = [
             "Muga diagnostics",
             "================",
@@ -458,6 +464,15 @@ class SettingsWindow(Adw.PreferencesWindow):
             f"User set: {bool(s.nextcloud_user)}",
             f"Photos path: {s.nextcloud_photos_path}",
             f"Thumbnail-only scan: {s.nextcloud_thumbnail_only}",
+            "",
+            "MCP server",
+            "----------",
+            # Token *count* only — the diagnostics block is meant to be pasted
+            # into a bug report, and the tokens themselves are credentials.
+            f"Enabled: {s.mcp_enabled}",
+            f"Running: {mcp_running}",
+            f"Port: {s.mcp_port}",
+            f"Tokens: {len(getattr(self, '_mcp_store', TokenStore(tokens=[])).tokens)}",
             "",
             "Camera settings",
             "---------------",
@@ -965,6 +980,541 @@ class SettingsWindow(Adw.PreferencesWindow):
         if self.parent_window.category == "pictures":
             self.parent_window.refresh(scan=value)
 
+    # ------------------------------------------------------------------
+    # MCP server
+    # ------------------------------------------------------------------
+
+    def _build_mcp_page(self) -> None:
+        page = Adw.PreferencesPage(title="MCP", icon_name="robot-symbolic")
+        page.set_name("mcp")
+        self.add(page)
+
+        # The token file is the source of truth and the running server reads
+        # it too, so this is loaded fresh here rather than carried on Settings.
+        self._mcp_store = TokenStore.load()
+
+        server_group = Adw.PreferencesGroup(
+            title=self._("MCP server"),
+            description=self._(
+                "Lets an MCP client — an AI assistant, for instance — search "
+                "this device's photo and video index. Read-only: it can look "
+                "up files, never change, move or delete them."
+            ),
+        )
+        page.add(server_group)
+
+        self._mcp_active_row = Adw.SwitchRow(
+            title=self._("MCP server"),
+            subtitle=self._("Turn the server on or off"),
+        )
+        self._mcp_active_row.set_active(self.settings.mcp_enabled)
+        self._mcp_active_handler = self._mcp_active_row.connect(
+            "notify::active", self._mcp_active_changed,
+        )
+        server_group.add(self._mcp_active_row)
+
+        # Shown only while the server is up — an address for a socket that
+        # isn't listening is worse than none, because it looks like it works.
+        self._mcp_address_row = Adw.ActionRow(title=self._("Address"))
+        self._mcp_address_row.add_css_class("property")
+        self._mcp_copy_btn = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+        self._mcp_copy_btn.set_tooltip_text(self._("Copy"))
+        self._mcp_copy_btn.add_css_class("flat")
+        self._mcp_copy_btn.set_valign(Gtk.Align.CENTER)
+        self._mcp_copy_btn.connect("clicked", self._mcp_copy_address)
+        self._mcp_address_row.add_suffix(self._mcp_copy_btn)
+        server_group.add(self._mcp_address_row)
+
+        # Which addresses the server answers on. Built from what this machine
+        # actually has right now, so the user picks a real interface rather
+        # than a scope that may or may not exist here.
+        self._mcp_bind_row = Adw.ComboRow(title=self._("Reachable from"))
+        self._mcp_bind_row.set_list_factory(self._mcp_bind_list_factory())
+        self._mcp_bind_values: list[str] = []
+        self._mcp_bind_handler = 0
+        self._mcp_build_bind_choices()
+        server_group.add(self._mcp_bind_row)
+
+        self._mcp_port_row = Adw.SpinRow.new_with_range(1024, 65535, 1)
+        self._mcp_port_row.set_title(self._("Port"))
+        self._mcp_port_row.set_value(self.settings.mcp_port)
+        self._mcp_port_row.connect("notify::value", self._mcp_port_changed)
+        server_group.add(self._mcp_port_row)
+
+        # ── Tokens ──
+        self._mcp_token_group = Adw.PreferencesGroup(
+            title=self._("Access tokens"),
+            description=self._(
+                "A client has to present one of these as a bearer token. "
+                "Give every client its own, so a single one can be withdrawn "
+                "without locking out the rest."
+            ),
+        )
+        page.add(self._mcp_token_group)
+
+        self._mcp_token_listbox = Gtk.ListBox()
+        self._mcp_token_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._mcp_token_listbox.add_css_class("boxed-list")
+        self._mcp_token_group.add(self._mcp_token_listbox)
+
+        # Adw.ButtonContent rather than Gtk.Button(label=…, icon_name=…): the
+        # latter's icon_name *is* the child, so it silently discards the label
+        # and renders as a bare "+".
+        add_btn = Gtk.Button()
+        add_btn.set_child(Adw.ButtonContent(
+            icon_name="list-add-symbolic", label=self._("Add token"),
+        ))
+        add_btn.set_halign(Gtk.Align.START)
+        add_btn.set_margin_top(8)
+        add_btn.connect("clicked", self._mcp_add_token)
+        self._mcp_token_group.add(add_btn)
+
+        self._mcp_populate_tokens()
+        self._mcp_refresh_status()
+
+    # -- bind scope --------------------------------------------------------
+
+    def _mcp_bind_label(self, scope: str) -> str:
+        """Translated name for a bind scope.
+
+        Written as literals inside _() rather than looked up from a dict of
+        msgids: xgettext only sees string constants, so a `self._(LABELS[key])`
+        would have shipped these four untranslated — and the regression test
+        that catches missing msgids only inspects literals too, so nothing
+        would have flagged it. The concrete address is appended by the caller,
+        making the row read "Local network (192.168.0.24)" instead of asking
+        which network is meant.
+        """
+        return {
+            mcp_server.BIND_LOCAL:  self._("This device only"),
+            mcp_server.BIND_LAN:    self._("Local network"),
+            mcp_server.BIND_PUBLIC: self._("Public address"),
+            mcp_server.BIND_ALL:    self._("All interfaces"),
+        }.get(scope, scope)
+
+    def _mcp_bind_list_factory(self) -> Gtk.SignalListItemFactory:
+        """Render the popover entries without ellipsis, checkmark included.
+
+        AdwComboRow's default factory ellipsises to the width of the row, which
+        turned "Local network (192.168.0.24)" into "Local network (192.168…" —
+        cutting off the one part of the label the user opened the list to read.
+        Replacing that factory also replaces the tick marking the active
+        choice, so this puts it back: GTK does not re-bind list items when the
+        selection changes, so the images are tracked by position and refreshed
+        by hand.
+        """
+        self._mcp_bind_checks: dict[int, Gtk.Image] = {}
+        factory = Gtk.SignalListItemFactory()
+
+        def _setup(_factory, item) -> None:
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            label = Gtk.Label(xalign=0, hexpand=True)
+            label.set_ellipsize(Pango.EllipsizeMode.NONE)
+            box.append(label)
+            box.append(Gtk.Image.new_from_icon_name("object-select-symbolic"))
+            item.set_child(box)
+
+        def _bind(_factory, item) -> None:
+            box = item.get_child()
+            label = box.get_first_child()
+            check = label.get_next_sibling()
+            label.set_label(item.get_item().get_string())
+            position = item.get_position()
+            self._mcp_bind_checks[position] = check
+            check.set_visible(position == self._mcp_bind_row.get_selected())
+
+        def _unbind(_factory, item) -> None:
+            # The popover recycles rows; a stale entry here would leave the
+            # tick on a widget that now shows a different choice.
+            self._mcp_bind_checks.pop(item.get_position(), None)
+
+        factory.connect("setup", _setup)
+        factory.connect("bind", _bind)
+        factory.connect("unbind", _unbind)
+        return factory
+
+    def _mcp_refresh_bind_checks(self) -> None:
+        """Move the tick to whichever entry is selected now."""
+        selected = self._mcp_bind_row.get_selected()
+        for position, check in self._mcp_bind_checks.items():
+            check.set_visible(position == selected)
+
+    def _mcp_build_bind_choices(self) -> None:
+        """Fill the interface combo with the scopes this machine can offer.
+
+        A scope with no address behind it (no public IP, or the wifi is down)
+        is left out — except the one currently saved, which stays listed and
+        marked unavailable. Dropping it silently would move the user to a
+        different scope without telling them.
+        """
+        addresses = mcp_server.available_addresses()
+        current = self.settings.mcp_bind
+        if current not in mcp_server.BIND_SCOPES:
+            current = mcp_server.DEFAULT_BIND
+
+        labels: list[str] = []
+        self._mcp_bind_values = []
+        for scope in mcp_server.BIND_SCOPES:
+            address = addresses.get(scope, "")
+            if not address and scope != current:
+                continue
+            suffix = address or self._("unavailable")
+            labels.append(f"{self._mcp_bind_label(scope)} ({suffix})")
+            self._mcp_bind_values.append(scope)
+
+        if self._mcp_bind_handler:
+            self._mcp_bind_row.handler_block(self._mcp_bind_handler)
+        self._mcp_bind_row.set_model(Gtk.StringList.new(labels))
+        self._mcp_bind_row.set_selected(self._mcp_bind_values.index(current))
+        if self._mcp_bind_handler:
+            self._mcp_bind_row.handler_unblock(self._mcp_bind_handler)
+        else:
+            self._mcp_bind_handler = self._mcp_bind_row.connect(
+                "notify::selected", self._mcp_bind_changed,
+            )
+        self._mcp_refresh_bind_checks()
+        self._mcp_update_bind_subtitle()
+
+    def _mcp_update_bind_subtitle(self) -> None:
+        """Spell out what the chosen scope means for who can connect."""
+        if self.settings.mcp_bind == mcp_server.BIND_LOCAL:
+            text = self._("Only clients running on this device can connect")
+        else:
+            text = self._("Anyone on that network who has a token can connect")
+        self._mcp_bind_row.set_subtitle(text)
+
+    def _mcp_bind_changed(self, row: Adw.ComboRow, _param) -> None:
+        index = row.get_selected()
+        if not 0 <= index < len(self._mcp_bind_values):
+            return
+        self.settings.mcp_bind = self._mcp_bind_values[index]
+        self._mcp_refresh_bind_checks()
+        self._mcp_update_bind_subtitle()
+        # A listening socket cannot be widened or narrowed in place, so this
+        # rebinds — start() notices the changed scope and cycles the socket.
+        self._mcp_apply()
+        self._mcp_refresh_status()
+
+    # -- state -----------------------------------------------------------
+
+    def _mcp_server(self):
+        """The shared server instance, or None before one was ever created."""
+        return mcp_server.instance()
+
+    def _mcp_refresh_status(self) -> None:
+        """Reflect the live server state in the address row and the switch."""
+        server = self._mcp_server()
+        running = bool(server is not None and server.running)
+        self._mcp_address_row.set_visible(running)
+        if running:
+            self._mcp_address_row.set_subtitle(server.url())
+        # Keep the switch honest if the server failed to come up (or was
+        # stopped elsewhere) after the page was built.
+        if self._mcp_active_row.get_active() != running:
+            self._mcp_active_row.handler_block(self._mcp_active_handler)
+            self._mcp_active_row.set_active(running)
+            self._mcp_active_row.handler_unblock(self._mcp_active_handler)
+
+    def _mcp_apply(self) -> None:
+        """Persist the MCP settings and bring the server in line with them."""
+        parent = self.parent_window
+        parent.settings.mcp_enabled = self.settings.mcp_enabled
+        parent.settings.mcp_port = self.settings.mcp_port
+        parent.settings.mcp_bind = self.settings.mcp_bind
+        parent.settings.save()
+        mcp_server.sync_with_settings(parent.settings, parent.database)
+
+    def _mcp_active_changed(self, row: Adw.SwitchRow, _param) -> None:
+        active = row.get_active()
+        if active and not self._mcp_store.tokens:
+            # Without a token the server would be open to anyone who can reach
+            # the port. Bounce the switch and send the user to create one.
+            row.handler_block(self._mcp_active_handler)
+            row.set_active(False)
+            row.handler_unblock(self._mcp_active_handler)
+            self._mcp_refresh_status()
+            self._show_mcp_error(
+                self._("No access token"),
+                self._(
+                    "A client authenticates with a token, so the server only "
+                    "starts once there is one. Add a token first."
+                ),
+            )
+            return
+        self.settings.mcp_enabled = active
+        self._mcp_apply()
+        server = self._mcp_server()
+        if active and (server is None or not server.running):
+            reason = getattr(server, "last_error", "") if server else ""
+            self._show_mcp_error(
+                self._("Could not start the MCP server"),
+                self._("Port %d is already in use. Pick another one.")
+                % int(self.settings.mcp_port)
+                if reason == "port-in-use"
+                else self._("The server could not bind to port %d.")
+                % int(self.settings.mcp_port),
+            )
+            # The switch is corrected by the refresh below — settings keep the
+            # user's intent so the next start attempt (new port) is one click.
+        self._mcp_refresh_status()
+
+    def _mcp_port_changed(self, row: Adw.SpinRow, _param) -> None:
+        # Same reasoning as the grid-columns row: notify::value fires on every
+        # step of a held +/- button, and each one would otherwise mean an
+        # fsync.
+        self.settings.mcp_port = int(row.get_value())
+        if self._mcp_port_debounce_id:
+            GLib.source_remove(self._mcp_port_debounce_id)
+        self._mcp_port_debounce_id = GLib.timeout_add(400, self._mcp_apply_port_debounced)
+
+    def _mcp_apply_port_debounced(self) -> bool:
+        self._mcp_port_debounce_id = 0
+        if not self._closing:
+            self._mcp_apply()
+            self._mcp_refresh_status()
+        return GLib.SOURCE_REMOVE
+
+    def _mcp_copy_address(self, btn: Gtk.Button) -> None:
+        server = self._mcp_server()
+        url = server.url() if server is not None else ""
+        if not url:
+            return
+        self._copy_to_clipboard(url, btn)
+
+    def _copy_to_clipboard(self, text: str, btn: Gtk.Button) -> None:
+        """Put *text* on the clipboard and tick the button for a moment."""
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_clipboard().set(text)
+        btn.set_icon_name("object-select-symbolic")
+
+        def _restore() -> bool:
+            if not self._closing:
+                btn.set_icon_name("edit-copy-symbolic")
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add_seconds(2, _restore)
+
+    def _show_mcp_error(self, heading: str, body: str) -> None:
+        dialog = Adw.AlertDialog(heading=heading, body=body)
+        dialog.add_response("ok", self._("OK"))
+        dialog.set_default_response("ok")
+        dialog.set_close_response("ok")
+        dialog.present(self)
+
+    # -- token list ------------------------------------------------------
+
+    def _mcp_populate_tokens(self) -> None:
+        while (child := self._mcp_token_listbox.get_first_child()) is not None:
+            self._mcp_token_listbox.remove(child)
+        if not self._mcp_store.tokens:
+            empty = Adw.ActionRow(
+                title=self._("No tokens yet"),
+                subtitle=self._("Add one to let a client connect"),
+            )
+            empty.set_activatable(False)
+            empty.add_css_class("dim-label")
+            self._mcp_token_listbox.append(empty)
+            return
+        for token in self._mcp_store.tokens:
+            self._mcp_token_listbox.append(self._mcp_token_row(token))
+
+    def _mcp_token_row(self, token: Token) -> Adw.ActionRow:
+        row = Adw.ActionRow(title=token.name, subtitle=token.masked())
+        row.set_activatable(False)
+
+        copy = Gtk.Button.new_from_icon_name("edit-copy-symbolic")
+        copy.set_tooltip_text(self._("Copy token"))
+        copy.add_css_class("flat")
+        copy.set_valign(Gtk.Align.CENTER)
+        copy.connect("clicked", lambda btn, t=token: self._copy_to_clipboard(t.token, btn))
+        row.add_suffix(copy)
+
+        edit = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+        edit.set_tooltip_text(self._("Edit"))
+        edit.add_css_class("flat")
+        edit.set_valign(Gtk.Align.CENTER)
+        edit.connect("clicked", lambda _btn, t=token: self._mcp_edit_token(t))
+        row.add_suffix(edit)
+        return row
+
+    def _mcp_tokens_changed(self) -> None:
+        """Re-render the list and hand the new set to a running server."""
+        self._mcp_populate_tokens()
+        server = self._mcp_server()
+        if server is not None:
+            server.reload_tokens()
+        if not self._mcp_store.tokens and server is not None and server.running:
+            # The last token just went away. The server would keep listening
+            # and reject every request, which reads as "broken" rather than
+            # "off" — so stop it and put the switch where the user can see it.
+            self.settings.mcp_enabled = False
+            self._mcp_apply()
+        self._mcp_refresh_status()
+
+    # -- add -------------------------------------------------------------
+
+    def _mcp_add_token(self, _btn: Gtk.Button) -> None:
+        entry = Adw.EntryRow(title=self._("Name"))
+        entry.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
+        group = Adw.PreferencesGroup()
+        group.add(entry)
+
+        dialog = Adw.AlertDialog(
+            heading=self._("Add token"),
+            body=self._("Name it after the client that will use it."),
+        )
+        dialog.set_extra_child(group)
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("create", self._("Create"))
+        dialog.set_default_response("create")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("create", Adw.ResponseAppearance.SUGGESTED)
+        entry.connect("entry-activated", lambda _e: dialog.response("create"))
+
+        # Same double-fire guard as the new-folder dialog: Enter in the entry
+        # and the dialog's default response can both arrive.
+        fired = {"done": False}
+
+        def _done(_dialog, response: str) -> None:
+            if fired["done"]:
+                return
+            fired["done"] = True
+            if response != "create":
+                return
+            name = entry.get_text().strip() or self._("Token")
+            token = self._mcp_store.add(name)
+            self._mcp_tokens_changed()
+            self._mcp_show_new_token(token)
+
+        dialog.connect("response", _done)
+        dialog.present(self)
+        idle_once(entry.grab_focus)
+
+    def _mcp_show_new_token(self, token: Token) -> None:
+        """Show the token in full once, with a copy button.
+
+        It stays readable afterwards (the Copy button on its row hands out the
+        same value), but showing it here means the common case — create it,
+        paste it into a client — needs no second trip through the list.
+        """
+        label = Gtk.Label(label=token.token)
+        label.set_selectable(True)
+        label.set_wrap(True)
+        label.set_wrap_mode(Pango.WrapMode.CHAR)
+        label.add_css_class("monospace")
+        label.set_margin_top(6)
+        label.set_margin_bottom(6)
+        label.set_margin_start(12)
+        label.set_margin_end(12)
+
+        frame = Gtk.Frame()
+        frame.set_child(label)
+
+        copy = Gtk.Button()
+        self._mcp_new_token_content = Adw.ButtonContent(
+            icon_name="edit-copy-symbolic", label=self._("Copy token"),
+        )
+        copy.set_child(self._mcp_new_token_content)
+        copy.set_halign(Gtk.Align.CENTER)
+        copy.set_margin_top(12)
+        copy.connect("clicked", self._mcp_copy_new_token, token.token)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box.append(frame)
+        box.append(copy)
+
+        dialog = Adw.AlertDialog(
+            heading=self._("Token created"),
+            body=self._("Give this to “%s”. It is the client's password.") % token.name,
+        )
+        dialog.set_extra_child(box)
+        dialog.add_response("ok", self._("Done"))
+        dialog.set_default_response("ok")
+        dialog.set_close_response("ok")
+        dialog.present(self)
+
+    def _mcp_copy_new_token(self, _btn: Gtk.Button, value: str) -> None:
+        display = Gdk.Display.get_default()
+        if display is not None:
+            display.get_clipboard().set(value)
+        content = self._mcp_new_token_content
+        content.set_label(self._("Copied"))
+        content.set_icon_name("object-select-symbolic")
+
+        def _restore() -> bool:
+            content.set_label(self._("Copy token"))
+            content.set_icon_name("edit-copy-symbolic")
+            return GLib.SOURCE_REMOVE
+
+        GLib.timeout_add_seconds(2, _restore)
+
+    # -- edit / rename / delete ------------------------------------------
+
+    def _mcp_edit_token(self, token: Token) -> None:
+        entry = Adw.EntryRow(title=self._("Name"))
+        entry.set_text(token.name)
+        entry.set_input_hints(Gtk.InputHints.NO_SPELLCHECK)
+        group = Adw.PreferencesGroup()
+        group.add(entry)
+
+        dialog = Adw.AlertDialog(
+            heading=self._("Edit token"),
+            body=self._("Rename this token, or remove it from the server."),
+        )
+        dialog.set_extra_child(group)
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("delete", self._("Delete"))
+        dialog.add_response("save", self._("Save"))
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        entry.connect("entry-activated", lambda _e: dialog.response("save"))
+
+        fired = {"done": False}
+
+        def _done(_dialog, response: str) -> None:
+            if fired["done"]:
+                return
+            fired["done"] = True
+            if response == "save":
+                name = entry.get_text().strip()
+                if name and name != token.name:
+                    self._mcp_store.rename(token.id, name)
+                    self._mcp_tokens_changed()
+            elif response == "delete":
+                # Deferred: the delete confirmation is a second dialog, and
+                # presenting it from inside this one's response handler fights
+                # the dismissal animation.
+                idle_once(self._mcp_confirm_delete, token)
+
+        dialog.connect("response", _done)
+        dialog.present(self)
+
+    def _mcp_confirm_delete(self, token: Token) -> None:
+        dialog = Adw.AlertDialog(
+            heading=self._("Delete token?"),
+            body=self._(
+                "“%s” stops working immediately. Any client still using it "
+                "will be refused until it is given a new token."
+            ) % token.name,
+        )
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("delete", self._("Delete"))
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def _done(_dialog, response: str) -> None:
+            if response != "delete":
+                return
+            self._mcp_store.remove(token.id)
+            self._mcp_tokens_changed()
+
+        dialog.connect("response", _done)
+        dialog.present(self)
+
     def _folder_row(self, attr: str, title: str) -> Adw.ActionRow:
         row = Adw.ActionRow(title=self._(title), subtitle=getattr(self.settings, attr))
         choose = Gtk.Button.new_from_icon_name("folder-open-symbolic")
@@ -1298,6 +1848,9 @@ class SettingsWindow(Adw.PreferencesWindow):
         if self._columns_debounce_id:
             GLib.source_remove(self._columns_debounce_id)
             self._columns_debounce_id = 0
+        if self._mcp_port_debounce_id:
+            GLib.source_remove(self._mcp_port_debounce_id)
+            self._mcp_port_debounce_id = 0
         self._cancel_no_update_reset()
 
     def _columns_changed(self, row: Adw.SpinRow, _param) -> None:

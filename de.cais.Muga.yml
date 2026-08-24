@@ -23,7 +23,8 @@ finish-args:
   # Cameras (/dev/video*). --device=camera is portal-mediated and does not
   # cover the direct v4l2 control ioctls Muga uses for focus and exposure.
   - --device=all
-  # Nextcloud sync and the in-app update check.
+  # Nextcloud sync, the in-app update check, and — when the user switches it
+  # on — the inbound socket the MCP server listens on.
   - --share=network
   # The media roots Muga scans. Extra folders the user adds in Settings go
   # through the file-chooser portal and need no static permission.
