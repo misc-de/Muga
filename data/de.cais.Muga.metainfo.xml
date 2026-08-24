@@ -69,6 +69,14 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.3.4" date="2026-08-24">
+      <description>
+        <p>Fixes: the Overview shows each photo once. A file that sits in two
+        media folders at the same time was drawn twice, and the folder it was
+        in counted the copies — a tile could promise twenty pictures and hold
+        ten. The same applies to the Videos tab.</p>
+      </description>
+    </release>
     <release version="0.3.3" date="2026-08-24">
       <description>
         <p>Fixes: photos that came across from the previous release under the
