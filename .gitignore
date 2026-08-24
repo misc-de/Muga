@@ -12,6 +12,11 @@ venv/
 .coverage
 htmlcov/
 
+# Flatpak build tree and builder cache. The README and the manifest both
+# document building into build-dir, and the cache alone runs to tens of MB.
+build-dir/
+.flatpak-builder/
+
 # Compiled translation catalogues — po/*.po is the source of truth,
 # tools/i18n.py compile regenerates these.
 yaga/data/locale/
