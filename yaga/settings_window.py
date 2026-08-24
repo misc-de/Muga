@@ -1246,6 +1246,12 @@ class SettingsWindow(Adw.PreferencesWindow):
 
     def _combo_changed(self, row: Adw.ComboRow, _param, attr: str) -> None:
         setattr(self.settings, attr, row.values[row.get_selected()])
+        if attr == "language":
+            # An explicit pick here is final — including "system", which used
+            # to be the default. Mark it so load()'s one-shot migration to
+            # English never second-guesses a deliberate choice.
+            self.settings.language_default_migrated = True
+            self.parent_window.settings.language_default_migrated = True
         self.parent_window.apply_settings(self.settings)
 
     def _entry_apply(self, row: Adw.EntryRow, attr: str) -> None:

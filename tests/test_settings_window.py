@@ -713,3 +713,46 @@ def test_removing_a_location_survives_a_malformed_order_key(settings_dialog) -> 
     dialog.settings.media_folder_order = ["location:zero", "location:0", "location:1"]
     dialog._remove_extra_at(0)
     assert "location:zero" in dialog.settings.media_folder_order
+
+
+# ---------------------------------------------------------------------------
+# Language: English is the default, translations are opt-in
+# ---------------------------------------------------------------------------
+
+def test_the_language_combo_offers_english_german_and_system() -> None:
+    """German has to stay reachable — the default moved, the option did not."""
+    values = [value for value, _label in sw._language_choices()]
+    assert "en" in values
+    assert "de" in values
+    assert "system" in values
+
+
+def test_picking_a_language_marks_it_as_deliberate() -> None:
+    """Without the flag, load()'s one-shot migration would overwrite a
+    deliberate "Use system language" on the next start."""
+    settings = SimpleNamespace(language="en", language_default_migrated=False)
+    parent = SimpleNamespace(
+        settings=SimpleNamespace(language="en", language_default_migrated=False),
+        apply_settings=MagicMock(),
+    )
+    win = SimpleNamespace(settings=settings, parent_window=parent)
+    row = SimpleNamespace(values=["system", "de", "en"], get_selected=lambda: 0)
+
+    SettingsWindow._combo_changed(win, row, None, "language")
+
+    assert settings.language == "system"
+    assert settings.language_default_migrated is True
+    assert parent.settings.language_default_migrated is True
+    parent.apply_settings.assert_called_once()
+
+
+def test_picking_another_setting_leaves_the_language_flag_alone() -> None:
+    settings = SimpleNamespace(theme="system", language_default_migrated=False)
+    parent = SimpleNamespace(settings=SimpleNamespace(), apply_settings=MagicMock())
+    win = SimpleNamespace(settings=settings, parent_window=parent)
+    row = SimpleNamespace(values=["system", "light", "dark"], get_selected=lambda: 1)
+
+    SettingsWindow._combo_changed(win, row, None, "theme")
+
+    assert settings.theme == "light"
+    assert settings.language_default_migrated is False

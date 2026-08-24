@@ -550,6 +550,59 @@ def test_deliberately_chosen_unlimited_cache_is_respected(tmp_path: Path, monkey
     assert config.Settings.load().cache_max_mb == 0
 
 
+def test_a_fresh_install_starts_in_english(tmp_path: Path, monkeypatch) -> None:
+    """English is the source language, so it is what Yaga shows until a
+    translation is picked."""
+    from yaga import config
+    from yaga.i18n import SOURCE_LANGUAGE
+
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    assert config.Settings.load().language == SOURCE_LANGUAGE
+
+
+def test_language_following_the_system_is_migrated_to_english(tmp_path: Path, monkeypatch) -> None:
+    """"system" was the old default rather than a choice: it started Yaga in
+    German on a German desktop. Lift it to English once, and persist that."""
+    from yaga import config
+
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    (cfg / "settings.json").write_text(json.dumps({"language": "system"}))
+
+    settings = config.Settings.load()
+    assert settings.language == "en"
+    assert settings.language_default_migrated is True
+    # Written back, so the next start has nothing left to migrate.
+    assert json.loads((cfg / "settings.json").read_text())["language"] == "en"
+
+
+def test_deliberately_chosen_system_language_is_respected(tmp_path: Path, monkeypatch) -> None:
+    """Picking "Use system language" in Settings sets the flag — the migration
+    must not override it."""
+    from yaga import config
+
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    (cfg / "settings.json").write_text(
+        json.dumps({"language": "system", "language_default_migrated": True}),
+    )
+    assert config.Settings.load().language == "system"
+
+
+def test_a_chosen_translation_is_left_alone(tmp_path: Path, monkeypatch) -> None:
+    from yaga import config
+
+    cfg = tmp_path / "config"
+    cfg.mkdir()
+    monkeypatch.setattr(config, "CONFIG_DIR", cfg)
+    (cfg / "settings.json").write_text(json.dumps({"language": "de"}))
+    assert config.Settings.load().language == "de"
+
+
 # ---------------------------------------------------------------------------
 # 8.  Concurrent writes are serialised instead of being lost
 # ---------------------------------------------------------------------------
