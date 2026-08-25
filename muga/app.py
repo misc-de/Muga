@@ -172,7 +172,9 @@ class GalleryWindow(
         # before destroying the old one, and a window-owned server would still
         # be holding the port at that moment.
         try:
-            mcp_server.sync_with_settings(self.settings, self.database)
+            mcp_server.sync_with_settings(
+                self.settings, self.database, on_change=self._on_mcp_change,
+            )
         except Exception:
             LOGGER.exception("Could not bring up the MCP server")
         self.category = self._first_existing_category()
@@ -1164,6 +1166,21 @@ class GalleryWindow(
                 return path
         return None
 
+    def _on_mcp_change(self) -> None:
+        """An MCP write tool changed something on disk — re-render.
+
+        Called on the MCP server's worker thread, so the refresh is bounced to
+        the main loop: touching the widget tree from another thread is what GTK
+        crashes on. Skipped once the window is tearing down, like every other
+        deferred callback here.
+        """
+        def _refresh() -> bool:
+            if not self._closing:
+                self.refresh(scan=False)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(_refresh)
+
     def _sync_new_folder_button(self) -> None:
         """Offer "New folder" only where a new folder could actually land.
 
@@ -1558,7 +1575,9 @@ class GalleryWindow(
         # is now stale — resync rather than leaving its tools reading a copy
         # that no longer reflects what the user just changed.
         try:
-            mcp_server.sync_with_settings(self.settings, self.database)
+            mcp_server.sync_with_settings(
+                self.settings, self.database, on_change=self._on_mcp_change,
+            )
         except Exception:
             LOGGER.exception("Could not apply MCP settings")
         # Invalidate the shared NC client — credentials/URL may have changed.

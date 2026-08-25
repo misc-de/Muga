@@ -1041,6 +1041,30 @@ class SettingsWindow(Adw.PreferencesWindow):
         self._mcp_port_row.connect("notify::value", self._mcp_port_changed)
         server_group.add(self._mcp_port_row)
 
+        # ── Write access ──
+        # Its own group, below the address and above the tokens: it is not a
+        # detail of "how the server listens", it is a separate decision about
+        # what a client may do once it has connected.
+        write_group = Adw.PreferencesGroup(
+            title=self._("Write access"),
+            description=self._(
+                "Off by default. While off, the server can only read the "
+                "index — the tools for adding, moving and deleting are not "
+                "even offered to a client."
+            ),
+        )
+        page.add(write_group)
+
+        self._mcp_write_row = Adw.SwitchRow(
+            title=self._("Allow write access"),
+            subtitle=self._("Lets a client add, move and delete files"),
+        )
+        self._mcp_write_row.set_active(self.settings.mcp_write_enabled)
+        self._mcp_write_handler = self._mcp_write_row.connect(
+            "notify::active", self._mcp_write_changed,
+        )
+        write_group.add(self._mcp_write_row)
+
         # ── Tokens ──
         self._mcp_token_group = Adw.PreferencesGroup(
             title=self._("Access tokens"),
@@ -1221,6 +1245,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         parent.settings.mcp_enabled = self.settings.mcp_enabled
         parent.settings.mcp_port = self.settings.mcp_port
         parent.settings.mcp_bind = self.settings.mcp_bind
+        parent.settings.mcp_write_enabled = self.settings.mcp_write_enabled
         parent.settings.save()
         mcp_server.sync_with_settings(parent.settings, parent.database)
 
@@ -1257,6 +1282,44 @@ class SettingsWindow(Adw.PreferencesWindow):
             # The switch is corrected by the refresh below — settings keep the
             # user's intent so the next start attempt (new port) is one click.
         self._mcp_refresh_status()
+
+    def _mcp_write_changed(self, row: Adw.SwitchRow, _param) -> None:
+        if not row.get_active():
+            self.settings.mcp_write_enabled = False
+            self._mcp_apply()
+            return
+        # Turning it on is the one switch on this page that hands out the
+        # ability to destroy something, so it asks first. Turning it off never
+        # does — taking a capability away needs no confirmation.
+        row.handler_block(self._mcp_write_handler)
+        row.set_active(False)
+        row.handler_unblock(self._mcp_write_handler)
+        dialog = Adw.AlertDialog(
+            heading=self._("Allow write access?"),
+            body=self._(
+                "A client with a token will be able to add files, move them, "
+                "and delete them to the trash — anywhere inside your media "
+                "folders.\n\nNothing outside those folders can be touched, and "
+                "deletions go to the trash rather than being erased."
+            ),
+        )
+        dialog.add_response("cancel", self._("Cancel"))
+        dialog.add_response("allow", self._("Allow"))
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("allow", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", self._mcp_write_confirmed)
+        dialog.present(self)
+
+    def _mcp_write_confirmed(self, _dialog, response: str) -> None:
+        if response != "allow":
+            return
+        self.settings.mcp_write_enabled = True
+        row = self._mcp_write_row
+        row.handler_block(self._mcp_write_handler)
+        row.set_active(True)
+        row.handler_unblock(self._mcp_write_handler)
+        self._mcp_apply()
 
     def _mcp_port_changed(self, row: Adw.SpinRow, _param) -> None:
         # Same reasoning as the grid-columns row: notify::value fires on every

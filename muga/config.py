@@ -205,6 +205,12 @@ class Settings:
     # the server on. Validated in mcp_server.resolve_bind, which falls back to
     # loopback for an unknown or currently unavailable value.
     mcp_bind: str = "local"
+    # Whether the MCP server also offers the tools that add, move and delete
+    # files. Off by default and independent of mcp_bind: turning the server on,
+    # or widening how far it listens, must never be what grants write access.
+    # The tools are hidden from tools/list entirely while this is False, so a
+    # client cannot even see that they exist.
+    mcp_write_enabled: bool = False
 
     # Nextcloud — stored in keyring; only URL/user saved to settings.json
     nextcloud_url: str = ""
