@@ -108,6 +108,34 @@ def _run(orientation: str, data: bytes, **kwargs):
     )
 
 
+def test_rotating_keeps_what_the_camera_recorded() -> None:
+    """Baking the rotation into the pixels means a re-encode, and a
+    re-encode drops everything Pillow is not handed explicitly. The HAL's
+    exposure and ISO would go with it — the numbers that explain why a
+    photo looks the way it does."""
+    PILImage = pytest.importorskip("PIL.Image")
+    from PIL.Image import Exif
+
+    exif = Exif()
+    ifd = exif.get_ifd(0x8769)
+    ifd[0x829A] = (1, 100)                      # ExposureTime
+    ifd[0x8827] = 150                           # ISOSpeedRatings
+    exif[0x0112] = 6                            # a rotation in the tag
+    buf = io.BytesIO()
+    PILImage.new("RGB", (64, 32), (9, 9, 9)).save(buf, "JPEG", exif=exif)
+
+    out, orientation = _run(ORIENT_LEFT_UP, buf.getvalue())
+
+    assert orientation == 1
+    with PILImage.open(io.BytesIO(out)) as img:
+        kept = img.getexif()
+        assert kept.get_ifd(0x8769)[0x829A] == (1, 100)
+        assert kept.get_ifd(0x8769)[0x8827] == 150
+        # The pixels are upright now, so the tag has to say so — carrying
+        # the original 6 through would rotate the photo a second time.
+        assert kept[0x0112] == 1
+
+
 # --------------------------------------------------------------------
 # Rotation map
 # --------------------------------------------------------------------

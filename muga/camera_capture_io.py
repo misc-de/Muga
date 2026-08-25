@@ -246,6 +246,10 @@ class CameraCaptureIOMixin:
             # transpose() below returns a plain Image, not the ImageFile that
             # open() hands back — name the wider type up front.
             src: PILImage.Image = PILImage.open(io.BytesIO(data))
+            # Read before transpose(): it returns a new Image and does not
+            # carry `info` across, so afterwards the capture's own EXIF —
+            # exposure, ISO, lens — would already be gone.
+            captured_exif = src.getexif()
             resized = False
             # Image resolution picker on Halium sets _image_resolution;
             # we keep aspect ratio by fitting inside the target box
@@ -278,7 +282,18 @@ class CameraCaptureIOMixin:
                 # for and we leave it alone.
                 quality = max(quality, 92)
             out = io.BytesIO()
-            src.save(out, format="JPEG", quality=quality)
+            # The pixels are upright now, so the tag must say so — carrying
+            # the HAL's original value through would rotate the photo a
+            # second time in every viewer that honours it.
+            captured_exif[0x0112] = 1
+            try:
+                src.save(out, format="JPEG", quality=quality, exif=captured_exif)
+            except Exception:
+                # A vendor EXIF block Pillow can serialise on read but not
+                # on write. The photo matters more than its metadata.
+                LOGGER.debug("re-encode with EXIF failed", exc_info=True)
+                out = io.BytesIO()
+                src.save(out, format="JPEG", quality=quality)
             data = out.getvalue()
             _dlog(
                 f"[muga.camera] capture: {src.width}x{src.height} "
@@ -495,18 +510,19 @@ class CameraCaptureIOMixin:
         Covers Make/Model/Software/DateTime/Orientation, plus GPS when
         the user has the geo toggle on and there's a fresh fix.
 
-        Builds the EXIF blob via PIL.Image.Exif() (which doesn't
-        require opening the source JPEG) and patches the file's APP1
-        segment in place. Avoids the decode-then-re-encode cycle of
-        Image.save("JPEG", quality=...), which lost ~5-10 quality
-        points per save and stalled the UI 200-600 ms on a phone."""
-        try:
-            from PIL.Image import Exif
-        except ImportError:
+        Adds those to the block the capture already carries (see
+        _captured_exif) and patches the file's APP1 segment in place.
+        Reading the header back costs a few ms; re-encoding through
+        Image.save("JPEG", quality=...) would cost ~5-10 quality points
+        per save and 200-600 ms on a phone.
+
+        GExiv2 needs none of this — open_path already loads what is
+        there and save_file writes it back."""
+        exif = self._captured_exif(path)
+        if exif is None:  # no Pillow — this backend is the Pillow one
             return
         basics = self._current_exif_basics(orientation)
         try:
-            exif = Exif()
             # 0th IFD (image-level metadata).
             exif[0x010F] = basics["make"]           # Make
             if basics["model"]:
@@ -538,6 +554,33 @@ class CameraCaptureIOMixin:
             _write_exif_app1_inplace(path, exif.tobytes())
         except Exception:
             LOGGER.debug("Could not write EXIF (Pillow) for %s", path, exc_info=True)
+
+    def _captured_exif(self, path: Path) -> Any:
+        """The photo's own EXIF, to add Muga's tags to rather than replace.
+
+        The HAL writes ~30 tags — exposure time, ISO, aperture, focal
+        length — and Muga used to build a fresh block of its own and patch
+        that over them, leaving four. Those are the numbers that say why a
+        photo came out the way it did, and the only way to tell whether the
+        exposure ceiling is doing anything.
+
+        Falls back to an empty block: a capture with no readable EXIF is
+        normal (the vfsrc+jpegenc path encodes its own JPEG), and a
+        corrupt one must not cost the photo Muga's tags as well. Returns
+        None only when Pillow is missing entirely, which is also the
+        answer to "can this backend run at all"."""
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            return None
+        try:
+            with PILImage.open(path) as im:
+                exif = im.getexif()
+            exif.tobytes()  # fail here, while falling back is still free
+            return exif
+        except Exception:
+            LOGGER.debug("no reusable EXIF in %s", path, exc_info=True)
+            return PILImage.Exif()
 
     def _pillow_set_gps(self, gps_ifd: dict, location: dict) -> None:
         lat = location.get("lat")

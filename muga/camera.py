@@ -111,6 +111,23 @@ _IMAGE_VF_FRAMES_BEFORE_CAPTURE = 3
 # 500 ms as before, now a ceiling rather than the normal case.
 _IMAGE_CAPTURE_CEILING_MS = 500
 
+# Ceiling for the HAL's automatic exposure, in microseconds (1/30 s).
+#
+# Left to itself in a dim room, this HAL picks an exposure long enough that
+# handshake smears the whole frame — a shot that looked sharp in the preview
+# lands on disk as streaks. The preview never showed that, because at 24 fps
+# it cannot expose longer than ~1/24 s; the still capture has no such limit.
+#
+# So give it one. Capped, the HAL raises gain instead of holding the shutter
+# open, which trades noise for a photo that is actually there — the bargain
+# every phone camera makes. 1/30 s is about the hand-held floor for this
+# lens (5.5 mm, ~26 mm equivalent), and it applies to the preview too, so
+# what the user frames is what the capture exposes.
+#
+# A HAL that does not implement the property ignores it, which costs
+# nothing; _apply_exposure_ceiling logs either way.
+_MAX_EXPOSURE_TIME_US = 33333
+
 # gst-droid `flash-mode` property values (matching the
 # GstDroidCamSrcFlashMode enum exposed by droidcamsrc). Used by the
 # flash / torch toggle:
@@ -911,6 +928,25 @@ class CameraWindow(
             return src
         return self._make_autovideo_source()
 
+    def _apply_exposure_ceiling(self, src: Any, log_prefix: str) -> None:
+        """Cap the HAL's automatic exposure so a hand-held shot in a dim
+        room comes back sharp rather than smeared. See
+        _MAX_EXPOSURE_TIME_US for why this is not left to the HAL."""
+        try:
+            src.set_property("max-exposure-time", _MAX_EXPOSURE_TIME_US)
+            _dlog(
+                f"[muga.camera] {log_prefix}: max-exposure-time set to "
+                f"{_MAX_EXPOSURE_TIME_US} us"
+            )
+        except Exception as exc:
+            # Not every droidcamsrc build carries the Photography
+            # properties. Nothing breaks without it — the photo is just
+            # exposed the way it was before.
+            _dlog(
+                f"[muga.camera] {log_prefix}: max-exposure-time "
+                f"unavailable ({exc})"
+            )
+
     def _make_droidcam_source(self, device: dict[str, Any]) -> Any:
         gst = self._Gst
         src = gst.ElementFactory.make("droidcamsrc", "src")
@@ -920,6 +956,7 @@ class CameraWindow(
             src.set_property("camera-device", device.get("droidcam_id", 0))
         except Exception:
             LOGGER.debug("droidcamsrc camera-device set failed", exc_info=True)
+        self._apply_exposure_ceiling(src, "preview")
         # mode=2 (video) keeps the viewfinder rolling continuously
         # without the per-frame Photography reconfiguration that
         # mode=1 (image) does — on the user's FuriOS device that
@@ -2887,6 +2924,9 @@ class CameraWindow(
             src.set_property("mode", 1)
         except Exception:
             LOGGER.debug("camera cleanup/op failed", exc_info=True)
+        # This is the session that actually takes the photo, and the one
+        # that was picking the exposure that smeared it.
+        self._apply_exposure_ceiling(src, "image-capture")
         pipeline.add(src)
 
         # vfsrc → fakesink. droidcamsrc's HAL setup expects a live
