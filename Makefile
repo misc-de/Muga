@@ -84,11 +84,27 @@ flatpak-merge:
 # and because `remote-info` only checks the (signed) summary, that surfaces
 # first on the actual install: "GPG verification enabled, but no signatures
 # found". Hence the loop over every architecture in the repo.
+#
+# `build-sign` reaches the app refs and nothing else, though, and the repo also
+# carries appstream/ and appstream2/ — which build-update-repo only rewrites
+# (and therefore only re-signs) when their contents actually changed. One build
+# run without FP_GPG leaves an unsigned appstream commit that every later
+# signed publish walks straight past, and the app then installs fine while
+# `flatpak update --appstream` fails against the same remote. So every ref gets
+# a second pass through ostree, which signs by commit rather than by app ID.
+# Signing an already-signed commit is a no-op, so this is safe to repeat.
 flatpak-publish:
 ifneq ($(FP_GPG),)
 	@for arch in $$(find $(FP_REPO)/refs/heads/app/$(APPID) -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null); do \
 		echo "Signing $(APPID) ($$arch)"; \
 		flatpak build-sign $(FP_REPO) $(APPID) --arch=$$arch $(FP_GPGARGS) || exit 1; \
+	done
+	@for ref in $$(ostree --repo=$(FP_REPO) refs); do \
+		ostree --repo=$(FP_REPO) show "$$ref" 2>/dev/null | grep -q "signature" && continue; \
+		echo "Signing $$ref (missed by build-sign)"; \
+		ostree --repo=$(FP_REPO) gpg-sign \
+			$(if $(FP_GPGHOME),--gpg-homedir=$(FP_GPGHOME),) \
+			"$$(ostree --repo=$(FP_REPO) rev-parse $$ref)" $(FP_GPG) || exit 1; \
 	done
 endif
 	@# Drop existing deltas: build-update-repo only regenerates missing ones.
