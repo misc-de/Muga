@@ -69,6 +69,19 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.14" date="2026-08-25">
+      <description>
+        <p>Photos on Halium phones are taken sooner after the shutter, and are
+        less likely to come out blurred: the camera used to sit through a fixed
+        half-second wait before the sensor was asked for the picture, so the
+        shot that landed on disk was taken well after the one on screen. It now
+        waits for the camera to say it is ready, which takes about a fifth of
+        that.</p>
+        <p>Saving no longer holds up the live preview either — rotating and
+        re-encoding a full-resolution photo happens alongside it rather than
+        in front of it.</p>
+      </description>
+    </release>
     <release version="0.5.13" date="2026-08-25">
       <description>
         <p>Jumping to a month that is already on screen is immediate again. It
