@@ -65,6 +65,14 @@ MCP_PATH = "/mcp"
 # arbitrary amount of memory before the token is even checked.
 _MAX_BODY = 1 << 20
 
+# How much of a body the server will read and throw away after refusing it.
+# Closing a socket that still has unread data queued makes the kernel send an
+# RST, which routinely destroys the response that was just written before the
+# client can read it — draining first is what lets a client see *why* it was
+# refused. Bounded, because the point is to let a client finish a request it
+# already committed to, not to read whatever anyone cares to send.
+_MAX_DRAIN = _MAX_BODY
+
 # Ceiling on how many items one tool call returns, whatever limit was asked
 # for. A library can hold six figures of rows and a single JSON response with
 # all of them helps nobody — clients paginate with offset instead.
@@ -1139,12 +1147,40 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             length = -1
         if length < 0:
-            self._send_json(400, _error(None, _INVALID_REQUEST, "Missing or invalid Content-Length"))
+            # Nothing to drain against: without a length there is no telling
+            # where this body ends and the next request begins.
+            self._refuse_body(400, "Missing or invalid Content-Length", announced=0)
             return None
         if length > _MAX_BODY:
-            self._send_json(413, _error(None, _INVALID_REQUEST, "Request body too large"))
+            self._refuse_body(413, "Request body too large", announced=length)
             return None
         return self.rfile.read(length) if length else b""
+
+    def _refuse_body(self, status: int, message: str, *, announced: int) -> None:
+        """Answer a request whose body will not be read, and end the connection.
+
+        The body is still sitting in the socket. On a keep-alive connection
+        BaseHTTPRequestHandler reads the next request straight out of it — so a
+        refused body that begins with a well-formed request line was served as
+        a request of its own. The size ceiling stopped the server buffering
+        those bytes; it did not stop them being executed. Closing is what
+        RFC 9110 asks of a server that declines to read a body, and it is the
+        only way to know where the next request starts.
+        """
+        self.close_connection = True
+        self._send_json(status, _error(None, _INVALID_REQUEST, message))
+        self._drain(min(announced, _MAX_DRAIN))
+
+    def _drain(self, count: int) -> None:
+        """Read and discard *count* bytes, stopping early at EOF. See _MAX_DRAIN."""
+        while count > 0:
+            try:
+                chunk = self.rfile.read(min(65536, count))
+            except OSError:
+                return
+            if not chunk:
+                return
+            count -= len(chunk)
 
     def _send_json(self, status: int, payload: Any) -> None:
         self._send_bytes(
@@ -1154,6 +1190,12 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
         try:
             self.send_response(status)
+            # Say so when this response ends the connection — otherwise a
+            # keep-alive client waits for a reply on a socket that is going
+            # away, and an intermediary is free to disagree with us about
+            # where the next request begins.
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("MCP-Protocol-Version", PROTOCOL_VERSION)
