@@ -69,6 +69,15 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.2" date="2026-08-25">
+      <description>
+        <p>The Overview now also recognises a copy that was renamed on a
+        Nextcloud server, by using the content checksum the server reports for
+        it. Where no checksum is available — which is most files on most
+        servers — nothing changes, and libraries without any are not slowed
+        down.</p>
+      </description>
+    </release>
     <release version="0.5.1" date="2026-08-25">
       <description>
         <p>Fixes: the Overview shows each photo once, however many folders hold
