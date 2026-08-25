@@ -1125,6 +1125,77 @@ class Database:
             ).fetchall()
         return [self._row_to_item(row) for row in rows]
 
+    # Month jump: which month is next, and where does it start
+    # ------------------------------------------------------------------
+    # The gallery's month arrows used to look for the next header in the rows
+    # it had already built, and scroll a measured number of pixels to it. Both
+    # halves were unreliable — the next month is often not loaded yet, and the
+    # pixel geometry of rows GTK has not laid out is not knowable. Asking the
+    # database instead answers both questions exactly and independently of
+    # what happens to be on screen: which month comes next, and how many items
+    # sort ahead of it. The gallery then rebuilds its window from that offset,
+    # so the month it jumped to is simply the top of the list.
+
+    def month_jump_target(
+        self, category: str, sort_mode: str, folder: str | None, *,
+        year: int, month: int, direction: int,
+        include_nc: bool = False, media_filter: str | None = None,
+    ) -> tuple[int, int, int] | None:
+        """Where the month next to (year, month) begins.
+
+        direction +1 follows the list downwards, -1 upwards — which way that
+        is in time depends on the sort. Returns (offset, year, month) for the
+        first item of that month, or None when there is no such month.
+
+        Boundaries are computed in local time because that is what the month
+        headers are cut with; doing it in UTC would file a photo taken at
+        00:30 on the first under the month before.
+        """
+        from datetime import datetime
+
+        descending = sort_mode in ("newest", "file_newest")
+        date_expr = "mtime" if sort_mode in ("file_newest", "file_oldest") else self._SORT_DATE
+        where, args = self._build_list_where(
+            category, folder, include_nc, media_filter, self.has_checksums(),
+        )
+
+        def _start_of(y: int, m: int) -> float:
+            return datetime(y, m, 1).timestamp()
+
+        def _start_of_next(y: int, m: int) -> float:
+            return datetime(y + 1, 1, 1).timestamp() if m == 12 else datetime(y, m + 1, 1).timestamp()
+
+        # Down the list is older when sorting newest-first, newer otherwise.
+        older = (direction > 0) == descending
+        if older:
+            # The newest month strictly older than this one: the largest date
+            # below its start.
+            sql = f"SELECT MAX({date_expr}) FROM media WHERE {where} AND {date_expr} < ?"
+            bound = _start_of(year, month)
+        else:
+            sql = f"SELECT MIN({date_expr}) FROM media WHERE {where} AND {date_expr} >= ?"
+            bound = _start_of_next(year, month)
+        with self.lock:
+            row = self.conn.execute(sql, [*args, bound]).fetchone()
+        if row is None or row[0] is None:
+            return None
+        target = datetime.fromtimestamp(row[0])
+        t_year, t_month = target.year, target.month
+
+        # How many items sort ahead of that month's first item. Whole months
+        # either sort before it or after it, so the name tiebreaker inside a
+        # month cannot move this count.
+        if descending:
+            count_sql = f"SELECT COUNT(*) FROM media WHERE {where} AND {date_expr} >= ?"
+            edge = _start_of_next(t_year, t_month)
+        else:
+            count_sql = f"SELECT COUNT(*) FROM media WHERE {where} AND {date_expr} < ?"
+            edge = _start_of(t_year, t_month)
+        with self.lock:
+            counted = self.conn.execute(count_sql, [*args, edge]).fetchone()
+        offset = int(counted[0]) if counted else 0
+        return offset, t_year, t_month
+
     def get_media_by_path(self, path: str, category: str | None = None) -> MediaItem | None:
         with self.lock:
             if category is not None:

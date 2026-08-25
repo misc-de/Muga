@@ -1848,484 +1848,186 @@ def test_pagination_append_refreshes_previously_last_header_arrow() -> None:
     assert "_set_header_arrow_visibility" in refresh_body
 
 
-def test_header_nav_is_single_shot_no_retry_no_scroll_to() -> None:
-    """Rebuilt jump uses a single vadjustment write — no retry loop, no
-    scroll_to, no two-phase flicker. Pin the absence of those patterns so
-    a future 'improvement' can't reintroduce the bugs the user hit when
-    we had them."""
-    src = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
-    nav_def = src.index("def _on_header_nav")
-    nav_end = src.index("\n    def ", nav_def + 1)
-    nav_body = src[nav_def:nav_end]
-    # Strip the docstring before checking — the docstring deliberately
-    # mentions the absent constructs so the reader understands the design;
-    # we only care that they're not present in actual code.
-    import re
-    code_only = re.sub(r'"""[\s\S]*?"""', "", nav_body, count=1)
-    assert "_begin_align_retries" not in code_only
-    assert ".scroll_to(" not in code_only
-    assert "GLib.idle_add" not in code_only
-    assert "GLib.timeout_add" not in code_only
-    # The body must measure row heights from rendered widgets and write the
-    # vadjustment exactly once via the clamped helper.
-    assert "_measure_row_heights" in nav_body
-    assert "_set_vadj_clamped" in nav_body
-
-
-# The month-jump and the sliding window
+# The month jump asks the database, not the rows on screen
 # ---------------------------------------------------------------------------
 #
-# Reported: jumping month to month works several times and then lands
-# nowhere near a header, leaving the user stranded mid-list with no arrow to
-# press. Measured on a realised window, one such jump moved the view 41,000 px
-# the wrong way.
+# Three versions of this jumped by measuring a pixel distance to a header
+# found in the already-built rows, and all three left the user stranded
+# mid-collection. Both halves were unsound: inside a long month the next
+# header is thousands of photos away and not loaded at all, and loading it
+# changes the store under the very widgets the measurement comes from.
 #
-# Cause: the jump does arithmetic on row-store positions, and pulling the
-# pages it needs can trip the sliding window's front-eviction — which splices
-# rows off the FRONT and renumbers everything. The source position was read
-# before that, the target after it, and the pixel delta was summed across the
-# two index spaces.
+# It is a load now, not a scroll. The header row carries its own year and
+# month; the database says which month comes next and how many items sort
+# ahead of it; the window is rebuilt from that offset, so the month lands at
+# the top of the list. What is left to get wrong is a COUNT and an ORDER BY,
+# and those can be tested for real.
 
 def _jump_store(rows):
-    """A row store standing in for Gio.ListStore, backed by a live list so a
-    fake loader can append to (and splice from) it the way the real one does."""
+    """A row store standing in for Gio.ListStore, backed by a live list."""
     return SimpleNamespace(
         get_n_items=lambda: len(rows),
         get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
     )
 
 
-def _jump_grid(rows, owner):
+def _header_row(year=2026, month=3):
+    from muga.gallery_grid import GalleryRow
+
+    return GalleryRow.header("Mar", year=year, month=month)
+
+
+def _nav_grid(row):
+    grid = SimpleNamespace(
+        owner=SimpleNamespace(jump_to_month=MagicMock()),
+        row_store=SimpleNamespace(get_n_items=lambda: 1,
+                                  get_item=lambda i: row if i == 0 else None),
+    )
+    list_item = SimpleNamespace(get_position=lambda: 0, get_item=lambda: row,
+                                get_child=lambda: None)
+    return grid, SimpleNamespace(_list_item=list_item)
+
+
+def test_the_month_arrow_hands_its_own_month_to_the_window() -> None:
+    """The header knows which month it is; nothing has to be looked up in the
+    rows, which is what used to fail when the next month was not loaded."""
     from muga.gallery_grid import GalleryGrid
 
+    grid, header_box = _nav_grid(_header_row(2026, 3))
+    GalleryGrid._on_header_nav(grid, header_box, +1)
+    grid.owner.jump_to_month.assert_called_once_with(2026, 3, +1)
+
+
+def test_the_up_arrow_goes_the_other_way() -> None:
+    from muga.gallery_grid import GalleryGrid
+
+    grid, header_box = _nav_grid(_header_row(2026, 3))
+    GalleryGrid._on_header_nav(grid, header_box, -1)
+    grid.owner.jump_to_month.assert_called_once_with(2026, 3, -1)
+
+
+def test_a_header_without_a_date_does_not_jump() -> None:
+    from muga.gallery_grid import GalleryGrid, GalleryRow
+
+    grid, header_box = _nav_grid(GalleryRow.header("no date"))
+    GalleryGrid._on_header_nav(grid, header_box, +1)
+    grid.owner.jump_to_month.assert_not_called()
+
+
+def test_the_way_back_stays_reachable_after_a_jump() -> None:
+    """A jump makes its month the first row in the window, so there is no
+    header above it any more — but there is a way back, and the up arrow is
+    it."""
+    from muga.gallery_grid import GalleryGrid
+
+    up = SimpleNamespace(visible=None)
+    down = SimpleNamespace(visible=None)
+    up.set_visible = lambda v: setattr(up, "visible", v)
+    down.set_visible = lambda v: setattr(down, "visible", v)
+    stack = SimpleNamespace(_nav_up=up, _nav_down=down)
+    rows = [_header_row()]
     grid = SimpleNamespace(
         row_store=_jump_store(rows),
-        owner=owner,
-        _evict_after_jump=lambda: False,
+        owner=SimpleNamespace(_has_more_items=False, _window_start_offset=1200),
     )
     grid._find_adjacent_header_pos = (
         lambda pos, d: GalleryGrid._find_adjacent_header_pos(grid, pos, d)
     )
-    return grid
+    GalleryGrid._set_header_arrow_visibility(
+        grid, SimpleNamespace(get_position=lambda: 0, get_child=lambda: stack),
+    )
+    assert up.visible is True
 
 
-def test_pulling_pages_for_a_jump_holds_the_front_eviction() -> None:
-    """The loop that pulls pages until the next header shows up must run with
-    eviction held: an append never moves an existing row, a front-splice moves
-    all of them, and the caller is holding a position from before the loop."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-
-    rows = [GalleryRow.header("Mar"), *[GalleryRow.from_tiles([]) for _ in range(5)]]
-    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False)
-    suppressed_during_load = []
-
-    def loader():
-        suppressed_during_load.append(owner._suppress_front_eviction)
-        rows.extend([GalleryRow.from_tiles([]), GalleryRow.header("Feb")])
-        if not owner._suppress_front_eviction:
-            del rows[:3]  # what the sliding window would do
-
-    owner._load_more_items = loader
-    grid = _jump_grid(rows, owner)
-
-    found = GalleryGrid._load_more_until_next_header(grid, 0)
-
-    assert suppressed_during_load == [True]
-    assert found is not None
-    assert rows[found].is_header and rows[found].header_text == "Feb"
-    assert rows[0].header_text == "Mar", "the front was trimmed under the jump"
-
-
-def test_the_eviction_hold_is_released_and_paid_back() -> None:
-    """Held, not skipped. The window still has to come back under its cap, or
-    repeated jumps grow the store until the list view crawls — which is what
-    the cap was added for in the first place."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-
-    rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([])]
-    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False)
-
-    def loader():
-        rows.append(GalleryRow.header("Feb"))
-
-    owner._load_more_items = loader
-    grid = _jump_grid(rows, owner)
-
-    scheduled = []
-    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
-    with patch.object(grid_mod.GLib, "idle_add",
-                      side_effect=lambda fn, **kw: scheduled.append(fn)):
-        GalleryGrid._load_more_until_next_header(grid, 0)
-
-    assert owner._suppress_front_eviction is False
-    assert grid._evict_after_jump in scheduled, "the held eviction was never paid back"
-
-
-def test_evict_after_jump_runs_the_owners_eviction() -> None:
-    from muga.gallery_grid import GalleryGrid
-
-    owner = SimpleNamespace(_evict_window_front_if_needed=MagicMock())
-    grid = SimpleNamespace(owner=owner)
-    GalleryGrid._evict_after_jump(grid)
-    owner._evict_window_front_if_needed.assert_called_once()
-
-
-def test_front_eviction_stands_down_while_a_jump_measures() -> None:
-    """The other side of the same contract, at the evictor."""
+def _jump_window(target, sort_mode="date", **extra):
     from muga.gallery_render import GalleryRenderMixin
 
     win = SimpleNamespace(
-        _suppress_front_eviction=True,
-        current_items=list(range(4000)),
-        _MAX_LOADED_ITEMS=1500,
-        _page_size=200,
-        gallery_grid=SimpleNamespace(row_store=MagicMock(), evict_front_rows=MagicMock()),
+        category="photos",
+        current_folder=None,
+        _total_count=5000,
+        database=SimpleNamespace(month_jump_target=MagicMock(return_value=target)),
+        settings=SimpleNamespace(
+            get_sort_mode=lambda *a: sort_mode,
+            media_filter_for=lambda c: None,
+        ),
+        _should_merge_nc=lambda: False,
+        _cancel_nc_thumb_queue=MagicMock(),
+        _render=MagicMock(),
     )
-    GalleryRenderMixin._evict_window_front_if_needed(win)
-    win.gallery_grid.evict_front_rows.assert_not_called()
-    assert len(win.current_items) == 4000
+    win._DATE_MODES = GalleryRenderMixin._DATE_MODES
+    win._date_mode = lambda m: GalleryRenderMixin._date_mode(win, m)
+    for k, v in extra.items():
+        setattr(win, k, v)
+    return win
 
 
-def test_front_eviction_still_trims_when_no_jump_is_running() -> None:
-    """...and it must not become a permanent stand-down."""
-    from muga.gallery_grid import GalleryRow
+def test_a_jump_rebuilds_the_window_from_the_offset_it_is_given() -> None:
+    """The whole point: the month becomes the top of the list rather than
+    something to scroll to."""
     from muga.gallery_render import GalleryRenderMixin
 
-    rows = [GalleryRow.header("Mar")]
-    for _ in range(40):
-        row = GalleryRow.from_tiles([])
-        row.tiles = [object()] * 100
-        rows.append(row)
-    rows.append(GalleryRow.header("Feb"))
-    win = SimpleNamespace(
-        _suppress_front_eviction=False,
-        current_items=list(range(4000)),
-        _MAX_LOADED_ITEMS=1500,
-        _page_size=200,
-        _window_start_offset=0,
-        gallery_grid=SimpleNamespace(
-            row_store=_jump_store(rows),
-            evict_front_rows=MagicMock(),
-        ),
-    )
-    GalleryRenderMixin._evict_window_front_if_needed(win)
-    win.gallery_grid.evict_front_rows.assert_called_once()
+    win = _jump_window((3400, 2025, 11))
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+
+    win.database.month_jump_target.assert_called_once()
+    kwargs = win.database.month_jump_target.call_args.kwargs
+    assert (kwargs["year"], kwargs["month"], kwargs["direction"]) == (2026, 3, +1)
+    win._render.assert_called_once_with(reset_scroll=True, start_offset=3400)
 
 
-def _long_month_store(rows_in_month: int, tiles_per_row: int = 6):
-    """A store that opens with a short month and then runs a very long one —
-    the shape where walking forward to the next header goes badly wrong."""
-    from muga.gallery_grid import GalleryRow
-
-    rows = [GalleryRow.header("Mar")]
-    for _ in range(20):
-        row = GalleryRow.from_tiles([])
-        row.tiles = [object()] * tiles_per_row
-        rows.append(row)
-    rows.append(GalleryRow.header("Feb"))
-    for _ in range(rows_in_month):
-        row = GalleryRow.from_tiles([])
-        row.tiles = [object()] * tiles_per_row
-        rows.append(row)
-    return rows
-
-
-def test_eviction_never_walks_forward_into_a_long_month() -> None:
-    """It used to align the cut to the NEXT header so the new first row would
-    be a header. Inside a long month that header is hundreds of rows away, and
-    walking to it evicts the whole month — measured on a 1500-photo month, a
-    cut asked to free 1050 items freed 1675, which is everything the user was
-    looking at. Freeing less than asked is a cost; freeing the viewport is a
-    bug."""
+def test_a_jump_past_the_last_month_does_nothing() -> None:
     from muga.gallery_render import GalleryRenderMixin
 
-    rows = _long_month_store(400)
-    dropped = []
-    win = SimpleNamespace(
-        _suppress_front_eviction=False,
-        current_items=list(range(2600)),
-        _MAX_LOADED_ITEMS=1500,
-        _page_size=200,
-        _window_start_offset=0,
-        gallery_grid=SimpleNamespace(
-            row_store=_jump_store(rows),
-            evict_front_rows=lambda n: dropped.append(n),
-        ),
-    )
-    target_evict = 2600 - 750
-    GalleryRenderMixin._evict_window_front_if_needed(win)
-
-    assert dropped, "nothing was evicted at all"
-    freed = 2600 - len(win.current_items)
-    assert freed <= target_evict, (
-        f"freed {freed} items when {target_evict} were asked for"
-    )
-    assert win._window_start_offset == freed
+    win = _jump_window(None)
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+    win._render.assert_not_called()
 
 
-def test_eviction_still_prefers_to_leave_a_header_on_top() -> None:
-    """When a header sits inside the region being freed, the cut moves back
-    onto it — the new first row keeps its month context, and the cut only
-    ever gets smaller."""
+def test_a_jump_asks_the_query_sort_the_headers_were_cut_with() -> None:
+    """The month boundaries have to be measured with the same timestamp the
+    headers are, or the offset lands in the neighbouring month."""
     from muga.gallery_render import GalleryRenderMixin
 
-    rows = _long_month_store(400)          # header at row 0, header at row 21
-    dropped = []
+    win = _jump_window((10, 2025, 11), sort_mode="date_taken")
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+    assert win.database.month_jump_target.call_args.args[1] == "newest"
+
+    win = _jump_window((10, 2025, 11), sort_mode="date")
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+    assert win.database.month_jump_target.call_args.args[1] == "file_newest"
+
+
+def test_no_jumping_in_a_view_that_has_no_months() -> None:
+    from muga.gallery_render import GalleryRenderMixin
+
+    win = _jump_window((10, 2025, 11), sort_mode="name")
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+    win.database.month_jump_target.assert_not_called()
+    win._render.assert_not_called()
+
+
+def test_the_first_page_can_open_the_window_part_way_in() -> None:
+    """Loading from an offset is what a jump does; the bookkeeping has to
+    follow, or lazy-loading carries on from the wrong place."""
+    from muga.gallery_render import GalleryRenderMixin
+
+    items = [object()] * 200
     win = SimpleNamespace(
-        _suppress_front_eviction=False,
-        current_items=list(range(2600)),
-        _MAX_LOADED_ITEMS=1500,
+        category="photos",
         _page_size=200,
-        _window_start_offset=0,
-        gallery_grid=SimpleNamespace(
-            row_store=_jump_store(rows),
-            evict_front_rows=lambda n: dropped.append(n),
+        database=SimpleNamespace(
+            count_media=lambda *a, **k: 5000,
+            list_media_paginated=MagicMock(return_value=items),
         ),
     )
-    GalleryRenderMixin._evict_window_front_if_needed(win)
-    assert dropped == [21], f"cut at {dropped}, not back onto the header at 21"
-    assert rows[21].is_header
-
-
-def test_a_jump_re_reads_its_positions_after_pulling_pages() -> None:
-    """Belt to the hold's braces: whatever else may splice the front, the
-    source and target positions are both re-read from the live store before
-    the delta between them is measured. Here the loader trims regardless, and
-    the jump still has to land on the header that follows the source row —
-    not on whatever ended up at the stale index."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-
-    src = GalleryRow.header("Mar")
-    rows = [*[GalleryRow.from_tiles([]) for _ in range(4)], src,
-            *[GalleryRow.from_tiles([]) for _ in range(4)]]
-    pos = {"src": rows.index(src)}
-    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False)
-
-    def loader():
-        rows.extend([GalleryRow.from_tiles([]), GalleryRow.header("Feb")])
-        del rows[:4]                      # front-splice, whatever the hold says
-        pos["src"] = rows.index(src)      # GTK renumbers the bound list item
-        owner._has_more_items = False
-
-    owner._load_more_items = loader
-
-    src_widget = SimpleNamespace(
-        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 1000.0)),
-        get_allocated_height=lambda: 150,
+    GalleryRenderMixin._load_first_page(
+        win, "newest", None, include_nc=False, media_filter=None, offset=3400,
     )
-    src_li = SimpleNamespace(
-        get_position=lambda: pos["src"],
-        get_child=lambda: src_widget,
-    )
-    written: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 1000.0, get_upper=lambda: 99999.0,
-        get_page_size=lambda: 800.0,
-        set_value=lambda v: written.append(v),
-    )
-    grid = _jump_grid(rows, owner)
-    grid.scroller = SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj)
-    grid.grid_view = SimpleNamespace()
-    grid._bound_list_items = [src_li]
-    grid._cols = 4
-    grid._content_y_of = lambda w: GalleryGrid._content_y_of(grid, w)
-    grid._measure_row_heights = lambda s: GalleryGrid._measure_row_heights(grid, s)
-    grid._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(grid, v, val)
-    grid._load_more_until_next_header = (
-        lambda p: GalleryGrid._load_more_until_next_header(grid, p)
-    )
-
-    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
-    with patch.object(grid_mod.GLib, "idle_add", side_effect=lambda fn, **kw: None):
-        GalleryGrid._on_header_nav(grid, SimpleNamespace(_list_item=src_li), +1)
-
-    assert written, "the jump wrote no scroll position at all"
-    # Source at content-y 1000 sitting at screen-y 0; between it and the next
-    # header lie exactly two tile rows (the one the loader appended plus the
-    # one that followed the source), so the header is 2 * 200 px further down.
-    src_pos = pos["src"]
-    target_pos = rows.index(next(r for r in rows[src_pos + 1:] if r.is_header))
-    expected = 1000.0 + sum(
-        150.0 if rows[i].is_header else 200.0 for i in range(src_pos, target_pos)
-    )
-    assert written[-1] == pytest.approx(expected), (
-        f"jumped to {written[-1]}, but the next header is at {expected}"
-    )
-
-
-def test_find_adjacent_header_pos_walks_row_store() -> None:
-    """Pure scan helper: skip tile rows, return the first header in the
-    requested direction, or None at the boundary."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-    rows = [
-        GalleryRow.header("Mar"),
-        GalleryRow.from_tiles([]),
-        GalleryRow.from_tiles([]),
-        GalleryRow.header("Feb"),
-        GalleryRow.from_tiles([]),
-        GalleryRow.header("Jan"),
-    ]
-    store = SimpleNamespace(
-        get_n_items=lambda: len(rows),
-        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
-    )
-    fake = SimpleNamespace(row_store=store)
-    assert GalleryGrid._find_adjacent_header_pos(fake, 0, +1) == 3
-    assert GalleryGrid._find_adjacent_header_pos(fake, 3, -1) == 0
-    assert GalleryGrid._find_adjacent_header_pos(fake, 3, +1) == 5
-    assert GalleryGrid._find_adjacent_header_pos(fake, 5, +1) is None
-    assert GalleryGrid._find_adjacent_header_pos(fake, 0, -1) is None
-
-
-def test_header_nav_writes_vadjustment_once_for_pixel_perfect_jump() -> None:
-    """End-to-end behaviour of the rebuilt jump: measure source y → compute
-    target y by summing measured row heights → write vadjustment exactly
-    once. No scroll_to, no retry loop, no two-phase flicker."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-
-    # 3 headers (pos 0, 3, 5) with 2 tile rows between each.
-    rows = [
-        GalleryRow.header("Mar"),
-        GalleryRow.from_tiles([]),
-        GalleryRow.from_tiles([]),
-        GalleryRow.header("Feb"),
-        GalleryRow.from_tiles([]),
-        GalleryRow.header("Jan"),
-    ]
-    row_store = SimpleNamespace(
-        get_n_items=lambda: len(rows),
-        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
-    )
-    # Source header is at content_y=0, allocated_height=150.
-    src_bounds = SimpleNamespace(get_y=lambda: 0.0)
-    src_widget = SimpleNamespace(
-        compute_bounds=lambda _g: (True, src_bounds),
-        get_allocated_height=lambda: 150,
-    )
-    src_li = SimpleNamespace(
-        get_position=lambda: 0,
-        get_child=lambda: src_widget,
-    )
-    header_box = SimpleNamespace(_list_item=src_li)
-    # One bound tile-row that reports allocated_height=200 — that's what
-    # _measure_row_heights picks up for tile_h.
-    tile_li = SimpleNamespace(
-        get_item=lambda: rows[1],
-        get_child=lambda: SimpleNamespace(get_allocated_height=lambda: 200),
-    )
-    set_values: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 100.0, get_upper=lambda: 5000.0, get_page_size=lambda: 800.0,
-        set_value=lambda v: set_values.append(v),
-    )
-    fake = SimpleNamespace(
-        row_store=row_store,
-        scroller=SimpleNamespace(
-            get_width=lambda: 800, get_vadjustment=lambda: vadj,
-        ),
-        grid_view=SimpleNamespace(),
-        _bound_list_items=[src_li, tile_li],
-        _cols=4,
-    )
-    fake._find_adjacent_header_pos = lambda pos, d: GalleryGrid._find_adjacent_header_pos(fake, pos, d)
-    fake._content_y_of             = lambda w: GalleryGrid._content_y_of(fake, w)
-    fake._measure_row_heights      = lambda src: GalleryGrid._measure_row_heights(fake, src)
-    fake._set_vadj_clamped         = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-
-    # Down arrow from pos 0 → next header at pos 3.
-    # Heights 0..2: header(150) + tile(200) + tile(200) = 550.
-    # target_content_y = 0 + 550 = 550. target_screen_y = 0 - 100 = -100.
-    # new_vadj = 550 - (-100) = 650.
-    GalleryGrid._on_header_nav(fake, header_box, +1)
-    assert set_values == [650.0]
-
-
-def test_header_nav_falls_back_to_cell_size_when_no_tile_row_bound() -> None:
-    """If no tile row is currently bound (e.g. user navigates while only
-    a single header is on screen), tile_h falls back to scroller_width /
-    cols. Pin the fallback so a future refactor can't drop it and have
-    the jump silently underestimate when there are no tile rows visible."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-
-    rows = [
-        GalleryRow.header("Mar"),
-        GalleryRow.from_tiles([]),
-        GalleryRow.header("Feb"),
-    ]
-    row_store = SimpleNamespace(
-        get_n_items=lambda: len(rows),
-        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
-    )
-    src_widget = SimpleNamespace(
-        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 0.0)),
-        get_allocated_height=lambda: 150,
-    )
-    src_li = SimpleNamespace(get_position=lambda: 0, get_child=lambda: src_widget)
-    header_box = SimpleNamespace(_list_item=src_li)
-    set_values: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 0.0, get_upper=lambda: 10000.0, get_page_size=lambda: 800.0,
-        set_value=lambda v: set_values.append(v),
-    )
-    fake = SimpleNamespace(
-        row_store=row_store,
-        scroller=SimpleNamespace(
-            get_width=lambda: 800, get_vadjustment=lambda: vadj,
-        ),
-        grid_view=SimpleNamespace(),
-        _bound_list_items=[src_li],  # only the source header is bound
-        _cols=4,
-    )
-    fake._find_adjacent_header_pos = lambda pos, d: GalleryGrid._find_adjacent_header_pos(fake, pos, d)
-    fake._content_y_of             = lambda w: GalleryGrid._content_y_of(fake, w)
-    fake._measure_row_heights      = lambda src: GalleryGrid._measure_row_heights(fake, src)
-    fake._set_vadj_clamped         = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-
-    # Going from pos 0 to pos 2 (Mar → Feb), one tile row in between.
-    # tile_h fallback = 800 // 4 = 200. delta = 150 (header) + 200 (tile) = 350.
-    # target_content_y = 0 + 350 = 350. target_screen_y = 0 - 0 = 0.
-    # new_vadj = 350.
-    GalleryGrid._on_header_nav(fake, header_box, +1)
-    assert set_values == [350.0]
-
-
-def test_header_nav_clamps_at_boundaries() -> None:
-    """Jumping near the very top or bottom must not push vadjustment out
-    of range."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
-
-    rows = [GalleryRow.header("a"), GalleryRow.header("b")]
-    row_store = SimpleNamespace(
-        get_n_items=lambda: len(rows),
-        get_item=lambda i: rows[i] if 0 <= i < len(rows) else None,
-    )
-    src_widget = SimpleNamespace(
-        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 0.0)),
-        get_allocated_height=lambda: 150,
-    )
-    src_li = SimpleNamespace(get_position=lambda: 1, get_child=lambda: src_widget)
-    header_box = SimpleNamespace(_list_item=src_li)
-    set_values: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 500.0, get_upper=lambda: 1000.0, get_page_size=lambda: 400.0,
-        set_value=lambda v: set_values.append(v),
-    )
-    fake = SimpleNamespace(
-        row_store=row_store,
-        scroller=SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj),
-        grid_view=SimpleNamespace(),
-        _bound_list_items=[src_li],
-        _cols=4,
-    )
-    fake._find_adjacent_header_pos = lambda pos, d: GalleryGrid._find_adjacent_header_pos(fake, pos, d)
-    fake._content_y_of             = lambda w: GalleryGrid._content_y_of(fake, w)
-    fake._measure_row_heights      = lambda src: GalleryGrid._measure_row_heights(fake, src)
-    fake._set_vadj_clamped         = lambda v, val: GalleryGrid._set_vadj_clamped(fake, v, val)
-    # From pos 1, up arrow → pos 0. delta = -150 (header above).
-    # target_content_y = 0 + (-150) = -150. target_screen_y = 0 - 500 = -500.
-    # new_vadj = -150 - (-500) = 350. Within range [0, 600]: stays 350.
-    GalleryGrid._on_header_nav(fake, header_box, -1)
-    assert set_values == [350.0]
+    assert win.database.list_media_paginated.call_args.args[4] == 3400
+    assert win._window_start_offset == 3400
+    assert win._current_offset == 3600
+    assert win._has_more_items is True
 
 
 def test_date_header_nav_box_spacing_is_zero() -> None:
