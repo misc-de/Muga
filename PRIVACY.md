@@ -38,7 +38,10 @@ Muga follows the XDG base-dir spec
 | `~/.config/muga/mcp_tokens.json` | MCP access tokens, `0600`. Only present once you create one in *Settings → MCP*. |
 
 Muga only reads from the folders you point it at. It does not scan your whole
-home directory.
+home directory, and it does not descend into hidden directories — `.cache`,
+`.local`, a Flatpak build tree next to a checkout — so the icons and assets
+those hold never turn up as pictures. A hidden folder you pick as a media
+location yourself is still scanned; only descending into one is refused.
 
 ---
 
