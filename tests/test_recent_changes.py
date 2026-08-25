@@ -1909,107 +1909,243 @@ def _jump_grid(rows, owner):
     return grid
 
 
-def test_pulling_pages_for_a_jump_holds_the_front_eviction() -> None:
-    """The loop that pulls pages until the next header shows up must run with
-    eviction held: an append never moves an existing row, a front-splice moves
-    all of them, and the caller is holding a position from before the loop."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
+def _deferred_grid(rows, owner, **extra):
+    from muga.gallery_grid import GalleryGrid
 
-    rows = [GalleryRow.header("Mar"), *[GalleryRow.from_tiles([]) for _ in range(5)]]
-    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False)
-    suppressed_during_load = []
+    grid = SimpleNamespace(
+        row_store=_jump_store(rows),
+        owner=owner,
+        _jump_state=None,
+        _bound_list_items=[],
+        pull_revealer=SimpleNamespace(revealed=[], set_reveal_child=None),
+        grid_view=SimpleNamespace(scrolled=[], scroll_to=None),
+        _evict_after_jump=lambda: False,
+    )
+    grid.pull_revealer.set_reveal_child = grid.pull_revealer.revealed.append
+    grid.grid_view.scroll_to = (
+        lambda pos, flags, s: grid.grid_view.scrolled.append(pos)
+    )
+    grid._find_adjacent_header_pos = (
+        lambda pos, d: GalleryGrid._find_adjacent_header_pos(grid, pos, d)
+    )
+    for name, value in extra.items():
+        setattr(grid, name, value)
+    for name in ("_begin_deferred_jump", "_jump_load_step", "_jump_align_step",
+                 "_jump_settle_step", "_end_deferred_jump"):
+        if name in extra:
+            continue
+        setattr(grid, name, getattr(GalleryGrid, name).__get__(grid, SimpleNamespace))
+    return grid
 
-    def loader():
-        suppressed_during_load.append(owner._suppress_front_eviction)
-        rows.extend([GalleryRow.from_tiles([]), GalleryRow.header("Feb")])
-        if not owner._suppress_front_eviction:
-            del rows[:3]  # what the sliding window would do
 
-    owner._load_more_items = loader
-    grid = _jump_grid(rows, owner)
-
-    found = GalleryGrid._load_more_until_next_header(grid, 0)
-
-    assert suppressed_during_load == [True]
-    assert found is not None
-    assert rows[found].is_header and rows[found].header_text == "Feb"
-    assert rows[0].header_text == "Mar", "the front was trimmed under the jump"
+def _li(position, child=None):
+    return SimpleNamespace(get_position=lambda: position, get_child=lambda: child)
 
 
-def test_the_eviction_hold_is_released_and_paid_back() -> None:
-    """Held, not skipped. The window still has to come back under its cap, or
-    repeated jumps grow the store until the list view crawls — which is what
-    the cap was added for in the first place."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
+def test_a_jump_to_an_unloaded_month_waits_behind_a_spinner() -> None:
+    """Pulling the next month in takes pages and frames. Measuring against a
+    list that has not caught up is what left the jump mid-collection, and
+    doing it in one synchronous burst froze the window while it happened."""
+    from muga.gallery_grid import GalleryRow
 
     rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([])]
-    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False)
-
-    def loader():
-        rows.append(GalleryRow.header("Feb"))
-
-    owner._load_more_items = loader
-    grid = _jump_grid(rows, owner)
+    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False,
+                            _load_more_items=lambda: None)
+    grid = _deferred_grid(rows, owner)
 
     scheduled = []
     grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
     with patch.object(grid_mod.GLib, "idle_add",
-                      side_effect=lambda fn, **kw: scheduled.append(fn)):
-        GalleryGrid._load_more_until_next_header(grid, 0)
+                      side_effect=lambda fn, *a, **kw: scheduled.append(fn)):
+        grid._begin_deferred_jump(_li(0), 12.0)
+
+    assert grid.pull_revealer.revealed == [True], "no spinner while it loads"
+    assert owner._suppress_front_eviction is True
+    assert scheduled == [grid._jump_load_step]
+    assert grid._jump_state["screen_y"] == 12.0
+
+
+def test_the_deferred_jump_loads_one_page_per_turn() -> None:
+    """One page per turn of the main loop — that is what keeps the spinner
+    spinning and the window answering while a long month is pulled in."""
+    from muga.gallery_grid import GalleryRow
+
+    rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([])]
+    loads = []
+
+    def loader():
+        loads.append(1)
+        rows.append(GalleryRow.from_tiles([]))
+
+    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=True,
+                            _load_more_items=loader)
+    grid = _deferred_grid(rows, owner)
+    grid._jump_state = {"list_item": _li(0), "screen_y": 0.0, "pages": 0, "tries": 0}
+
+    assert grid._jump_load_step() is True, "it stopped after one page"
+    assert loads == [1]
+    assert grid._jump_state["pages"] == 1
+
+
+def test_the_deferred_jump_stops_loading_once_the_month_appears() -> None:
+    from muga.gallery_grid import GalleryRow
+
+    rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([]), GalleryRow.header("Feb")]
+    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=True,
+                            _load_more_items=MagicMock())
+    grid = _deferred_grid(rows, owner)
+    grid._jump_state = {"list_item": _li(0), "screen_y": 0.0, "pages": 0, "tries": 0}
+
+    scheduled = []
+    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
+    with patch.object(grid_mod.GLib, "idle_add",
+                      side_effect=lambda fn, *a, **kw: scheduled.append((fn, a))):
+        assert grid._jump_load_step() is False
+
+    owner._load_more_items.assert_not_called()
+    assert scheduled == [(grid._jump_align_step, (2,))]
+
+
+def test_the_deferred_jump_gives_up_at_the_page_cap() -> None:
+    """A library that is all one month must not load itself into memory whole."""
+    from muga.gallery_grid import GalleryRow, _JUMP_MAX_PAGES
+
+    rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([])]
+    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=True,
+                            _load_more_items=MagicMock())
+    grid = _deferred_grid(rows, owner)
+    grid._jump_state = {"list_item": _li(0), "screen_y": 0.0,
+                        "pages": _JUMP_MAX_PAGES, "tries": 0}
+
+    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
+    with patch.object(grid_mod.GLib, "idle_add", side_effect=lambda fn, *a, **kw: None):
+        assert grid._jump_load_step() is False
+
+    owner._load_more_items.assert_not_called()
+    assert grid._jump_state is None
+    assert grid.pull_revealer.revealed == [False]
+
+
+def test_the_deferred_jump_lands_on_measured_geometry() -> None:
+    """The last write comes off the target row's real content Y, not off a
+    row-height estimate multiplied by the distance — so nothing accumulates
+    however far the jump goes."""
+    from muga.gallery_grid import GalleryGrid, GalleryRow
+
+    rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([]), GalleryRow.header("Feb")]
+    owner = SimpleNamespace(_has_more_items=False, _suppress_front_eviction=True,
+                            _load_more_items=MagicMock())
+    target_widget = SimpleNamespace(
+        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 9000.0)),
+    )
+    written = []
+    grid = _deferred_grid(
+        rows, owner,
+        scroller=SimpleNamespace(get_vadjustment=lambda: SimpleNamespace(
+            get_value=lambda: 40000.0, get_upper=lambda: 999999.0,
+            get_page_size=lambda: 800.0, set_value=written.append,
+        )),
+    )
+    grid._bound_list_items = [_li(2, target_widget)]
+    grid._content_y_of = lambda w: GalleryGrid._content_y_of(grid, w)
+    grid._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(grid, v, val)
+    grid._jump_state = {"list_item": _li(0), "screen_y": 120.0, "pages": 1, "tries": 0}
+
+    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
+    with patch.object(grid_mod.GLib, "idle_add", side_effect=lambda fn, *a, **kw: None):
+        assert grid._jump_settle_step(2) is False
+
+    # _content_y_of reports a VIEWPORT position, so the write is relative:
+    # scroll on by however far the target still is from where it belongs.
+    # Reading it as a content Y instead put a measured jump 142,000 px from
+    # the row it had just found.
+    assert written == [40000.0 + 9000.0 - 120.0]
+    assert grid._jump_state is None
+
+
+def test_the_deferred_jump_waits_for_the_target_to_be_bound() -> None:
+    """scroll_to only asks; the row is bound a frame or two later, and the
+    measurement needs it. When it never turns up, the row-height model places
+    the jump rather than leaving it where scroll_to stopped — which is
+    against the bottom edge, not where a jump belongs."""
+    from muga.gallery_grid import GalleryRow, _JUMP_SETTLE_TRIES
+
+    rows = [GalleryRow.header("Mar"), GalleryRow.header("Feb")]
+    owner = SimpleNamespace(_suppress_front_eviction=True)
+    written = []
+    grid = _deferred_grid(
+        rows, owner,
+        _estimate_content_y=lambda pos: 4321.0,
+        scroller=SimpleNamespace(get_vadjustment=lambda: SimpleNamespace(
+            get_value=lambda: 0.0, get_upper=lambda: 99999.0,
+            get_page_size=lambda: 800.0, set_value=written.append,
+        )),
+    )
+    grid._set_vadj_clamped = (
+        lambda v, val: __import__("muga.gallery_grid", fromlist=["GalleryGrid"])
+        .GalleryGrid._set_vadj_clamped(grid, v, val)
+    )
+    grid._jump_state = {"list_item": _li(0), "screen_y": 100.0, "pages": 1, "tries": 0}
+
+    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
+    with patch.object(grid_mod.GLib, "idle_add", side_effect=lambda fn, *a, **kw: None):
+        for _ in range(_JUMP_SETTLE_TRIES):
+            assert grid._jump_settle_step(1) is True
+        assert grid._jump_settle_step(1) is False   # settles rather than spin
+    assert written == [4321.0 - 100.0]
+    assert grid._jump_state is None
+
+
+def test_the_deferred_jump_releases_the_eviction_hold_and_pays_it_back() -> None:
+    """Held for the length of the jump, not skipped: the window still has to
+    come back under its cap, or repeated jumps grow the store until the list
+    view crawls."""
+    owner = SimpleNamespace(_suppress_front_eviction=True)
+    grid = _deferred_grid([], owner)
+    grid._jump_state = {"list_item": _li(0), "screen_y": 0.0, "pages": 1, "tries": 0}
+
+    scheduled = []
+    grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
+    with patch.object(grid_mod.GLib, "idle_add",
+                      side_effect=lambda fn, *a, **kw: scheduled.append(fn)):
+        grid._end_deferred_jump()
 
     assert owner._suppress_front_eviction is False
-    assert grid._evict_after_jump in scheduled, "the held eviction was never paid back"
+    assert grid.pull_revealer.revealed == [False]
+    assert grid._evict_after_jump in scheduled
 
 
-def test_evict_after_jump_runs_the_owners_eviction() -> None:
-    from muga.gallery_grid import GalleryGrid
+def test_a_jump_within_the_loaded_months_does_not_defer() -> None:
+    """The common case stays a single write with no spinner and no waiting."""
+    from muga.gallery_grid import GalleryGrid, GalleryRow
 
-    owner = SimpleNamespace(_evict_window_front_if_needed=MagicMock())
-    grid = SimpleNamespace(owner=owner)
-    GalleryGrid._evict_after_jump(grid)
-    owner._evict_window_front_if_needed.assert_called_once()
-
-
-def test_front_eviction_stands_down_while_a_jump_measures() -> None:
-    """The other side of the same contract, at the evictor."""
-    from muga.gallery_render import GalleryRenderMixin
-
-    win = SimpleNamespace(
-        _suppress_front_eviction=True,
-        current_items=list(range(4000)),
-        _MAX_LOADED_ITEMS=1500,
-        _page_size=200,
-        gallery_grid=SimpleNamespace(row_store=MagicMock(), evict_front_rows=MagicMock()),
+    rows = [GalleryRow.header("Mar"), GalleryRow.from_tiles([]), GalleryRow.header("Feb")]
+    src_widget = SimpleNamespace(
+        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 0.0)),
+        get_allocated_height=lambda: 150,
     )
-    GalleryRenderMixin._evict_window_front_if_needed(win)
-    win.gallery_grid.evict_front_rows.assert_not_called()
-    assert len(win.current_items) == 4000
-
-
-def test_front_eviction_still_trims_when_no_jump_is_running() -> None:
-    """...and it must not become a permanent stand-down."""
-    from muga.gallery_grid import GalleryRow
-    from muga.gallery_render import GalleryRenderMixin
-
-    rows = [GalleryRow.header("Mar")]
-    for _ in range(40):
-        row = GalleryRow.from_tiles([])
-        row.tiles = [object()] * 100
-        rows.append(row)
-    rows.append(GalleryRow.header("Feb"))
-    win = SimpleNamespace(
-        _suppress_front_eviction=False,
-        current_items=list(range(4000)),
-        _MAX_LOADED_ITEMS=1500,
-        _page_size=200,
-        _window_start_offset=0,
-        gallery_grid=SimpleNamespace(
-            row_store=_jump_store(rows),
-            evict_front_rows=MagicMock(),
-        ),
+    src_li = _li(0, src_widget)
+    written = []
+    grid = _deferred_grid(
+        rows, SimpleNamespace(),
+        scroller=SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: SimpleNamespace(
+            get_value=lambda: 0.0, get_upper=lambda: 9999.0,
+            get_page_size=lambda: 800.0, set_value=written.append,
+        )),
+        _cols=4,
+        _begin_deferred_jump=MagicMock(),
     )
-    GalleryRenderMixin._evict_window_front_if_needed(win)
-    win.gallery_grid.evict_front_rows.assert_called_once()
+    grid._bound_list_items = [src_li]
+    grid._content_y_of = lambda w: GalleryGrid._content_y_of(grid, w)
+    grid._measure_row_heights = lambda w: GalleryGrid._measure_row_heights(grid, w)
+    grid._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(grid, v, val)
+
+    GalleryGrid._on_header_nav(grid, SimpleNamespace(_list_item=src_li), +1)
+
+    grid._begin_deferred_jump.assert_not_called()
+    assert grid.grid_view.scrolled == []
+    assert grid.pull_revealer.revealed == []
+    assert written, "the fast path wrote no position"
 
 
 def _long_month_store(rows_in_month: int, tiles_per_row: int = 6):
@@ -2087,70 +2223,44 @@ def test_eviction_still_prefers_to_leave_a_header_on_top() -> None:
     assert rows[21].is_header
 
 
-def test_a_jump_re_reads_its_positions_after_pulling_pages() -> None:
-    """Belt to the hold's braces: whatever else may splice the front, the
-    source and target positions are both re-read from the live store before
-    the delta between them is measured. Here the loader trims regardless, and
-    the jump still has to land on the header that follows the source row —
-    not on whatever ended up at the stale index."""
-    from muga.gallery_grid import GalleryGrid, GalleryRow
+def test_the_deferred_jump_re_reads_the_source_position_every_turn() -> None:
+    """Positions are read fresh each turn rather than carried across the
+    load. Eviction is held, so nothing should renumber them — but a source
+    position captured once and reused is precisely how a jump ended up
+    measuring against a list that had moved underneath it."""
+    from muga.gallery_grid import GalleryRow
 
     src = GalleryRow.header("Mar")
-    rows = [*[GalleryRow.from_tiles([]) for _ in range(4)], src,
-            *[GalleryRow.from_tiles([]) for _ in range(4)]]
-    pos = {"src": rows.index(src)}
-    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=False)
+    rows = [GalleryRow.from_tiles([]), src, GalleryRow.from_tiles([])]
+    pos = {"src": 1}
 
     def loader():
-        rows.extend([GalleryRow.from_tiles([]), GalleryRow.header("Feb")])
-        del rows[:4]                      # front-splice, whatever the hold says
-        pos["src"] = rows.index(src)      # GTK renumbers the bound list item
-        owner._has_more_items = False
+        rows.append(GalleryRow.header("Feb"))
+        del rows[:1]                    # something splices the front anyway
+        pos["src"] = rows.index(src)    # GTK renumbers the bound list item
+        owner._current_offset += 200
 
+    owner = SimpleNamespace(_has_more_items=True, _suppress_front_eviction=True,
+                            _current_offset=0)
     owner._load_more_items = loader
+    grid = _deferred_grid(rows, owner)
+    grid._jump_state = {
+        "list_item": SimpleNamespace(get_position=lambda: pos["src"],
+                                     get_child=lambda: None),
+        "screen_y": 0.0, "pages": 0, "tries": 0,
+    }
 
-    src_widget = SimpleNamespace(
-        compute_bounds=lambda _g: (True, SimpleNamespace(get_y=lambda: 1000.0)),
-        get_allocated_height=lambda: 150,
-    )
-    src_li = SimpleNamespace(
-        get_position=lambda: pos["src"],
-        get_child=lambda: src_widget,
-    )
-    written: list[float] = []
-    vadj = SimpleNamespace(
-        get_value=lambda: 1000.0, get_upper=lambda: 99999.0,
-        get_page_size=lambda: 800.0,
-        set_value=lambda v: written.append(v),
-    )
-    grid = _jump_grid(rows, owner)
-    grid.scroller = SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj)
-    grid.grid_view = SimpleNamespace()
-    grid._bound_list_items = [src_li]
-    grid._cols = 4
-    grid._content_y_of = lambda w: GalleryGrid._content_y_of(grid, w)
-    grid._measure_row_heights = lambda s: GalleryGrid._measure_row_heights(grid, s)
-    grid._set_vadj_clamped = lambda v, val: GalleryGrid._set_vadj_clamped(grid, v, val)
-    grid._load_more_until_next_header = (
-        lambda p: GalleryGrid._load_more_until_next_header(grid, p)
-    )
-
+    scheduled = []
     grid_mod = __import__("muga.gallery_grid", fromlist=["GLib"])
-    with patch.object(grid_mod.GLib, "idle_add", side_effect=lambda fn, **kw: None):
-        GalleryGrid._on_header_nav(grid, SimpleNamespace(_list_item=src_li), +1)
+    with patch.object(grid_mod.GLib, "idle_add",
+                      side_effect=lambda fn, *a, **kw: scheduled.append((fn, a))):
+        assert grid._jump_load_step() is True     # loads one page
+        assert grid._jump_load_step() is False    # finds the header, hands off
 
-    assert written, "the jump wrote no scroll position at all"
-    # Source at content-y 1000 sitting at screen-y 0; between it and the next
-    # header lie exactly two tile rows (the one the loader appended plus the
-    # one that followed the source), so the header is 2 * 200 px further down.
-    src_pos = pos["src"]
-    target_pos = rows.index(next(r for r in rows[src_pos + 1:] if r.is_header))
-    expected = 1000.0 + sum(
-        150.0 if rows[i].is_header else 200.0 for i in range(src_pos, target_pos)
-    )
-    assert written[-1] == pytest.approx(expected), (
-        f"jumped to {written[-1]}, but the next header is at {expected}"
-    )
+    assert scheduled, "the jump never went on to align"
+    target = scheduled[-1][1][0]
+    assert rows[target].is_header and rows[target].header_text == "Feb"
+    assert target > pos["src"], "the target is not even after the source"
 
 
 def test_find_adjacent_header_pos_walks_row_store() -> None:
@@ -2220,6 +2330,7 @@ def test_header_nav_writes_vadjustment_once_for_pixel_perfect_jump() -> None:
     )
     fake = SimpleNamespace(
         row_store=row_store,
+        _jump_state=None,
         scroller=SimpleNamespace(
             get_width=lambda: 800, get_vadjustment=lambda: vadj,
         ),
@@ -2269,6 +2380,7 @@ def test_header_nav_falls_back_to_cell_size_when_no_tile_row_bound() -> None:
     )
     fake = SimpleNamespace(
         row_store=row_store,
+        _jump_state=None,
         scroller=SimpleNamespace(
             get_width=lambda: 800, get_vadjustment=lambda: vadj,
         ),
@@ -2312,6 +2424,7 @@ def test_header_nav_clamps_at_boundaries() -> None:
     )
     fake = SimpleNamespace(
         row_store=row_store,
+        _jump_state=None,
         scroller=SimpleNamespace(get_width=lambda: 800, get_vadjustment=lambda: vadj),
         grid_view=SimpleNamespace(),
         _bound_list_items=[src_li],
