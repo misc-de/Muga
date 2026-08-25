@@ -69,6 +69,14 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.11" date="2026-08-25">
+      <description>
+        <p>Withdraws the change 0.5.10 made to the month jump. It jumped
+        before the photos it was jumping over had loaded and missed the month
+        it was aiming for. The jump behaves as it did in 0.5.9 again, which
+        still falls short inside very long months.</p>
+      </description>
+    </release>
     <release version="0.5.10" date="2026-08-25">
       <description>
         <p>Jumping to the next month works from inside a long month too. Where
