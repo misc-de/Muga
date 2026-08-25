@@ -26,12 +26,15 @@ import json
 import os
 import shutil
 import sqlite3
+import tempfile
 import threading
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from tests.conftest import requires_offscreen_raster
 
 
 # ---------------------------------------------------------------------------
@@ -1099,4 +1102,95 @@ def test_the_documented_runtime_matches_the_one_that_is_built() -> None:
     makefile = (root / "Makefile").read_text(encoding="utf-8")
     assert "$(FP_RUNTIME)" in makefile and "/49" not in makefile, (
         "the Makefile still names a runtime branch of its own"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 13.  Bundled symbolic icons must not render as a solid block
+# ---------------------------------------------------------------------------
+#
+# flash-on-symbolic.svg was exported from Inkscape with a 16x16
+# <rect style="fill:none"/> as its bounding box. GTK renders a symbolic icon by
+# prepending a stylesheet that sets `fill: <colour> !important` on
+# rect/circle/path/polygon/polyline — the !important beat the rect's own
+# fill:none, the box was painted solid, and the camera's flash button showed a
+# filled square instead of a bolt. Invisible on this desktop, where the system
+# icon theme has a flash-on-symbolic of its own that wins the lookup; on a
+# phone without one, the bundled file is what gets drawn.
+
+_ICON_DIR = Path(__file__).resolve().parent.parent / "muga" / "data" / "icons"
+_SYMBOLIC_DIR = _ICON_DIR / "hicolor" / "symbolic" / "apps"
+
+
+def _bundled_symbolic_icons() -> list[Path]:
+    return sorted(_SYMBOLIC_DIR.glob("*-symbolic.svg"))
+
+
+def test_there_are_bundled_symbolic_icons_to_check() -> None:
+    """Guard for the two tests below: a glob that quietly matches nothing would
+    let them pass while checking no icon at all."""
+    assert _bundled_symbolic_icons(), f"no symbolic icons under {_SYMBOLIC_DIR}"
+
+
+@pytest.mark.parametrize("icon", _bundled_symbolic_icons(), ids=lambda p: p.stem)
+def test_a_bundled_icon_declares_no_fill_gtk_will_override(icon: Path) -> None:
+    """`fill:none` on a shape is not a way to hide it here — GTK overrides it
+    with !important. A shape that should not be painted has to be absent."""
+    import re
+
+    body = icon.read_text(encoding="utf-8")
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
+    shapes = re.findall(r"<(?:rect|circle|path|polygon|polyline)\b[^>]*>", body, re.S)
+    offenders = [s for s in shapes if re.search(r"fill\s*[:=]\s*[\"']?none", s)]
+    assert not offenders, (
+        f"{icon.name} hides a shape with fill:none, which GTK paints anyway:\n"
+        + "\n".join(offenders)
+    )
+
+
+@requires_offscreen_raster
+@pytest.mark.parametrize("icon", _bundled_symbolic_icons(), ids=lambda p: p.stem)
+def test_a_bundled_icon_does_not_render_as_a_solid_block(icon: Path) -> None:
+    """The check that actually catches it, whatever the cause: draw the icon
+    through GTK's symbolic path and refuse a glyph that covers everything.
+    A real one covers well under half its box — the broken flash icon covered
+    100%, the sound ones here 38% and 55%."""
+    import gi
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gsk", "4.0")
+    from gi.repository import Gdk, Gio, Gsk, Gtk
+    from PIL import Image
+
+    # Straight from the file, not through IconTheme: a theme lookup keeps the
+    # system search paths even on a freshly constructed one, and a desktop that
+    # ships an icon of the same name wins it — this test would then be checking
+    # /usr/share/icons instead of what Muga installs. GTK still takes the
+    # symbolic path, which it decides from the -symbolic suffix.
+    paintable = Gtk.IconPaintable.new_for_file(
+        Gio.File.new_for_path(str(icon)), 128, 1,
+    )
+    assert paintable.get_file().get_path() == str(icon)
+
+    snapshot = Gtk.Snapshot()
+    white = Gdk.RGBA()
+    white.parse("white")
+    paintable.snapshot_symbolic(snapshot, 128, 128, [white])
+    renderer = Gsk.CairoRenderer.new()
+    renderer.realize(None)
+    try:
+        out = Path(tempfile.mkdtemp()) / "icon.png"
+        renderer.render_texture(snapshot.to_node(), None).save_to_png(str(out))
+    finally:
+        renderer.unrealize()
+
+    image = Image.open(out).convert("RGBA")
+    pixels = image.load()
+    width, height = image.size
+    opaque = sum(
+        1 for y in range(height) for x in range(width) if pixels[x, y][3] > 200
+    )
+    coverage = opaque / (width * height)
+    assert coverage < 0.9, (
+        f"{icon.name} covers {coverage:.0%} of its box — that is a filled shape, "
+        "not a glyph"
     )
