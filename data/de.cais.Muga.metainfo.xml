@@ -69,6 +69,16 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.12" date="2026-08-25">
+      <description>
+        <p>The month arrows in the date view now open the gallery at the month
+        they point to, however large the collection and however long the month
+        you are in. They used to scroll towards it and could stop short,
+        leaving you in the middle of a month with no arrow in reach.</p>
+        <p>The month you jump to becomes the top of the list. Scrolling up past
+        it is not possible yet — the arrow up is the way back.</p>
+      </description>
+    </release>
     <release version="0.5.11" date="2026-08-25">
       <description>
         <p>Withdraws the change 0.5.10 made to the month jump. It jumped
