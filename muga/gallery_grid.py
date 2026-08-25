@@ -294,6 +294,22 @@ class GalleryGrid(Gtk.Overlay):
     def get_vadjustment(self) -> Gtk.Adjustment:
         return self.scroller.get_vadjustment()
 
+    def scroll_to_top(self) -> None:
+        """Put the first row back under the viewport.
+
+        Setting the adjustment on its own does not hold. After the store is
+        cleared and refilled, ListView re-anchors itself during the next
+        allocation and drags the position along — measured, it landed at the
+        very END of the list, so a "back to the top" written as set_value(0)
+        was overwritten a frame later by a jump to the bottom. scroll_to() is
+        that same anchoring mechanism rather than a fight with it, so it
+        survives the allocation; the set_value after it covers the empty
+        store, where there is no row 0 to anchor to.
+        """
+        if self.row_store.get_n_items() > 0:
+            self.grid_view.scroll_to(0, Gtk.ListScrollFlags.NONE, None)
+        self.scroller.get_vadjustment().set_value(0.0)
+
     def _invalidate_thumb_caches(self, thumb_path: str) -> None:
         """Forget every cached decision about *thumb_path* so the next bind
         re-checks disk and re-decodes. Called when a fresh thumbnail arrives
@@ -499,7 +515,17 @@ class GalleryGrid(Gtk.Overlay):
         # or there's nothing left in the database. Capped so a pathological
         # "every file is the same month" dataset can't lock up the UI.
         if target_pos is None and direction > 0:
-            target_pos = self._load_more_until_next_header(current_pos)
+            if self._load_more_until_next_header(current_pos) is None:
+                return
+            # Re-derive both positions from the live store rather than trust
+            # the ones captured before the load. Anything that splices the
+            # front renumbers every row, and a target read in one index space
+            # against a source read in another is how a jump ends up
+            # thousands of pixels away from any header at all.
+            current_pos = list_item.get_position()
+            if current_pos >= self.row_store.get_n_items():
+                return  # the source row itself was evicted — nothing to measure from
+            target_pos = self._find_adjacent_header_pos(current_pos, +1)
         if target_pos is None:
             return
         src_widget = list_item.get_child()
@@ -526,6 +552,16 @@ class GalleryGrid(Gtk.Overlay):
 
         target_content_y = src_y + delta
         self._set_vadj_clamped(vadj, target_content_y - target_screen_y)
+
+    def _evict_after_jump(self) -> bool:
+        owner = getattr(self, "owner", None)
+        evict = getattr(owner, "_evict_window_front_if_needed", None)
+        if evict is not None:
+            try:
+                evict()
+            except Exception:
+                LOGGER.debug("post-jump eviction failed", exc_info=True)
+        return GLib.SOURCE_REMOVE
 
     def _measure_row_heights(self, src_widget: Gtk.Widget) -> tuple[float, float]:
         """Return measured (header_h, tile_h) from currently-bound widgets.
@@ -578,21 +614,41 @@ class GalleryGrid(Gtk.Overlay):
         loader = getattr(owner, "_load_more_items", None)
         if loader is None:
             return None
+        # Hold the sliding window's front-eviction for the whole loop. It
+        # splices rows off the FRONT of the store, so every position after it
+        # means something different — including current_pos, which was read
+        # before the first page was pulled, and the position this returns.
+        # Appends on their own never move an existing row, so with eviction
+        # held the two stay comparable. Measured before this: one jump that
+        # happened to cross the cap moved the view 41,000 px the wrong way.
         max_pages = 32
-        for _ in range(max_pages):
-            if not getattr(owner, "_has_more_items", False):
-                return None
-            before = self.row_store.get_n_items()
-            loader()
-            after = self.row_store.get_n_items()
-            if after == before:
-                # Loader bailed (in-flight guard, empty page, …) — give up
-                # rather than spin.
-                return None
-            found = self._find_adjacent_header_pos(current_pos, +1)
-            if found is not None:
-                return found
-        return None
+        had_suppression = getattr(owner, "_suppress_front_eviction", False)
+        setattr(owner, "_suppress_front_eviction", True)
+        try:
+            for _ in range(max_pages):
+                if not getattr(owner, "_has_more_items", False):
+                    return None
+                before = self.row_store.get_n_items()
+                loader()
+                after = self.row_store.get_n_items()
+                if after == before:
+                    # Loader bailed (in-flight guard, empty page, …) — give up
+                    # rather than spin.
+                    return None
+                found = self._find_adjacent_header_pos(current_pos, +1)
+                if found is not None:
+                    return found
+            return None
+        finally:
+            setattr(owner, "_suppress_front_eviction", had_suppression)
+            if not had_suppression:
+                # Pay back the eviction we held off. On an idle, and only
+                # once the caller's single vadjustment write has landed:
+                # splicing rows out from under a position that has not been
+                # through an allocation yet would race ListView's own
+                # anchoring, which is what keeps the visible row steady
+                # across a front-eviction in the first place.
+                GLib.idle_add(self._evict_after_jump, priority=GLib.PRIORITY_LOW)
 
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header

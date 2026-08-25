@@ -64,6 +64,7 @@ class GalleryRenderMixin:
     _has_more_items: bool
     _window_start_offset: int
     _MAX_LOADED_ITEMS: int
+    _suppress_front_eviction: bool
     _last_render_key: tuple[str, str | None] | None
     _date_last_key: tuple[int, int] | None
     _lazy_loading_attached: bool
@@ -109,6 +110,12 @@ class GalleryRenderMixin:
         )
         self._last_render_key = render_key
 
+        if reset_scroll:
+            # BEFORE the store is emptied: ListView re-anchors on the item it
+            # was showing, so the position has to be moved while that item
+            # still exists. Doing it afterwards is what left the grid at the
+            # bottom of the list.
+            self.gallery_grid.scroll_to_top()
         self.gallery_grid.clear()
         self.current_items = []
         self._current_offset = 0
@@ -136,12 +143,11 @@ class GalleryRenderMixin:
         self.gallery_grid.finish()
 
         if reset_scroll:
-            # Clearing the grid collapses the adjustment to 0 on its own, but
-            # only once GTK has re-measured. Say it outright on the same idle
-            # the restore path uses, so "back to the top" doesn't depend on
-            # when that lands.
             def _to_top() -> bool:
-                vadj.set_value(0.0)
+                # Through the grid rather than straight at the adjustment:
+                # see GalleryGrid.scroll_to_top for why a bare set_value(0)
+                # gets overwritten by ListView's own re-anchoring.
+                self.gallery_grid.scroll_to_top()
                 return GLib.SOURCE_REMOVE
             GLib.idle_add(_to_top, priority=GLib.PRIORITY_HIGH_IDLE)
         elif saved_pos > 0:
@@ -457,6 +463,11 @@ class GalleryRenderMixin:
         shows nothing further. That's an accepted trade-off until the
         symmetric path lands.
         """
+        if self._suppress_front_eviction:
+            # A month-jump is pulling pages and doing arithmetic on row
+            # positions; splicing the front would renumber them underneath it.
+            # It runs this again itself once its scroll has landed.
+            return
         if len(self.current_items) <= self._MAX_LOADED_ITEMS:
             return
         target_remaining = max(self._page_size, self._MAX_LOADED_ITEMS // 2)

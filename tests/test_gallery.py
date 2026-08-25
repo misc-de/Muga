@@ -721,6 +721,74 @@ def _render_with_fake_scroll(window, pump, position, **kwargs):
     return vadj
 
 
+def _realised(window, pump, timeout_s: float = 3.0):
+    """Show the window and wait until its adjustment describes real content.
+
+    The tests below need a scroll position that exists. An unrealised window
+    reports upper == page_size == 0, so set_value is clamped to 0 and every
+    assertion about scrolling passes for the wrong reason — which is exactly
+    how a grid that jumped to the BOTTOM on "back to the top" got through
+    round after round of green tests.
+    """
+    import time
+
+    window.set_default_size(800, 600)
+    window.present()
+    vadj = window.gallery_grid.get_vadjustment()
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        pump()
+        if vadj.get_page_size() > 0 and vadj.get_upper() > vadj.get_page_size():
+            return vadj
+        time.sleep(0.02)
+    pytest.skip("window never got a real allocation in this environment")
+
+
+def _settle(pump, rounds: int = 10) -> None:
+    """Let the frame clock run: the position under test is decided during
+    allocation, one or more frames after the render call returns."""
+    import time
+
+    for _ in range(rounds):
+        pump()
+        time.sleep(0.02)
+    pump()
+
+
+@requires_display
+def test_a_reset_render_really_lands_at_the_top(seeded_window, pump) -> None:
+    """Measured on a realised window, because this is where it went wrong.
+    ListView re-anchors on the item it was showing when the store changes
+    underneath it, and after a clear+refill that anchor resolved to the END
+    of the list: a "back to the top" written as set_value(0) was overwritten
+    a frame later by a jump to the bottom. The position has to move while
+    the item it is anchored to still exists — i.e. before the clear."""
+    _seed(seeded_window, 500)
+    seeded_window._render()
+    vadj = _realised(seeded_window, pump)
+
+    vadj.set_value(4000.0)
+    assert vadj.get_value() > 0, "the scroll position under test never took"
+
+    seeded_window._render(reset_scroll=True)
+    _settle(pump)
+    assert vadj.get_value() == 0.0
+
+
+@requires_display
+def test_a_plain_render_still_holds_its_place(seeded_window, pump) -> None:
+    """The other half of the rule: a rescan re-renders the same view and
+    must not throw the position away."""
+    _seed(seeded_window, 500)
+    seeded_window._render()
+    vadj = _realised(seeded_window, pump)
+
+    vadj.set_value(4000.0)
+    seeded_window._render()
+    _settle(pump)
+    assert vadj.get_value() > 0.0
+
+
 @requires_display
 def test_render_comes_back_to_where_it_was(seeded_window, pump) -> None:
     """The rule reset_scroll is the exception to."""
@@ -730,14 +798,24 @@ def test_render_comes_back_to_where_it_was(seeded_window, pump) -> None:
 
 
 @requires_display
-def test_render_with_reset_scroll_goes_back_to_the_top(seeded_window, pump) -> None:
+def test_render_with_reset_scroll_asks_the_grid_for_the_top(seeded_window, pump) -> None:
     """Re-tapping the tab you are already on reloads the view from the start.
-    Without this the rebuilt grid returns to the same offset and the tap
-    leaves the screen looking untouched — the whole reason the tap felt
-    like it had done nothing."""
+    It goes through the grid rather than at the adjustment, and it goes there
+    BEFORE the store is cleared — see GalleryGrid.scroll_to_top. What is
+    pinned here is that ordering; that it actually arrives at the top is
+    measured on a realised window in
+    test_a_reset_render_really_lands_at_the_top."""
     _seed(seeded_window, 500)
-    vadj = _render_with_fake_scroll(seeded_window, pump, 1200.0, reset_scroll=True)
-    vadj.set_value.assert_called_once_with(0.0)
+    seeded_window._render()
+    pump()
+    order = []
+    with patch.object(type(seeded_window.gallery_grid), "scroll_to_top",
+                      side_effect=lambda: order.append("top")), \
+         patch.object(type(seeded_window.gallery_grid), "clear",
+                      side_effect=lambda: order.append("clear")):
+        seeded_window._render(reset_scroll=True)
+        pump()
+    assert order[:2] == ["top", "clear"], f"wrong order: {order}"
 
 
 @requires_display
