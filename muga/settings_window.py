@@ -7,7 +7,7 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import gi
 
@@ -18,9 +18,12 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import mcp_server, updater
 from .camera_torch import TORCH_SYSFS_PATHS
-from .gtk_util import idle_once
+from .gtk_util import display_is_desktop, idle_once
 from .mcp_tokens import Token, TokenStore
-from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
+from .config import (
+    CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings,
+    resolve_nav_position,
+)
 
 if TYPE_CHECKING:
     from .app import GalleryWindow
@@ -77,6 +80,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         # GLib.idle_add; if the user closed Settings meanwhile, those callbacks
         # must not touch the now-defunct widget tree.
         self._closing = False
+        # The live QR-scan dialog, if one is open. Only ever one: each scan
+        # holds a camera pipeline, and two of those at once is what pushes a
+        # phone into the OOM killer (see muga/qr.py).
+        self._qr_dialog: Adw.Dialog | None = None
         # Debounce id for the grid-columns SpinRow — see _columns_changed.
         self._columns_debounce_id = 0
         # Same, for the MCP port SpinRow — see _mcp_port_changed.
@@ -166,6 +173,12 @@ class SettingsWindow(Adw.PreferencesWindow):
                 ("bottom", "Bottom"),
                 ("left",   "Left"),
             ],
+            # "auto" is not offered as an option — it is the not-chosen-yet
+            # state — so the row shows the position it resolves to on this
+            # display, which is what the user is looking at.
+            current=resolve_nav_position(
+                self.settings.nav_position, desktop=display_is_desktop(),
+            ),
         ))
 
         handedness_group = Adw.PreferencesGroup(
@@ -766,7 +779,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         else:
             self._nc_set_status(self._("Disconnected"), ok=False)
 
-    def _nc_connect(self, _btn: Gtk.Button) -> None:
+    def _nc_connect(self, _btn: Gtk.Button | None = None) -> None:
         url  = self._nc_url_row.get_text().strip()
         user = self._nc_user_row.get_text().strip()
         pwd  = self._nc_pass_row.get_text()
@@ -895,6 +908,14 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _nc_scan_qr(self, _btn: Gtk.Button) -> None:
         from .qr import WebcamQRScanner, scan_supported
 
+        # Re-entry guard. The button and the setup dialog both land here, and
+        # on a phone that is slow to bring the camera up the natural reaction
+        # is to tap again — which used to stack a second camera pipeline on
+        # top of the first.
+        if self._qr_dialog is not None:
+            self._qr_dialog.present(self)
+            return
+
         dialog = Adw.Dialog()
         dialog.set_title(self._("Scan QR code"))
         dialog.set_content_width(480)
@@ -920,6 +941,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             lbl.set_margin_end(16)
             toolbar.set_content(lbl)
             dialog.set_child(toolbar)
+            self._qr_dialog = dialog
+            dialog.connect("closed", self._nc_qr_dialog_closed)
             dialog.present(self)
             return
 
@@ -930,9 +953,17 @@ class SettingsWindow(Adw.PreferencesWindow):
         toolbar.set_content(scanner.build_widget())
         dialog.set_child(toolbar)
 
-        dialog.connect("closed", lambda _: scanner.cancel())
+        self._qr_dialog = dialog
+        dialog.connect("closed", self._nc_qr_dialog_closed, scanner)
         dialog.present(self)
         scanner.start()
+
+    def _nc_qr_dialog_closed(self, _dialog: Adw.Dialog, scanner: Any = None) -> None:
+        """Release the camera the moment the dialog goes away — the pipeline
+        does not stop itself when its preview widget is destroyed."""
+        self._qr_dialog = None
+        if scanner is not None:
+            scanner.cancel()
 
     @staticmethod
     def _parse_nc_login_url(text: str) -> dict[str, str] | None:
@@ -963,6 +994,32 @@ class SettingsWindow(Adw.PreferencesWindow):
         else:
             self._nc_pass_row.set_text(text)
             self._nc_set_status(self._("QR code scanned successfully ✓"), ok=True)
+        # Scanning a code is a request to use it, so connect right away rather
+        # than leaving the user in front of a filled-in form with one more
+        # button to find.
+        self._nc_force_reconnect()
+
+    def _nc_force_reconnect(self) -> None:
+        """Drop the running Nextcloud session, then connect from the
+        credential rows as they now stand.
+
+        Forced rather than "connect if idle": Nextcloud hands out a fresh app
+        password per QR code, so a session still running on the previous one
+        has to go — otherwise the gallery keeps fetching with credentials the
+        user just replaced, and the status row would claim a connection that
+        was never tested against the new code.
+        """
+        old_client = self.parent_window._nc_thumb_shared_client
+        self.parent_window._nc_thumb_shared_client = None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:
+                LOGGER.debug("old_client.close failed", exc_info=True)
+        self.parent_window._nc_session_active = False
+        self._nc_runtime_connected = False
+        self._nc_update_buttons()
+        self._nc_connect(None)
 
     def _nc_qr_error(self, message: str) -> None:
         if self._closing:
@@ -1850,10 +1907,12 @@ class SettingsWindow(Adw.PreferencesWindow):
                 self.parent_window.refresh(scan=True)
         chooser.destroy()
 
-    def _combo_row(self, attr: str, title: str, values: list[tuple[str, str]]) -> Adw.ComboRow:
+    def _combo_row(self, attr: str, title: str, values: list[tuple[str, str]],
+                   current: str | None = None) -> Adw.ComboRow:
         store = Gtk.StringList()
         active = 0
-        current = getattr(self.settings, attr)
+        if current is None:
+            current = getattr(self.settings, attr)
         for i, (value, label) in enumerate(values):
             store.append(self._(label))
             if value == current:
@@ -1871,6 +1930,11 @@ class SettingsWindow(Adw.PreferencesWindow):
             # English never second-guesses a deliberate choice.
             self.settings.language_default_migrated = True
             self.parent_window.settings.language_default_migrated = True
+        if attr == "nav_position":
+            # Same for the nav bar: picking "Top" here is a choice, not the
+            # old default, so load()'s migration to "auto" must leave it be.
+            self.settings.nav_position_default_migrated = True
+            self.parent_window.settings.nav_position_default_migrated = True
         self.parent_window.apply_settings(self.settings)
 
     def _entry_apply(self, row: Adw.EntryRow, attr: str) -> None:

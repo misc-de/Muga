@@ -23,9 +23,9 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
 from . import APP_ID, APP_NAME, mcp_server
-from .config import DEBUG_LOG_PATH, Settings, migrate_legacy_dirs
+from .config import DEBUG_LOG_PATH, Settings, migrate_legacy_dirs, resolve_nav_position
 from .database import Database
-from .gtk_util import idle_once
+from .gtk_util import display_is_desktop, idle_once
 from .gallery_grid import GalleryGrid
 from .gallery_render import GalleryRenderMixin
 from .gallery_selection import GallerySelectionMixin
@@ -560,9 +560,12 @@ class GalleryWindow(
         # Category nav bar — orientation and placement come from settings.
         # Adw.ToolbarView only knows top/bottom bars, so left/right wrap the
         # gallery content in a horizontal Gtk.Box with the nav as a side rail.
-        nav_position = getattr(self.settings, "nav_position", "top")
-        if nav_position not in ("top", "bottom", "left", "right"):
-            nav_position = "top"
+        # "auto" (the default) resolves per display: left rail on a desktop
+        # screen, top bar on a phone. An explicit pick wins either way.
+        nav_position = resolve_nav_position(
+            getattr(self.settings, "nav_position", "auto"),
+            desktop=display_is_desktop(),
+        )
         self._nav_position = nav_position
         nav_orientation = (
             Gtk.Orientation.VERTICAL
@@ -1689,9 +1692,13 @@ class GalleryWindow(
         # the old window, the new window starts with a fresh layout pass,
         # and persisted settings (already saved by apply_settings above) are
         # picked up by the new window's Settings.load() in __init__.
-        new_position = getattr(self.settings, "nav_position", "top")
-        if new_position not in ("top", "bottom", "left", "right"):
-            new_position = "top"
+        # Compare resolved positions, not stored ones: "auto" that already
+        # resolves to the current side is not a layout change and must not
+        # cost the user a window recreation.
+        new_position = resolve_nav_position(
+            getattr(self.settings, "nav_position", "auto"),
+            desktop=display_is_desktop(),
+        )
         old_position = getattr(self, "_nav_position", "top")
         if old_position != new_position:
             self._recreate_window_for_layout_change()

@@ -95,6 +95,27 @@ DEFAULT_CACHE_MAX_MB = 2048
 # the dataclass fields for the literal.
 DEFAULT_MCP_PORT = 8765
 
+# The four places the category nav bar can actually sit. Stored settings may
+# additionally hold "auto" — see Settings.nav_position and
+# resolve_nav_position below.
+NAV_POSITIONS = ("top", "bottom", "left", "right")
+
+
+def resolve_nav_position(value: str | None, *, desktop: bool) -> str:
+    """Turn a stored nav_position into one of the four real positions.
+
+    "auto" is the only value that depends on the display: a desktop-sized
+    screen has width to spare, so the bar goes down the left side, while a
+    phone keeps the top bar because a side rail costs width the grid needs.
+    Any of the four explicit positions is a deliberate user choice and is
+    passed through untouched; anything else (a hand-edited typo that got
+    past load()) falls back to the auto behaviour rather than crashing
+    _build_ui.
+    """
+    if value in NAV_POSITIONS:
+        return str(value)
+    return "left" if desktop else "top"
+
 
 @dataclass
 class Settings:
@@ -132,8 +153,17 @@ class Settings:
     grid_columns: int = 4
     last_category: str = ""
     # Where to place the category nav bar relative to the gallery content.
-    # Valid values: "top" (default, preserves legacy layout), "bottom", "left", "right".
-    nav_position: str = "top"
+    # Valid values: "top", "bottom", "left", "right", plus "auto" — the
+    # default, which is resolved per display when the window is built (see
+    # resolve_nav_position): a desktop-sized screen puts the bar down the
+    # left side, a phone keeps the top bar, where a side rail would eat
+    # width the grid needs.
+    nav_position: str = "auto"
+    # One-shot marker for the "top" → "auto" default change. Installs that
+    # predate it have "top" in settings.json that was never a real choice —
+    # it was simply the old default. Picking a position in Settings sets
+    # this, so a deliberate "top" survives.
+    nav_position_default_migrated: bool = False
     # Which side the camera record button (and any other thumb-reachable
     # camera controls) should sit on. "right" or "left".
     handedness: str = "right"
@@ -331,10 +361,20 @@ class Settings:
         # showing a port that can never come up.
         if not 1024 <= int(settings.mcp_port) <= 65535:
             settings.mcp_port = DEFAULT_MCP_PORT
-        # Clamp legacy / hand-edited values to the four supported positions so a
-        # typo in settings.json doesn't crash the layout logic in _build_ui.
-        if settings.nav_position not in ("top", "bottom", "left", "right"):
-            settings.nav_position = "top"
+        # Clamp legacy / hand-edited values so a typo in settings.json doesn't
+        # crash the layout logic in _build_ui. "auto" is a valid stored value:
+        # it means "not chosen yet", and _build_ui resolves it per display.
+        if settings.nav_position not in NAV_POSITIONS + ("auto",):
+            settings.nav_position = "auto"
+        if not settings.nav_position_default_migrated and settings.nav_position == "top":
+            # Same reasoning as the language default above: "top" was the old
+            # default rather than a choice, so installs carrying it move to
+            # the per-display default. Picking a position in Settings sets the
+            # flag there, so this never overrides the same user twice.
+            settings.nav_position = "auto"
+            settings.nav_position_default_migrated = True
+            LOGGER.info("Nav position was the legacy top default — switching to auto")
+            settings.save()
         if settings.handedness not in ("left", "right", "neutral"):
             settings.handedness = "right"
         # Clamp / sanitise camera fields against hand-edited values.
