@@ -26,13 +26,6 @@ if TYPE_CHECKING:
 
 
 _MAX_COLS = 10  # maximum supported grid columns
-# A month-jump pulls at most this many pages looking for the next header —
-# long enough to chew through "hundreds of photos a month for years", bounded
-# so a library that is all one month can't load itself into memory whole.
-_JUMP_MAX_PAGES = 32
-# How many frames the jump waits for ListView to bind the target row before
-# settling for wherever scroll_to left it.
-_JUMP_SETTLE_TRIES = 3
 
 
 class MediaRow(GObject.Object):
@@ -122,8 +115,6 @@ class GalleryGrid(Gtk.Overlay):
 
         self._cols = 4
         self._building_row: list[MediaRow] = []
-        # Set while a deferred month-jump is loading; see _begin_deferred_jump.
-        self._jump_state: dict | None = None
 
         # Stamped by the long-press handler; the click handler on the same
         # button uses it to ignore the release that follows a long-press.
@@ -526,31 +517,44 @@ class GalleryGrid(Gtk.Overlay):
             self._building_row = []
 
     def _on_header_nav(self, header_box: Gtk.Box, direction: int) -> None:
-        """Jump to the next/previous header from *header_box*'s row.
+        """Jump to the next/previous header from *header_box*'s row in a
+        single, predictable vadjustment write.
 
         direction = -1 (up arrow) → previous header in row store
         direction = +1 (down arrow) → next header in row store
 
-        When the target month is already in the row store this is a single,
-        predictable vadjustment write: row heights are measured from
-        currently-bound widgets (the source header is always rendered; the
-        tile-row height comes from any bound tile row), and multiplying those
-        by the count of intervening rows gives the target's content_y to
-        within ListView's internal per-row padding, which is zero in our
-        configuration. Once written, the target sits at the same screen Y the
-        source was at — no scroll_to, no retry loop, no two-stage flicker.
-
-        When it is NOT in the store yet, none of that arithmetic can be
-        trusted: pulling pages in changes the store under the widgets, whose
-        geometry is only correct again after the next allocation. That case
-        hands off to _begin_deferred_jump, which loads behind a spinner and
-        aligns on measured geometry once the list has caught up.
+        Strategy: row heights are measured from currently-bound widgets
+        (source header is always rendered; tile-row height is read from any
+        bound tile-row in the viewport). Multiplying those measured heights
+        by the count of intervening rows in row_store gives the target's
+        content_y to within ListView's internal per-row padding (which is
+        zero in our configuration). We then write the vadjustment exactly
+        once so the target appears at the same screen Y the source was at —
+        no scroll_to, no retry loop, no two-stage flicker.
         """
         list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
-        if list_item is None or self._jump_state is not None:
+        if list_item is None:
             return
         current_pos = list_item.get_position()
         target_pos = self._find_adjacent_header_pos(current_pos, direction)
+        # Going forward and we ran off the end of the currently-loaded
+        # rows: pull the next page(s) until another month header appears
+        # or there's nothing left in the database. Capped so a pathological
+        # "every file is the same month" dataset can't lock up the UI.
+        if target_pos is None and direction > 0:
+            if self._load_more_until_next_header(current_pos) is None:
+                return
+            # Re-derive both positions from the live store rather than trust
+            # the ones captured before the load. Anything that splices the
+            # front renumbers every row, and a target read in one index space
+            # against a source read in another is how a jump ends up
+            # thousands of pixels away from any header at all.
+            current_pos = list_item.get_position()
+            if current_pos >= self.row_store.get_n_items():
+                return  # the source row itself was evicted — nothing to measure from
+            target_pos = self._find_adjacent_header_pos(current_pos, +1)
+        if target_pos is None:
+            return
         src_widget = list_item.get_child()
         if src_widget is None:
             return
@@ -560,13 +564,6 @@ class GalleryGrid(Gtk.Overlay):
 
         vadj = self.scroller.get_vadjustment()
         target_screen_y = src_y - vadj.get_value()
-        if target_pos is None:
-            # Screen Y rather than content Y is what carries across the
-            # load: it is measured from the viewport, so it survives every
-            # renumbering and re-measure the loading does to the content.
-            if direction > 0:
-                self._begin_deferred_jump(list_item, target_screen_y)
-            return
 
         header_h, tile_h = self._measure_row_heights(src_widget)
         delta = 0.0
@@ -630,161 +627,55 @@ class GalleryGrid(Gtk.Overlay):
         upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
         vadj.set_value(max(0.0, min(value, upper)))
 
-    # ------------------------------------------------------------------
-    # Deferred jump: the next month has not been loaded yet
-    #
-    # Pulling pages in is the slow half of a month-jump, and it is the half
-    # that used to get the position wrong. Loading changes the row store
-    # under the bound widgets, and their geometry — the very thing the
-    # arithmetic measures from — is only right again after the next
-    # allocation. Doing it all in one synchronous burst meant measuring
-    # against a list that had not caught up, which is how a jump ended up
-    # mid-collection with no month header in sight; it also froze the UI for
-    # as long as the pages took.
-    #
-    # So it runs as a small state machine instead: one page per idle so the
-    # spinner actually spins and the window stays responsive, then a
-    # scroll_to to let ListView bring the target into view and bind it, and
-    # only then a final write against the target's *measured* content Y. No
-    # estimate is involved at the end, so nothing accumulates over distance.
-    # ------------------------------------------------------------------
+    def _load_more_until_next_header(self, current_pos: int) -> int | None:
+        """Drive the owner's paginated loader forward until a row with
+        is_header=True shows up *after* current_pos, or the loader signals
+        end-of-data. Returns the new header's row_store index, or None.
 
-    def _begin_deferred_jump(self, list_item: Gtk.ListItem, screen_y: float) -> None:
+        The loader synchronously appends rows to row_store on each call,
+        so polling the store after each step is safe. Capped at 32 pages
+        — long enough to chew through "100 photos a month for years" but
+        bounded against any edge case where pages somehow never contain
+        a header."""
         owner = getattr(self, "owner", None)
-        if owner is None or not hasattr(owner, "_load_more_items"):
-            return
-        if self._jump_state is not None:
-            return
-        self._jump_state = {
-            "list_item": list_item, "screen_y": screen_y, "pages": 0, "tries": 0,
-        }
-        # Eviction renumbers positions and can drop the row being measured
-        # from; hold it for the length of the jump and pay it back at the end.
-        setattr(owner, "_suppress_front_eviction", True)
-        self.pull_revealer.set_reveal_child(True)
-        GLib.idle_add(self._jump_load_step, priority=GLib.PRIORITY_DEFAULT_IDLE)
-
-    def _jump_load_step(self) -> bool:
-        """One page per turn of the main loop, until the next header shows up."""
-        state = self._jump_state
-        if state is None:
-            return GLib.SOURCE_REMOVE
-        owner = getattr(self, "owner", None)
-        if owner is None:
-            return self._end_deferred_jump()
-        pos = state["list_item"].get_position()
-        if pos >= self.row_store.get_n_items():
-            return self._end_deferred_jump()  # the source row went away
-        target_pos = self._find_adjacent_header_pos(pos, +1)
-        if target_pos is not None:
-            GLib.idle_add(self._jump_align_step, target_pos,
-                          priority=GLib.PRIORITY_DEFAULT_IDLE)
-            return GLib.SOURCE_REMOVE
-        if (state["pages"] >= _JUMP_MAX_PAGES
-                or not getattr(owner, "_has_more_items", False)):
-            return self._end_deferred_jump()
-        before_offset = getattr(owner, "_current_offset", None)
-        before_rows = self.row_store.get_n_items()
-        owner._load_more_items()
-        state["pages"] += 1
-        after_offset = getattr(owner, "_current_offset", None)
-        if before_offset is not None and after_offset is not None:
-            # The database offset is the honest measure of progress: the row
-            # count can come back unchanged when a page arrives and the front
-            # is trimmed in the same turn, and reading that as "the loader
-            # bailed" would abandon a jump that was in fact working.
-            progressed = after_offset > before_offset
-        else:
-            progressed = self.row_store.get_n_items() != before_rows
-        if not progressed:
-            return self._end_deferred_jump()  # loader bailed; don't spin
-        return GLib.SOURCE_CONTINUE
-
-    def _jump_align_step(self, target_pos: int) -> bool:
-        """Ask ListView to bring the target into view. This is what makes it
-        allocate and bind that row, which the measurement needs."""
-        if self._jump_state is None:
-            return GLib.SOURCE_REMOVE
-        if target_pos >= self.row_store.get_n_items():
-            return self._end_deferred_jump()
-        self.grid_view.scroll_to(target_pos, Gtk.ListScrollFlags.NONE, None)
-        GLib.idle_add(self._jump_settle_step, target_pos,
-                      priority=GLib.PRIORITY_DEFAULT_IDLE)
-        return GLib.SOURCE_REMOVE
-
-    def _jump_settle_step(self, target_pos: int) -> bool:
-        """Place the target where the source header was, from its real
-        geometry. scroll_to only guarantees the row is somewhere in view —
-        usually against the bottom edge, which is not where a jump should
-        leave it."""
-        state = self._jump_state
-        if state is None:
-            return GLib.SOURCE_REMOVE
-        widget = None
-        for list_item in list(self._bound_list_items):
-            if list_item.get_position() == target_pos:
-                widget = list_item.get_child()
-                break
-        if widget is None:
-            # Not bound yet: give the frame clock another turn or two, then
-            # fall back to the row-height model rather than settle for
-            # wherever scroll_to left it — which is against the bottom edge,
-            # not where a jump belongs.
-            state["tries"] += 1
-            if state["tries"] <= _JUMP_SETTLE_TRIES:
-                return GLib.SOURCE_CONTINUE
-            target_y = self._estimate_content_y(target_pos)
-            if target_y is not None:
-                self._set_vadj_clamped(
-                    self.scroller.get_vadjustment(), target_y - state["screen_y"],
-                )
-            return self._end_deferred_jump()
-        # _content_y_of reports where the row sits in the VIEWPORT, not in the
-        # scrollable content: ListView allocates only what is on screen and
-        # carries the scroll offset itself. So the write is relative — scroll
-        # on by however far the target is from where it should end up.
-        # (Measured the other way round first: taking it for a content Y put
-        # a jump 142,000 px from the row it had just found.)
-        vadj = self.scroller.get_vadjustment()
-        here = self._content_y_of(widget)
-        if here is not None:
-            self._set_vadj_clamped(
-                vadj, vadj.get_value() + here - state["screen_y"],
-            )
-        return self._end_deferred_jump()
-
-    def _estimate_content_y(self, target_pos: int) -> float | None:
-        """Content Y of a row from measured row heights — the same model the
-        loaded-month path uses, as a fallback for when the target row has not
-        been bound in time to measure it directly."""
-        sample = None
-        for list_item in list(self._bound_list_items):
-            row = list_item.get_item()
-            child = list_item.get_child()
-            if child is None:
-                continue
-            sample = child
-            if row is not None and row.is_header:
-                break  # a header is the better sample; keep looking for one
-        if sample is None:
+        loader = getattr(owner, "_load_more_items", None)
+        if loader is None:
             return None
-        header_h, tile_h = self._measure_row_heights(sample)
-        y = 0.0
-        for i in range(min(target_pos, self.row_store.get_n_items())):
-            row = self.row_store.get_item(i)
-            if row is None:
-                continue
-            y += header_h if row.is_header else tile_h
-        return y
-
-    def _end_deferred_jump(self) -> bool:
-        self._jump_state = None
-        self.pull_revealer.set_reveal_child(False)
-        owner = getattr(self, "owner", None)
-        if owner is not None:
-            setattr(owner, "_suppress_front_eviction", False)
-            GLib.idle_add(self._evict_after_jump, priority=GLib.PRIORITY_LOW)
-        return GLib.SOURCE_REMOVE
+        # Hold the sliding window's front-eviction for the whole loop. It
+        # splices rows off the FRONT of the store, so every position after it
+        # means something different — including current_pos, which was read
+        # before the first page was pulled, and the position this returns.
+        # Appends on their own never move an existing row, so with eviction
+        # held the two stay comparable. Measured before this: one jump that
+        # happened to cross the cap moved the view 41,000 px the wrong way.
+        max_pages = 32
+        had_suppression = getattr(owner, "_suppress_front_eviction", False)
+        setattr(owner, "_suppress_front_eviction", True)
+        try:
+            for _ in range(max_pages):
+                if not getattr(owner, "_has_more_items", False):
+                    return None
+                before = self.row_store.get_n_items()
+                loader()
+                after = self.row_store.get_n_items()
+                if after == before:
+                    # Loader bailed (in-flight guard, empty page, …) — give up
+                    # rather than spin.
+                    return None
+                found = self._find_adjacent_header_pos(current_pos, +1)
+                if found is not None:
+                    return found
+            return None
+        finally:
+            setattr(owner, "_suppress_front_eviction", had_suppression)
+            if not had_suppression:
+                # Pay back the eviction we held off. On an idle, and only
+                # once the caller's single vadjustment write has landed:
+                # splicing rows out from under a position that has not been
+                # through an allocation yet would race ListView's own
+                # anchoring, which is what keeps the visible row steady
+                # across a front-eviction in the first place.
+                GLib.idle_add(self._evict_after_jump, priority=GLib.PRIORITY_LOW)
 
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header
