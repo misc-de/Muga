@@ -1034,3 +1034,84 @@ def test_a_client_sending_no_origin_is_unaffected(live) -> None:
     reply = _post(server, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
                   token=token.token)
     assert reply["result"] == {}
+
+
+# ---------------------------------------------------------------------------
+# A refused body must not become the next request
+# ---------------------------------------------------------------------------
+
+def _raw_exchange(server, token: str, body: bytes) -> bytes:
+    """Send a POST whose Content-Length matches *body*, return the whole reply
+    stream. Raw sockets rather than urllib: the point is what arrives on the
+    wire after the response, which urllib parses away."""
+    import time
+
+    conn = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    try:
+        conn.sendall(
+            b"POST /mcp HTTP/1.1\r\nHost: x\r\n"
+            + f"Authorization: Bearer {token}\r\n".encode()
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        )
+        # Let the server reach _read_body and answer before the body lands, so
+        # the refusal happens with the bytes still queued — the case that broke.
+        time.sleep(0.2)
+        try:
+            conn.sendall(body)
+        except OSError:
+            pass  # refused and closed already; that is a valid outcome
+        received = b""
+        try:
+            while True:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                received += chunk
+        except OSError:
+            pass
+        return received
+    finally:
+        conn.close()
+
+
+def test_an_oversized_body_is_not_read_as_the_next_request(live) -> None:
+    """The body stayed in the socket after the 413, and BaseHTTPRequestHandler
+    read the next request straight out of it: a body beginning with a
+    well-formed request line was served as a request of its own. The size
+    ceiling kept those bytes from being buffered, not from being executed."""
+    server, token = live
+    smuggled = (
+        f"POST /mcp HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {token.token}\r\n"
+        f"Content-Length: 41\r\n\r\n"
+        '{"jsonrpc":"2.0","id":99,"method":"ping"}'
+    ).encode()
+    body = smuggled + b"A" * (mcp_server._MAX_BODY + 1 - len(smuggled))
+
+    received = _raw_exchange(server, token.token, body)
+
+    assert received.count(b"HTTP/1.") == 1, (
+        f"the server answered more than once:\n{received[:400]!r}"
+    )
+    assert b'"id": 99' not in received, "the smuggled request was served"
+
+
+def test_a_refused_body_ends_the_connection(live) -> None:
+    """RFC 9110 asks a server that declines to read a body to close, and it is
+    the only way an intermediary and this server agree on where the next
+    request starts."""
+    server, token = live
+    received = _raw_exchange(server, token.token, b"A" * (mcp_server._MAX_BODY + 1))
+
+    assert b"413" in received.split(b"\r\n", 1)[0]
+    assert b"Connection: close" in received
+
+
+def test_the_refusal_reaches_the_client_that_is_still_sending(live) -> None:
+    """Closing on a socket with data still queued makes the kernel send an RST,
+    which took the response with it — the client saw a reset instead of being
+    told why. Draining what it already committed to sending is what keeps the
+    413 readable."""
+    server, token = live
+    received = _raw_exchange(server, token.token, b"A" * (mcp_server._MAX_BODY + 1))
+
+    assert b"Request body too large" in received
