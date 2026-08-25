@@ -7,7 +7,7 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import gi
 
@@ -77,6 +77,10 @@ class SettingsWindow(Adw.PreferencesWindow):
         # GLib.idle_add; if the user closed Settings meanwhile, those callbacks
         # must not touch the now-defunct widget tree.
         self._closing = False
+        # The live QR-scan dialog, if one is open. Only ever one: each scan
+        # holds a camera pipeline, and two of those at once is what pushes a
+        # phone into the OOM killer (see muga/qr.py).
+        self._qr_dialog: Adw.Dialog | None = None
         # Debounce id for the grid-columns SpinRow — see _columns_changed.
         self._columns_debounce_id = 0
         # Same, for the MCP port SpinRow — see _mcp_port_changed.
@@ -895,6 +899,14 @@ class SettingsWindow(Adw.PreferencesWindow):
     def _nc_scan_qr(self, _btn: Gtk.Button) -> None:
         from .qr import WebcamQRScanner, scan_supported
 
+        # Re-entry guard. The button and the setup dialog both land here, and
+        # on a phone that is slow to bring the camera up the natural reaction
+        # is to tap again — which used to stack a second camera pipeline on
+        # top of the first.
+        if self._qr_dialog is not None:
+            self._qr_dialog.present(self)
+            return
+
         dialog = Adw.Dialog()
         dialog.set_title(self._("Scan QR code"))
         dialog.set_content_width(480)
@@ -920,6 +932,8 @@ class SettingsWindow(Adw.PreferencesWindow):
             lbl.set_margin_end(16)
             toolbar.set_content(lbl)
             dialog.set_child(toolbar)
+            self._qr_dialog = dialog
+            dialog.connect("closed", self._nc_qr_dialog_closed)
             dialog.present(self)
             return
 
@@ -930,9 +944,17 @@ class SettingsWindow(Adw.PreferencesWindow):
         toolbar.set_content(scanner.build_widget())
         dialog.set_child(toolbar)
 
-        dialog.connect("closed", lambda _: scanner.cancel())
+        self._qr_dialog = dialog
+        dialog.connect("closed", self._nc_qr_dialog_closed, scanner)
         dialog.present(self)
         scanner.start()
+
+    def _nc_qr_dialog_closed(self, _dialog: Adw.Dialog, scanner: Any = None) -> None:
+        """Release the camera the moment the dialog goes away — the pipeline
+        does not stop itself when its preview widget is destroyed."""
+        self._qr_dialog = None
+        if scanner is not None:
+            scanner.cancel()
 
     @staticmethod
     def _parse_nc_login_url(text: str) -> dict[str, str] | None:

@@ -330,6 +330,31 @@ def test_nc_status_line_can_be_set(settings_dialog) -> None:
 
 
 @requires_display
+def test_scan_qr_does_not_stack_a_second_camera() -> None:
+    """Each scan holds a camera pipeline. Two at once is what pushed the
+    user's phone into the OOM killer — and tapping the button again is the
+    natural reaction when the camera is slow to come up."""
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    open_dialog = MagicMock()
+    dialog._qr_dialog = open_dialog
+
+    dialog._nc_scan_qr(None)
+
+    open_dialog.present.assert_called_once_with(dialog)
+
+
+def test_closing_the_qr_dialog_releases_the_camera() -> None:
+    """The pipeline does not stop itself when its preview widget goes away."""
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    dialog._qr_dialog = MagicMock()
+    scanner = MagicMock()
+
+    dialog._nc_qr_dialog_closed(MagicMock(), scanner)
+
+    assert dialog._qr_dialog is None, "a later scan would be locked out"
+    scanner.cancel.assert_called_once_with()
+
+
 def test_qr_success_fills_the_credential_rows(settings_dialog) -> None:
     dialog = settings_dialog()
     dialog._closing = False

@@ -35,8 +35,14 @@ class _QrGst(FakeGst):
         ELEMENT = "ELEMENT"
         EOS = "EOS"
 
-    def __init__(self, **kw) -> None:
-        super().__init__(**kw)
+    def __init__(self, *, halium: bool = False, **kw) -> None:
+        # Desktops don't have gst-droid; the Halium phones do, and there the
+        # scanner takes a different (capped) source path. Default to the
+        # desktop shape and let the Halium tests opt in.
+        absent = set(kw.pop("absent_factories", ()) or ())
+        if not halium:
+            absent.add("droidcamsrc")
+        super().__init__(absent_factories=absent, **kw)
         self.launched: list[str] = []
         self.launch_error: Exception | None = None
         outer = self
@@ -54,6 +60,14 @@ class _QrGst(FakeGst):
         self.parse_launch = _parse_launch
 
 
+@pytest.fixture()
+def plenty_of_memory(monkeypatch):
+    """Pin the memory backstop to "all clear" so a test that starts the
+    scanner doesn't depend on how loaded the machine running it happens
+    to be."""
+    monkeypatch.setattr(qr.memory_guard, "pressure_reason", lambda *_a, **_k: None)
+
+
 def _scanner(gst, **kw):
     """A WebcamQRScanner without running its GTK-touching __init__."""
     scanner = qr.WebcamQRScanner.__new__(qr.WebcamQRScanner)
@@ -66,6 +80,8 @@ def _scanner(gst, **kw):
     scanner._pipeline = None
     scanner._bus = None
     scanner._timeout_id = None
+    scanner._mem_guard_id = None
+    scanner._mem_baseline_kb = 1000
     scanner._finished = False
     scanner._picture = MagicMock()
     scanner._status = MagicMock()
@@ -91,7 +107,7 @@ def test_scanner_falls_back_without_a_preview_sink() -> None:
 
 
 def test_scanner_reports_a_missing_camera() -> None:
-    gst = _QrGst(absent_factories={"autovideosrc"})
+    gst = _QrGst(absent_factories={"autovideosrc"})  # droidcamsrc absent by default
     on_error = MagicMock()
     scanner = _scanner(gst, on_error=on_error)
     scanner._build_pipeline()
@@ -194,7 +210,7 @@ def test_scanner_timeout_after_a_hit_is_silent() -> None:
     on_error.assert_not_called()
 
 
-def test_scanner_reports_a_failed_start() -> None:
+def test_scanner_reports_a_failed_start(plenty_of_memory) -> None:
     gst = _QrGst()
 
     from tests.camera_fakes import FakePipeline
@@ -220,6 +236,201 @@ def test_scanner_cancel_releases_the_camera() -> None:
     assert scanner._finished is True
     assert scanner._pipeline is None
     assert FakeGst.State.NULL in pipeline.states
+
+
+# ---------------------------------------------------------------------------
+# Resource ceilings
+#
+# A QR scan is a camera pipeline, and an uncapped one took the user's phone
+# down: memory filled, the app died, and the OOM killer took phosh with it.
+# Every ceiling below is load-bearing, so each gets a test.
+# ---------------------------------------------------------------------------
+
+def test_source_is_capped_on_halium() -> None:
+    """droidcamsrc otherwise negotiates the HAL's largest mode and fills its
+    pool faster than zxing drains it."""
+    gst = _QrGst(halium=True)
+    scanner = _scanner(gst)
+    scanner._build_pipeline()
+    desc = gst.launched[0]
+    assert "droidcamsrc mode=2" in desc
+    assert "src.vfsrc" in desc, "must pin the viewfinder pad, not imgsrc/vidsrc"
+    assert "width=(int)[1,1280],height=(int)[1,720]" in desc
+
+
+def test_every_queue_is_bounded() -> None:
+    """queue's byte/time limits default to 10 MB / 1 s, and a single
+    full-resolution frame blows past the byte one on its own — which would
+    leave the buffer count meaningless."""
+    gst = _QrGst()
+    scanner = _scanner(gst)
+    scanner._build_pipeline()
+    desc = gst.launched[0]
+    queues = [part for part in desc.split("!") if part.strip().startswith("queue")]
+    assert queues, "the branches must be decoupled from the source by queues"
+    for queue in queues:
+        assert "leaky=downstream" in queue
+        assert "max-size-buffers=1" in queue
+        assert "max-size-bytes=0" in queue
+        assert "max-size-time=0" in queue
+
+
+def test_decode_branch_is_throttled() -> None:
+    """zxing reads a QR code fine from a small frame, and a code held in
+    front of the lens does not need thirty decode attempts a second."""
+    gst = _QrGst()
+    scanner = _scanner(gst)
+    scanner._build_pipeline()
+    decode = gst.launched[0].split("zxing")[0]
+    assert "framerate=(fraction)[1/1,8/1]" in decode
+    assert "width=(int)[1,640]" in decode
+    # Without a pinned par, videoscale squashes the pixels instead of the
+    # frame and a 4K feed arrives as 640x2160 — nearly as big, and too
+    # distorted for zxing to read.
+    assert "pixel-aspect-ratio=(fraction)1/1" in decode
+    assert "format=I420" in decode, "ARGB costs zxing 4x the bytes per pixel"
+
+
+def test_preview_is_capped_and_does_not_sync() -> None:
+    """sync=true makes the sink drop 'late' buffers and log a warning for
+    every one of them — a CPU-burning, log-filling loop on a phone."""
+    gst = _QrGst()
+    scanner = _scanner(gst)
+    scanner._build_pipeline()
+    preview = gst.launched[0].split("t. ! ")[-1]
+    assert "gtk4paintablesink name=preview sync=false" in preview
+    assert "width=(int)[1,1280]" in preview
+    assert "pixel-aspect-ratio=(fraction)1/1" in preview
+    assert "framerate=(fraction)[1/1,15/1]" in preview
+
+
+def test_scanner_survives_without_the_scaling_plugins() -> None:
+    """videoscale/videorate are base plugins, but a broken install must
+    still scan rather than fail to negotiate."""
+    gst = _QrGst(absent_factories={"videoscale", "videorate"})
+    scanner = _scanner(gst)
+    scanner._build_pipeline()
+    desc = gst.launched[0]
+    assert "videoscale" not in desc and "videorate" not in desc
+    assert "zxing message=true" in desc
+
+
+def test_stop_waits_for_the_camera_to_be_released() -> None:
+    """The HAL only hands back its buffer pool once the NULL transition has
+    actually completed; reopening the scanner before then races it."""
+    gst = _QrGst()
+    scanner = _scanner(gst)
+    scanner._build_pipeline()
+    pipeline = scanner._pipeline
+    scanner.cancel()
+    assert pipeline.state_waits, "did not wait for the state change"
+
+
+# ---------------------------------------------------------------------------
+# Memory backstop
+# ---------------------------------------------------------------------------
+
+def test_scanner_refuses_to_start_when_memory_is_already_short(monkeypatch) -> None:
+    gst = _QrGst()
+    on_error = MagicMock()
+    scanner = _scanner(gst, on_error=on_error)
+    monkeypatch.setattr(qr.memory_guard, "pressure_reason",
+                        lambda *_a, **_k: "low system memory (40 MB free)")
+    scanner.start()
+    assert scanner._pipeline is None, "started a camera on an OOM-bound system"
+    assert "Camera not started" in on_error.call_args[0][0]
+
+
+def test_memory_guard_stops_a_runaway_scan(monkeypatch) -> None:
+    gst = _QrGst()
+    on_error = MagicMock()
+    scanner = _scanner(gst, on_error=on_error)
+    scanner._build_pipeline()
+    pipeline = scanner._pipeline
+    monkeypatch.setattr(qr.memory_guard, "pressure_reason",
+                        lambda *_a, **_k: "runaway memory use (+512 MB)")
+
+    assert scanner._on_memory_check() is False, "the guard kept polling"
+
+    assert FakeGst.State.NULL in pipeline.states, "the camera was left running"
+    assert "runaway memory use" in on_error.call_args[0][0]
+
+
+def test_memory_guard_keeps_polling_while_memory_is_fine(plenty_of_memory) -> None:
+    gst = _QrGst()
+    on_error = MagicMock()
+    scanner = _scanner(gst, on_error=on_error)
+    scanner._build_pipeline()
+    assert scanner._on_memory_check() is True
+    on_error.assert_not_called()
+
+
+def test_memory_guard_stops_polling_once_the_scan_is_done() -> None:
+    gst = _QrGst()
+    scanner = _scanner(gst)
+    scanner._finished = True
+    assert scanner._on_memory_check() is False
+
+
+# ---------------------------------------------------------------------------
+# memory_guard probes
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def fake_proc(tmp_path, monkeypatch):
+    """Point the /proc probes at files we control."""
+    from muga import memory_guard
+
+    def _write(*, available_kb=8_000_000, total_kb=8_000_000, rss_kb=200_000):
+        meminfo = tmp_path / "meminfo"
+        meminfo.write_text(
+            f"MemTotal:       {total_kb} kB\n"
+            f"MemFree:         1000000 kB\n"
+            f"MemAvailable:   {available_kb} kB\n"
+        )
+        status = tmp_path / "status"
+        status.write_text(f"Name:\tmuga\nVmPeak:\t900000 kB\nVmRSS:\t{rss_kb} kB\n")
+        monkeypatch.setattr(memory_guard, "_MEMINFO", meminfo)
+        monkeypatch.setattr(memory_guard, "_SELF_STATUS", status)
+        return memory_guard
+
+    return _write
+
+
+def test_memory_probes_read_proc(fake_proc) -> None:
+    mg = fake_proc(available_kb=1_234_567, total_kb=4_000_000, rss_kb=98_765)
+    assert mg.available_kb() == 1_234_567
+    assert mg.total_kb() == 4_000_000
+    assert mg.self_rss_kb() == 98_765
+
+
+def test_no_pressure_when_there_is_headroom(fake_proc) -> None:
+    mg = fake_proc(available_kb=3_000_000, total_kb=8_000_000, rss_kb=200_000)
+    assert mg.pressure_reason(baseline_rss_kb=150_000) is None
+
+
+def test_pressure_when_the_system_runs_low(fake_proc) -> None:
+    """The threshold scales with RAM: 5% of 8 GB is 400 MB, so 200 MB free
+    is already too close to the OOM killer on a phone this size."""
+    mg = fake_proc(available_kb=200_000, total_kb=8_000_000)
+    assert "low system memory" in mg.pressure_reason()
+
+
+def test_pressure_when_our_own_process_runs_away(fake_proc) -> None:
+    """Caches get reclaimed for a while before MemAvailable moves, so a pool
+    filling inside our process has to be caught on its own."""
+    mg = fake_proc(available_kb=3_000_000, total_kb=8_000_000, rss_kb=700_000)
+    assert "runaway memory use" in mg.pressure_reason(baseline_rss_kb=200_000)
+    assert mg.pressure_reason(baseline_rss_kb=690_000) is None
+
+
+def test_probes_survive_an_unreadable_proc(tmp_path, monkeypatch) -> None:
+    from muga import memory_guard
+    monkeypatch.setattr(memory_guard, "_MEMINFO", tmp_path / "nope")
+    monkeypatch.setattr(memory_guard, "_SELF_STATUS", tmp_path / "nope")
+    assert memory_guard.available_kb() is None
+    assert memory_guard.self_rss_kb() is None
+    assert memory_guard.pressure_reason(baseline_rss_kb=1000) is None
 
 
 def test_scanner_only_reports_the_first_failure() -> None:
