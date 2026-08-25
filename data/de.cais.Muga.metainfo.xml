@@ -69,6 +69,14 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.6.0" date="2026-08-25">
+      <description>
+        <p>Jumping to the next month works from inside a long month too. Where
+        the next month still has to be loaded, the gallery now shows a spinner
+        while it loads and jumps once the list is ready, instead of moving
+        early and landing somewhere in the middle of the collection.</p>
+      </description>
+    </release>
     <release version="0.5.9" date="2026-08-25">
       <description>
         <p>The gallery no longer shows gaps of empty cells in the middle of

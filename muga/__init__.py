@@ -2,5 +2,5 @@
 
 APP_ID = "de.cais.Muga"
 APP_NAME = "Muga"
-VERSION = "0.5.9"
+VERSION = "0.6.0"
 
