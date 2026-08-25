@@ -1,43 +1,15 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Flash / torch glyph for the camera's flash toggle.
 
-<svg
-   width="4.2333331mm"
-   height="4.233521mm"
-   viewBox="0 0 4.2333331 4.2335209"
-   version="1.1"
-   id="svg8328"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:svg="http://www.w3.org/2000/svg">
-  <defs
-     id="defs8325" />
-  <g
-     id="layer1"
-     transform="translate(-53.59205,-158.96277)">
-    <g
-       id="g313236"
-       transform="matrix(0.26458333,0,0,0.26458333,-156.91099,140.76505)"
-       style="fill:currentColor">
-      <title
-         id="title313228">padlock2-open</title>
-      <g
-         id="g2143"
-         transform="translate(735.60205,-251.22078)">
-        <title
-           id="title2145">camera-flash</title>
-        <rect
-           style="fill:none"
-           id="rect2029"
-           width="16"
-           height="16"
-           x="60"
-           y="320" />
-        <path
-           style="fill:currentColor"
-           d="m 68.970703,320 c -0.334337,0.0102 -0.641452,0.18682 -0.818359,0.4707 l -5,8 c -0.105796,0.16965 -0.150901,0.35159 -0.150391,0.5293 H 63 v 1 h 1 2 v 5 c 0.0016,1.00344 1.31499,1.37969 1.847656,0.5293 l 5,-8 c 0.105796,-0.16965 0.150901,-0.35159 0.150391,-0.5293 H 73 v -1 h -1 -2 v -5 c 1.84e-4,-0.56391 -0.465631,-1.01646 -1.029297,-1 z"
-           id="path2037"
-           mask="none" />
-      </g>
-    </g>
-  </g>
+  Hand-written on the 16x16 grid symbolic icons use, rather than exported from
+  Inkscape. The exported version carried a 16x16 <rect style="fill:none"> as its
+  bounding box, and GTK renders a symbolic icon by prepending a stylesheet that
+  sets `fill: <colour> !important` on rect/circle/path/polygon/polyline. The
+  !important beat the rect's own fill:none, so the box was painted solid and
+  covered the bolt: the button showed a filled square. Nothing here relies on a
+  fill that GTK is going to override, and there is no bounding box to fill.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path d="M 9.5 1 C 9.17 1.01 8.86 1.19 8.68 1.47 L 3.68 9.47 C 3.29 10.1 3.74 10.92 4.48 10.92 L 6.5 10.92 L 6.5 14.5 C 6.5 15.5 7.81 15.88 8.35 15.03 L 13.35 7.03 C 13.74 6.4 13.29 5.58 12.55 5.58 L 10.5 5.58 L 10.5 2 C 10.5 1.44 10.06 0.98 9.5 1 Z"/>
 </svg>
