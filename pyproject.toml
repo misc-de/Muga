@@ -2,7 +2,20 @@
 # back to legacy setuptools behaviour, which breaks under the
 # --no-build-isolation used by the Flatpak manifest.
 [build-system]
-requires = ["setuptools>=68"]
+# 83 is the first release clear of the advisories against the versions this
+# floor used to admit: CVE-2024-6345 (command injection through a package URL,
+# fixed in 70.0.0), CVE-2025-47273 (path traversal in PackageIndex.download,
+# 78.1.1) and CVE-2026-59890 (a MANIFEST.in exclusion silently bypassed in an
+# sdist via an NFC/NFD filename collision, 83.0.0). The last one is the reason
+# the floor moved rather than being left at a version nothing here downloads
+# with: this project *does* ship an sdist and *does* rely on MANIFEST.in to
+# decide what goes into it.
+#
+# Nothing is broken by asking for more than the environment has: the Flatpak
+# builds with --no-build-isolation, where pip does not resolve this list at all
+# (verified against org.gnome.Sdk//49, which carries 80.9.0). It binds an
+# isolated `pip install .`, which fetches the newest setuptools anyway.
+requires = ["setuptools>=83"]
 build-backend = "setuptools.build_meta"
 
 [project]

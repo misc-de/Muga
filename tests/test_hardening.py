@@ -954,3 +954,87 @@ def test_disconnect_clears_both_schemas(
     settings.clear_app_password()
 
     assert fake.store == {}, f"entries survived the disconnect: {fake.store}"
+
+
+# ---------------------------------------------------------------------------
+# 11.  The vulnerability audit covers what the project actually depends on
+# ---------------------------------------------------------------------------
+#
+# The CI audit step used to name its packages by hand, which made the list a
+# copy of pyproject.toml's — and a copy that nothing compared. A dependency
+# added to the project would simply never have been scanned, and the job would
+# still have gone green. scripts/audit_requirements.py derives the list now;
+# these pin down that it stays derived.
+
+def _pyproject() -> dict:
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    return tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def test_every_declared_dependency_is_audited_or_named_as_an_exception() -> None:
+    """Nothing may fall out of the audit silently. A dependency that cannot be
+    installed from PyPI has to be listed in NOT_ON_PYPI, where it is visible,
+    rather than being left off the list where it is not."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    try:
+        from audit_requirements import NOT_ON_PYPI, _name_of, requirements
+    finally:
+        sys.path.pop(0)
+
+    data = _pyproject()
+    declared = [
+        *data["build-system"]["requires"],
+        *data["project"]["dependencies"],
+    ]
+    covered = {_name_of(req) for req in requirements()} | NOT_ON_PYPI
+    missing = [req for req in declared if _name_of(req) not in covered]
+    assert not missing, f"declared but neither audited nor excepted: {missing}"
+
+
+def test_the_audit_carries_the_version_floors_across() -> None:
+    """The floors are the whole point — Pillow's is pinned against specific
+    decoder advisories. Installing the bare names would audit whatever pip
+    happened to resolve, which is never the version being asserted about."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    try:
+        from audit_requirements import requirements
+    finally:
+        sys.path.pop(0)
+
+    audited = requirements()
+    assert any(req.startswith("Pillow>=") for req in audited), audited
+    assert any(req.startswith("setuptools>=") for req in audited), audited
+
+
+def test_the_build_backend_is_audited_too() -> None:
+    """setuptools has advisories of its own (CVE-2024-6345, CVE-2025-47273,
+    CVE-2026-59890). It builds every release, so leaving it out looks at half
+    the tree."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    try:
+        from audit_requirements import _name_of, requirements
+    finally:
+        sys.path.pop(0)
+
+    assert "setuptools" in {_name_of(req) for req in requirements()}
+
+
+def test_the_setuptools_floor_clears_its_known_advisories() -> None:
+    """83.0.0 is the first release past CVE-2026-59890 — an sdist silently
+    including a file MANIFEST.in excludes, via an NFC/NFD filename collision.
+    This project ships an sdist and uses MANIFEST.in to decide what is in it."""
+    import re
+
+    requires = _pyproject()["build-system"]["requires"]
+    floor = next(req for req in requires if req.lower().startswith("setuptools"))
+    major = int(re.search(r">=\s*(\d+)", floor).group(1))
+    assert major >= 83, f"{floor} still admits versions with known advisories"
+

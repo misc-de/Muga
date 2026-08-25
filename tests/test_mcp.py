@@ -406,7 +406,7 @@ def live(indexed, tmp_path):
         server.stop()
 
 
-def _post(server, payload, token=None, path="/mcp", expect=200):
+def _post(server, payload, token=None, path="/mcp", expect=200, origin=None):
     url = f"http://127.0.0.1:{server.port}{path}"
     request = urllib.request.Request(
         url, data=json.dumps(payload).encode(), method="POST",
@@ -414,6 +414,8 @@ def _post(server, payload, token=None, path="/mcp", expect=200):
     request.add_header("Content-Type", "application/json")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
+    if origin is not None:
+        request.add_header("Origin", origin)
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             assert response.status == expect
@@ -964,3 +966,71 @@ def test_the_token_list_renders_one_row_per_token(gallery_window) -> None:
     finally:
         dialog._closing = True
         dialog.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Origin validation — the transport's DNS-rebinding defence
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("origin", "allowed", "note"),
+    [
+        ("", True, "no header at all — every non-browser client"),
+        ("http://localhost:3000", True, "a local browser client"),
+        ("http://127.0.0.1:8765", True, "loopback by address"),
+        ("http://[::1]:8765", True, "loopback over IPv6"),
+        ("https://127.0.0.1", True, "loopback behind a local TLS proxy"),
+        ("http://evil.example", False, "the rebinding case: a page's own host"),
+        ("https://gallery.example.com", False, "any remote site"),
+        ("null", False, "a sandboxed iframe or a file:// page"),
+        ("http://127.0.0.1.evil.example", False, "a name that only looks local"),
+        ("http://192.168.0.25:8765", False, "the LAN address is not the origin"),
+        ("file:///tmp/x.html", False, "a scheme with no authority to check"),
+        ("not a url", False, "unparseable"),
+    ],
+)
+def test_which_origins_may_be_served(origin, allowed, note) -> None:
+    assert mcp_server.origin_is_allowed(origin) is allowed, note
+
+
+def test_a_cross_origin_request_is_refused(live) -> None:
+    """A page in the user's browser that rebinds its host to loopback reaches
+    the socket; the Origin header still names the page, and that is what stops
+    it. Before this check the request went straight to the token comparison."""
+    server, token = live
+    reply = _post(
+        server, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        token=token.token, origin="http://evil.example", expect=403,
+    )
+    assert "origin" in reply["error"]["message"].lower()
+
+
+def test_a_cross_origin_request_is_refused_before_the_token_is_read(live) -> None:
+    """403 for a valid *and* an invalid token: which one it was must not be
+    something a rebound page can measure."""
+    server, _token = live
+    for presented in (None, "muga_not_the_one"):
+        _post(server, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+              token=presented, origin="http://evil.example", expect=403)
+
+
+def test_a_cross_origin_request_is_refused_on_an_unknown_path(live) -> None:
+    """Ahead of the path check too — otherwise 404 vs 403 tells a page whether
+    it found a live MCP server."""
+    server, token = live
+    _post(server, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+          token=token.token, path="/nope", origin="http://evil.example", expect=403)
+
+
+def test_a_local_origin_still_gets_through(live) -> None:
+    server, token = live
+    reply = _post(server, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                  token=token.token, origin="http://localhost:3000")
+    assert reply["result"] == {}
+
+
+def test_a_client_sending_no_origin_is_unaffected(live) -> None:
+    server, token = live
+    reply = _post(server, {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                  token=token.token)
+    assert reply["result"] == {}

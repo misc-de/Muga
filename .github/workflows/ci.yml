@@ -45,6 +45,11 @@ jobs:
         # advisories and says "re-check with pip-audit" — this is that re-check,
         # running on every PR instead of whenever someone remembers.
         #
+        # The package list is derived from pyproject.toml rather than repeated
+        # here: spelled out, it was a copy that could drift, and a dependency
+        # added to the project would have gone unaudited with nothing to say
+        # so. scripts/audit_requirements.py covers the build backend too.
+        #
         # Its own clean venv, deliberately: the lint venv has
         # --system-site-packages for PyGObject, which drags in every apt
         # python3-* on the runner. --strict then fails on the first one that
@@ -53,7 +58,7 @@ jobs:
         run: |
           python3 -m venv .audit
           .audit/bin/pip install --upgrade pip pip-audit
-          .audit/bin/pip install 'Pillow>=12.3' defusedxml
+          .audit/bin/pip install $(python3 scripts/audit_requirements.py)
           .audit/bin/pip-audit --strict
 
   test:
