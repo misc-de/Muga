@@ -263,6 +263,10 @@ class GalleryWindow(
         # increases (forward eviction); reverse re-fetch is not yet
         # implemented, so scrolling past the start gives no items.
         self._window_start_offset: int = 0
+        # Held while a month-jump pulls pages (see
+        # GalleryGrid._load_more_until_next_header): eviction renumbers every
+        # row position, and the jump is doing arithmetic on positions.
+        self._suppress_front_eviction: bool = False
 
         # Track last-rendered view so we can preserve scroll position on refresh
         self._last_render_key: tuple[str, str | None] | None = None
