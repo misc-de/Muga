@@ -415,6 +415,14 @@ class GalleryTools:
             "size_bytes": item.size,
             "modified": datetime.fromtimestamp(item.mtime, timezone.utc).isoformat(timespec="seconds"),
         }
+        # Only present when the file carries a capture date. Local time
+        # without an offset, because that is what EXIF records — the camera's
+        # wall clock, with no zone to convert from. A client must not read it
+        # as UTC, and an absent key says "unknown" more honestly than a
+        # timestamp copied from the file's mtime would.
+        if getattr(item, "taken_at", None):
+            out["taken"] = datetime.fromtimestamp(item.taken_at).isoformat(timespec="seconds")
+        return out
 
     def _include_nc(self) -> bool:
         """Whether Nextcloud rows belong in an aggregate listing — the same

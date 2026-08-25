@@ -679,25 +679,51 @@ class GalleryWindow(
     # ------------------------------------------------------------------
 
     # Internal sort_mode strings ↔ (mode-key, descending bool) tuples.
-    _SORT_KEYS = ["none", "date", "folder", "name"]
+    # "none" is the ungrouped default; the two date modes add month headers.
+    # They are split because a photo's two dates are genuinely different facts:
+    # date_file is when the file last changed, date_taken is when the shutter
+    # fired. Copying a shoot off a card gives every file today's date_file and
+    # leaves date_taken where it belongs.
+    _SORT_KEYS = ["none", "date_taken", "date_file", "folder", "name"]
     _SORT_TO_INTERNAL = {
-        ("none",   True):  "newest",
-        ("none",   False): "oldest",
-        ("date",   True):  "date",
-        ("date",   False): "date_asc",
-        ("folder", True):  "folder_desc",
-        ("folder", False): "folder",
-        ("name",   True):  "name_desc",
-        ("name",   False): "name",
+        ("none",       True):  "newest",
+        ("none",       False): "oldest",
+        # Legacy keys: "date"/"date_asc" predate the split and mean the file
+        # date, which is what they always sorted by. Settings written before
+        # this keep working untouched.
+        ("date_file",  True):  "date",
+        ("date_file",  False): "date_asc",
+        ("date_taken", True):  "date_taken",
+        ("date_taken", False): "date_taken_asc",
+        ("folder",     True):  "folder_desc",
+        ("folder",     False): "folder",
+        ("name",       True):  "name_desc",
+        ("name",       False): "name",
     }
     _INTERNAL_TO_SORT = {v: k for k, v in _SORT_TO_INTERNAL.items()}
 
+    def _sort_labels(self) -> list[str]:
+        """Dropdown labels, in _SORT_KEYS order and already translated.
+
+        Written as literals inside _() rather than translated from a list of
+        msgids: xgettext only sees string constants, so `self._(labels[i])`
+        would ship them untranslated — and the regression test that catches
+        missing msgids inspects literals too, so nothing would flag it.
+        """
+        return [
+            self._("None"),
+            self._("Date (recorded)"),
+            self._("Date (file)"),
+            self._("Folder"),
+            self._("Name"),
+        ]
+
     def _build_sort_controls(self) -> Gtk.Box:
         # Label texts in the dropdown — matched 1:1 with self._SORT_KEYS.
-        self._sort_dropdown_labels = ["None", "Date", "Folder", "Name"]
+        self._sort_dropdown_labels = self._sort_labels()
         store = Gtk.StringList()
         for label in self._sort_dropdown_labels:
-            store.append(self._(label))
+            store.append(label)
         self._sort_dropdown = Gtk.DropDown.new(store, None)
         self._sort_dropdown.set_valign(Gtk.Align.CENTER)
         self._sort_dropdown.connect("notify::selected", self._on_sort_dropdown_changed)

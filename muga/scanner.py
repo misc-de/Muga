@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from . import exif
 from .database import Database
 from .models import media_type_for
 from .thumbnails import Thumbnailer
@@ -113,7 +115,13 @@ class MediaScanner:
                     and abs(prev[0] - st.st_mtime) <= _MTIME_EPS
                     and prev[1] == st.st_size
                 )
-                if unchanged and thumb_exists:
+                # A row from before EXIF was indexed has no capture date and
+                # never would: it is unchanged on disk, so the skip below would
+                # keep stepping over it. Letting it through once fills it in,
+                # after which exif_read stays true and it is skipped again.
+                exif_read = prev is not None and prev[2]
+                needs_exif = media_type == "image" and not exif_read
+                if unchanged and thumb_exists and not needs_exif:
                     # Nothing to do but keep the row alive past prune_missing.
                     skipped += 1
                     touch_batch.append(str(path))
@@ -258,6 +266,18 @@ class MediaScanner:
                     continue
                 yield Path(entry.path), st
 
+    @staticmethod
+    def _read_exif(path: Path, media_type: str) -> "exif.ExifInfo":
+        """EXIF for one file, or an empty result for anything that has none.
+
+        Only images are opened: Pillow cannot read a video container, so
+        attempting it would cost an open and a failed decode per clip for a
+        guaranteed empty answer.
+        """
+        if media_type != "image":
+            return exif.ExifInfo()
+        return exif.extract(path)
+
     def _flush_thumb_chunk(
         self, chunk: list[tuple[Path, str, str, bool, os.stat_result]], category: str,
     ) -> int:
@@ -273,26 +293,38 @@ class MediaScanner:
         to upsert_media so the row write doesn't re-stat the file."""
         if not chunk:
             return 0
+        def _decode(row):
+            """Thumbnail and EXIF for one file — the two things that need the
+            file opened, done together so the pool pays one trip per file."""
+            path, media_type, _folder, _need, _st = row
+            return (
+                self.thumbnailer.ensure_thumbnail(path, media_type),
+                self._read_exif(path, media_type),
+            )
+
         new_needed = sum(1 for row in chunk if row[3])
         if new_needed >= 2:
             workers = min(new_needed, _THUMB_WORKERS)
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                thumbs = list(pool.map(
-                    lambda row: self.thumbnailer.ensure_thumbnail(row[0], row[1]),
-                    chunk,
-                ))
+                decoded = list(pool.map(_decode, chunk))
         else:
-            thumbs = [
-                self.thumbnailer.ensure_thumbnail(path, media_type)
-                for path, media_type, _folder, _need, _st in chunk
-            ]
+            decoded = [_decode(row) for row in chunk]
         thumb_new = 0
-        for (path, media_type, folder, need_thumb, st), thumb in zip(chunk, thumbs):
+        for (path, media_type, folder, need_thumb, st), (thumb, info) in zip(chunk, decoded):
             if need_thumb and thumb:
                 thumb_new += 1
+            # json for the fields even when empty: "{}" is what marks the file
+            # as parsed, so a photo without EXIF is not re-opened on every
+            # future scan. Videos get None and stay unmarked — they are never
+            # parsed to begin with.
+            exif_json = (
+                json.dumps(info.fields, ensure_ascii=False)
+                if media_type == "image" else None
+            )
             self.database.upsert_media(
                 path=path, category=category, media_type=media_type,
                 folder=folder, thumb_path=thumb, stat=st,
+                taken_at=info.taken_at, exif_json=exif_json,
             )
         return thumb_new
 

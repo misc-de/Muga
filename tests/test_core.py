@@ -580,10 +580,14 @@ def test_gallery_supports_date_group_sorting_headers() -> None:
     app_source = gallery_source()
     grid_source = Path("muga/gallery_grid.py").read_text(encoding="utf-8")
 
-    # "date" is a first-class sort key in the dropdown, paired with the
-    # ascending/descending direction button via _SORT_TO_INTERNAL.
-    assert '"date"' in app_source
-    assert '"Date"' in app_source
+    # The two date sorts are first-class dropdown keys, each paired with the
+    # ascending/descending direction button via _SORT_TO_INTERNAL. They are
+    # separate because a file's date and a photo's capture date are different
+    # facts — see GalleryWindow._SORT_KEYS.
+    assert '"date_file"' in app_source
+    assert '"date_taken"' in app_source
+    assert '"Date (recorded)"' in app_source
+    assert '"Date (file)"' in app_source
     assert '_SORT_KEYS' in app_source
     # Date sort produces grouped headers, emitted month-by-month.
     assert "def _render_date_groups" in app_source

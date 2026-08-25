@@ -31,6 +31,15 @@ if TYPE_CHECKING:
 LOGGER = logging.getLogger(__name__)
 
 
+def _group_time(item: MediaItem, use_taken: bool) -> float:
+    """The timestamp a month header is cut from.
+
+    A plain function rather than a method: it needs nothing from the window,
+    and the render mixin is exercised unbound throughout the suite.
+    """
+    return item.display_time if use_taken else item.mtime
+
+
 class GalleryRenderMixin:
     """Rendering, pagination and the sliding month window.
 
@@ -112,8 +121,8 @@ class GalleryRenderMixin:
             self._render_search(sort_mode)
         elif sort_mode in ("folder", "folder_desc"):
             self._render_folders()
-        elif sort_mode in ("date", "date_asc"):
-            self._render_date_groups(ascending=(sort_mode == "date_asc"))
+        elif self._date_mode(sort_mode) is not None:
+            self._render_date_groups(sort_mode)
         else:
             self._render_flat(sort_mode)
         self.gallery_grid.finish()
@@ -137,8 +146,9 @@ class GalleryRenderMixin:
         include_nc = self._should_merge_nc()
         # Date sorts map onto newest/oldest for the SQL ORDER BY; the actual
         # grouping is rebuilt client-side from the items.
-        if sort_mode in ("date", "date_asc"):
-            query_sort = "oldest" if sort_mode == "date_asc" else "newest"
+        date_mode = self._date_mode(sort_mode)
+        if date_mode is not None:
+            query_sort = date_mode[0]
             grouped = True
         else:
             # newest / oldest / name / name_desc / folder / folder_desc — pass
@@ -162,9 +172,10 @@ class GalleryRenderMixin:
         self._current_offset = len(page)
         self._has_more_items = self._current_offset < self._total_count
         self._date_last_key = None
+        use_taken = date_mode[1] if date_mode is not None else True
         for item in page:
             if grouped:
-                self._append_date_grouped(item)
+                self._append_date_grouped(item, use_taken)
             else:
                 self.gallery_grid.append_media(item)
         self._set_status("")
@@ -226,8 +237,8 @@ class GalleryRenderMixin:
         self._set_empty_state(visible=total == 0)
         self._set_status("")
 
-    def _render_date_groups(self, ascending: bool = False) -> None:
-        order = "oldest" if ascending else "newest"
+    def _render_date_groups(self, sort_mode: str = "date_taken") -> None:
+        order, use_taken = self._DATE_MODES.get(sort_mode, ("newest", True))
         include_nc = self._should_merge_nc()
         media_filter = self.settings.media_filter_for(self.category)
         page = self._load_first_page(
@@ -236,12 +247,27 @@ class GalleryRenderMixin:
         )
         self._date_last_key = None
         for item in page:
-            self._append_date_grouped(item)
+            self._append_date_grouped(item, use_taken)
         self._set_status("")
         self._set_empty_state(visible=not self.current_items)
 
-    def _append_date_grouped(self, item: MediaItem) -> None:
-        dt = datetime.fromtimestamp(item.mtime)
+    # The date-grouped sort modes, and what each one means: which order the
+    # query runs in, and which of an item's two timestamps the month headers
+    # are cut from. Both come from the same row so the grid can never sort by
+    # one date and label by the other.
+    _DATE_MODES = {
+        "date":            ("file_newest", False),
+        "date_asc":        ("file_oldest", False),
+        "date_taken":      ("newest",      True),
+        "date_taken_asc":  ("oldest",      True),
+    }
+
+    def _date_mode(self, sort_mode: str) -> tuple[str, bool] | None:
+        """(query sort, use the capture date) for a grouped mode, else None."""
+        return self._DATE_MODES.get(sort_mode)
+
+    def _append_date_grouped(self, item: MediaItem, use_taken: bool = True) -> None:
+        dt = datetime.fromtimestamp(_group_time(item, use_taken))
         key = (dt.year, dt.month)
         if key != self._date_last_key:
             self.gallery_grid.append_header(
@@ -330,8 +356,9 @@ class GalleryRenderMixin:
         self._lazy_loading_in_flight = True
         try:
             sort_mode = self.settings.get_sort_mode(self.category, self.current_folder)
-            if sort_mode in ("date", "date_asc"):
-                query_sort = "oldest" if sort_mode == "date_asc" else "newest"
+            date_mode = self._date_mode(sort_mode)
+            if date_mode is not None:
+                query_sort = date_mode[0]
                 grouped = True
             else:
                 query_sort = sort_mode
@@ -366,10 +393,11 @@ class GalleryRenderMixin:
             # would attach to a half-row and shift tiles around.
             self.gallery_grid.finish()
 
+            use_taken = date_mode[1] if date_mode is not None else True
             for item in next_items:
                 self.current_items.append(item)
                 if grouped:
-                    self._append_date_grouped(item)
+                    self._append_date_grouped(item, use_taken)
                 else:
                     self.gallery_grid.append_media(item)
             self.gallery_grid.finish()

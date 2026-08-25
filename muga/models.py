@@ -20,6 +20,25 @@ class MediaItem:
     mtime: float
     size: int
     thumb_path: str | None = None
+    # When the camera says the shot was taken, from EXIF. None when the file
+    # carries no capture date — a screenshot, a download, a video. Distinct
+    # from mtime: copying a photo off a card gives it today's mtime and leaves
+    # taken_at at whenever it was shot.
+    taken_at: float | None = None
+
+    @property
+    def display_time(self) -> float:
+        """The timestamp the gallery files this item under.
+
+        The capture date when the file has one, its mtime otherwise. Sorting,
+        the month headers and the viewer's date label all read this, so a photo
+        cannot appear under one month in the grid and another in the viewer.
+
+        Deliberately not used for the info popover's "Modified" row: that one
+        is about the file, and answering it with the capture date would be a
+        different fact under the same label.
+        """
+        return self.taken_at if self.taken_at else self.mtime
 
     @property
     def is_video(self) -> bool:
