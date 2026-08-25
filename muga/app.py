@@ -1382,13 +1382,25 @@ class GalleryWindow(
 
     def _on_category_toggled(self, button: Gtk.ToggleButton, category: str) -> None:
         if not button.get_active():
-            if category == self.category and self.current_folder is not None:
-                button.handler_block_by_func(self._on_category_toggled)
-                button.set_active(True)
-                button.handler_unblock_by_func(self._on_category_toggled)
-                self._cancel_nc_thumb_queue()
+            # Tapping the category you are already in. A ToggleButton reports
+            # that as being switched *off*, but the tab must stay lit — there
+            # is no such thing as "no category selected" here.
+            if category != self.category:
+                # Some other tab took over; that path re-activates the new one.
+                return
+            button.handler_block_by_func(self._on_category_toggled)
+            button.set_active(True)
+            button.handler_unblock_by_func(self._on_category_toggled)
+            self._cancel_nc_thumb_queue()
+            if self.current_folder is not None:
+                # Drilled into a subfolder — the tap means "back to the top".
                 self.current_folder = None
                 self._render()
+            else:
+                # Already at the top of this category, so the tap can only mean
+                # "load it again". Previously nothing happened at all, which
+                # made the tab look unresponsive.
+                self.refresh(scan=True, scope="current")
             return
         self._cancel_nc_thumb_queue()
         self.category = category
