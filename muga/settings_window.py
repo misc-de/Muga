@@ -464,6 +464,12 @@ class SettingsWindow(Adw.PreferencesWindow):
             f"User set: {bool(s.nextcloud_user)}",
             f"Photos path: {s.nextcloud_photos_path}",
             f"Thumbnail-only scan: {s.nextcloud_thumbnail_only}",
+            # The red badge without this line was the actual complaint: an icon
+            # saying something is wrong, and nothing anywhere saying what.
+            f"Connection marked broken: {bool(getattr(parent, '_nc_broken_reason', ''))}",
+            f"Reason: {getattr(parent, '_nc_broken_reason', '') or '(none)'}",
+            f"Since: {getattr(parent, '_nc_broken_since', '') or '(n/a)'}",
+            f"Breaker tripped: {getattr(parent, '_nc_unreachable', False)}",
             "",
             "MCP server",
             "----------",

@@ -1062,7 +1062,13 @@ def test_scan_flags_a_missing_password_as_broken() -> None:
     win.settings.nextcloud_user = "alice"
     with patch.object(Settings, "load_app_password", return_value=""):
         scheduled = _run_scan(win)
-    assert (win._set_nc_broken, (True,)) in scheduled
+    # With a reason, not bare: a red badge that explains nothing was the
+    # complaint that prompted this — no tooltip, and nothing in the log either.
+    broken = [args for fn, args in scheduled
+              if fn is win._set_nc_broken and args and args[0] is True]
+    assert broken, "the badge was never flagged broken"
+    assert len(broken[0]) == 2 and broken[0][1], f"flagged without a reason: {broken[0]}"
+    assert "password" in broken[0][1].lower()
 
 
 def test_scan_reports_a_failed_nextcloud_sync() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import faulthandler
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 import signal
 import shlex
@@ -194,6 +195,10 @@ class GalleryWindow(
         self._sel_busy: bool = False
         self._nc_spinner: Gtk.Spinner | None = None
         self._nc_broken_img: Gtk.Image | None = None
+        # Why the broken badge is showing, and since when. Kept on the window
+        # so the diagnostics report can name it — see _set_nc_broken.
+        self._nc_broken_reason: str = ""
+        self._nc_broken_since: str = ""
         # On-demand NC thumbnail loader (used by gallery_grid when binding tiles)
         self._nc_thumb_pending: set[str] = set()
         self._nc_thumb_lock = threading.Lock()
@@ -976,8 +981,20 @@ class GalleryWindow(
                     )
                     LOGGER.info("Nextcloud client created for %s", self.settings.nextcloud_url)
                 else:
-                    LOGGER.info("No Nextcloud app password available; skipping scan")
-                    GLib.idle_add(self._set_nc_broken, True)
+                    # A configured account with no retrievable password: the
+                    # keyring is locked, or the secret was removed behind the
+                    # app's back. Warning, not info — this is exactly the state
+                    # that shows a red badge, and at info level it never
+                    # reached the log the user is asked to send in.
+                    LOGGER.warning(
+                        "Nextcloud: no app password could be read for %s@%s "
+                        "(keyring locked or entry removed) — skipping sync",
+                        self.settings.nextcloud_user, self.settings.nextcloud_url,
+                    )
+                    GLib.idle_add(
+                        self._set_nc_broken, True,
+                        self._("No Nextcloud password could be read"),
+                    )
             elif need_nc:
                 LOGGER.info("Nextcloud: keine URL/Benutzer konfiguriert, übersprungen")
 
@@ -1030,7 +1047,6 @@ class GalleryWindow(
                     # fast: flag broken, tell the user once, and trip the
                     # breaker so on-demand thumbnail fetches don't keep
                     # blocking ~20 s each against a server we know is down.
-                    LOGGER.warning("Nextcloud sync failed: %s", nc_err)
                     self._on_nc_sync_failed(nc_err)
                 else:
                     # Sync went through → clear any stale broken state so a
@@ -1042,7 +1058,10 @@ class GalleryWindow(
                 # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
             LOGGER.exception("Media scan failed: %s", e)
-            GLib.idle_add(self._set_nc_broken, True)
+            GLib.idle_add(
+                self._set_nc_broken, True,
+                self._("The media scan failed: %s") % type(e).__name__,
+            )
         finally:
             nc_client = None
             GLib.idle_add(self._set_nc_syncing, False)
@@ -1070,6 +1089,16 @@ class GalleryWindow(
     def _set_nc_broken(self, active: bool, reason: str = "") -> None:
         if self._closing:
             return
+        # Remembered even when the badge widget is not built yet (a narrow
+        # window hides it), so the diagnostics report can always answer "why is
+        # Nextcloud red" — a tooltip is no use to someone pasting a log into a
+        # bug report, and on a phone it is not reachable at all.
+        if active:
+            self._nc_broken_reason = reason or self._("Unknown reason")
+            self._nc_broken_since = datetime.now().isoformat(timespec="seconds")
+        else:
+            self._nc_broken_reason = ""
+            self._nc_broken_since = ""
         if self._nc_broken_img is not None:
             self._nc_broken_img.set_visible(active)
             # A hovered tooltip explains *why* the connection is marked broken,
@@ -1097,6 +1126,16 @@ class GalleryWindow(
         exactly once per broken episode (so repeated retries don't spam dialogs).
         """
         first_failure = not self._nc_unreachable
+        # Logged here rather than at each call site: this is the one funnel
+        # every network failure passes through, and the exception type plus the
+        # traceback are what tell a timeout apart from a rejected password.
+        # exc_info=error, not True: this is also called from the thumbnail
+        # worker outside any except block, where exc_info=True would log a bare
+        # "NoneType: None" instead of the traceback.
+        LOGGER.warning(
+            "Nextcloud unreachable — %s: %s", type(error).__name__, error,
+            exc_info=error,
+        )
         self._nc_unreachable = True
         # Drop anything still queued so workers stop blocking on the dead server.
         self._cancel_nc_thumb_queue()
