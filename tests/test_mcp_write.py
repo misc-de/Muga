@@ -185,10 +185,10 @@ def test_a_directory_cannot_be_deleted(tools, library) -> None:
 # ---------------------------------------------------------------------------
 
 def test_delete_moves_to_trash_and_clears_the_index(library, monkeypatch) -> None:
-    """Gio.trash is stubbed because pytest's tmp_path is on tmpfs, where the
-    real one refuses with "trashing on system internal mounts is not
-    supported". What is under test is the surrounding contract: index row
-    dropped, gallery notified, trash used rather than unlink."""
+    """Gio.trash is stubbed because whether the real one works here depends on
+    the machine, not on the code — see the failure test below. What is under
+    test is the surrounding contract: index row dropped, gallery notified,
+    trash used rather than unlink."""
     db, settings, photos, _videos, _outside = library
     from gi.repository import Gio
 
@@ -209,25 +209,45 @@ def test_delete_moves_to_trash_and_clears_the_index(library, monkeypatch) -> Non
     assert seen == [1]
 
 
-def test_a_file_survives_a_filesystem_without_a_trash(tools, library) -> None:
+def test_a_file_survives_a_filesystem_without_a_trash(tools, library, monkeypatch) -> None:
     """tmpfs has none, and so do FAT cards and many network mounts. The tool
     has to report that and leave the file alone — never fall back to an
-    unrecoverable delete."""
+    unrecoverable delete.
+
+    Gio.trash is stubbed with the error it raises on such a filesystem rather
+    than left to the real one, because whether the real one fails here is a
+    property of the machine, not of the code: conftest puts XDG_DATA_HOME
+    under /tmp, so on a host where /tmp is tmpfs the trash sits on a different
+    filesystem from tmp_path and trashing fails, while on a CI runner where
+    both live on the root volume it quietly succeeds."""
     _db, _s, photos, _videos, _outside = library
+    from gi.repository import Gio, GLib
+
+    def _no_trash_here(_self, _cancellable=None):
+        raise GLib.Error("Trashing on system internal mounts is not supported")
+
+    monkeypatch.setattr(Gio.File, "trash", _no_trash_here)
     target = photos / "one.jpg"
     with pytest.raises(ValueError, match="trash"):
         tools.call("delete_media", {"path": str(target)})
     assert target.exists(), "the file was destroyed after trashing failed"
 
 
-def test_a_failed_delete_leaves_the_index_alone(tools, library) -> None:
+def test_a_failed_delete_leaves_the_index_alone(tools, library, monkeypatch) -> None:
     """A row dropped for a file that is still there would show as a photo
-    missing from the gallery until the next scan puts it back."""
+    missing from the gallery until the next scan puts it back.
+
+    Failure by return value, which is the other way Gio reports it — the
+    delete path has to treat a plain False exactly like a raised error."""
     db, _s, photos, _videos, _outside = library
+    from gi.repository import Gio
+
+    monkeypatch.setattr(Gio.File, "trash", lambda _self, _cancellable=None: False)
     target = photos / "one.jpg"
     with pytest.raises(ValueError):
         tools.call("delete_media", {"path": str(target)})
     assert db.get_media_by_path(str(target)) is not None
+    assert target.exists(), "the file was destroyed after trashing failed"
 
 
 # ---------------------------------------------------------------------------
