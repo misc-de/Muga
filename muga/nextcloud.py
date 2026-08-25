@@ -86,6 +86,50 @@ class NextcloudResponseTooLarge(OSError):
     """The server's PROPFIND body exceeded _MAX_PROPFIND_BYTES."""
 
 
+# Nextcloud reports content hashes as
+# <oc:checksums><oc:checksum>SHA1:abc… MD5:def…</oc:checksum></oc:checksums>,
+# but only for files whose uploader sent one — the desktop client does, a
+# browser upload usually does not. So this is an optional bonus, never
+# something to depend on.
+_OC_NS = "http://owncloud.org/ns"
+# Strongest first. Any of them identifies a file far better than its name does;
+# picking a fixed order keeps the stored value stable when a server offers
+# several, so a re-scan does not rewrite every row.
+_CHECKSUM_PREFERENCE = ("sha256", "sha1", "md5", "adler32")
+
+
+def _parse_checksum(prop) -> str | None:
+    """The best content hash a PROPFIND entry offers, as "algo:value".
+
+    Returns None when the server sends no checksum, an empty element, or
+    something unparseable — all of which are normal and simply mean the caller
+    falls back to comparing names and sizes.
+    """
+    node = prop.find(f"{{{_OC_NS}}}checksums")
+    if node is None:
+        return None
+    # The values sit in a nested <oc:checksum>, but some servers put them
+    # straight into <oc:checksums>; accept either.
+    raw = " ".join(
+        text for text in (node.itertext() if node is not None else ()) if text
+    ).strip()
+    if not raw:
+        return None
+    found: dict[str, str] = {}
+    for token in raw.split():
+        algo, sep, value = token.partition(":")
+        if sep and value:
+            found[algo.strip().lower()] = value.strip().lower()
+    for algo in _CHECKSUM_PREFERENCE:
+        if found.get(algo):
+            return f"{algo}:{found[algo]}"
+    # An algorithm we do not rank is still a usable identity as long as both
+    # copies report the same one.
+    for algo, value in sorted(found.items()):
+        return f"{algo}:{value}"
+    return None
+
+
 class NextcloudClient:
     def __init__(self, server_url: str, username: str, app_password: str) -> None:
         import threading as _threading
@@ -246,9 +290,9 @@ class NextcloudClient:
         folder_path = f"{self.dav_root}/{remote_folder.strip('/')}"
         body = (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<D:propfind xmlns:D="DAV:">'
+            '<D:propfind xmlns:D="DAV:" xmlns:oc="http://owncloud.org/ns">'
             "<D:prop><D:displayname/><D:getcontentlength/>"
-            "<D:getlastmodified/><D:resourcetype/></D:prop>"
+            "<D:getlastmodified/><D:resourcetype/><oc:checksums/></D:prop>"
             "</D:propfind>"
         )
         started = time.monotonic()
@@ -324,7 +368,10 @@ class NextcloudClient:
                 # date-sorted view on every rescan.
                 mtime = 0.0
             name = href.rstrip("/").rsplit("/", 1)[-1]
-            results.append({"dav_path": href, "size": size, "mtime": mtime, "name": name})
+            results.append({
+                "dav_path": href, "size": size, "mtime": mtime, "name": name,
+                "checksum": _parse_checksum(prop),
+            })
         return results
 
     # ------------------------------------------------------------------

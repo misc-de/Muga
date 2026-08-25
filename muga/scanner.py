@@ -196,6 +196,7 @@ class MediaScanner:
                 mtime=info["mtime"],
                 size=info["size"],
                 thumb_path=thumb,
+                checksum=info.get("checksum"),
             )
 
     def _nc_folder(self, dav_path: str, dav_root: str, photos_path: str) -> str:
@@ -406,6 +407,10 @@ class MediaScanner:
                 "mtime": info["mtime"],
                 "size": info["size"],
                 "thumb_path": None,
+                # Present only when the server reports one; the aggregate views
+                # use it to spot a copy that was renamed, which name and size
+                # alone cannot catch.
+                "checksum": info.get("checksum"),
             })
             if len(batch) >= BATCH_SIZE:
                 self.database.upsert_remote_media_bulk(batch)

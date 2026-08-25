@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS media (
     -- rather than replacing it: mtime always exists and still drives the
     -- gallery's sort order, while date search prefers this when present.
     taken_at REAL DEFAULT NULL,
+    -- Content hash as "algo:value", when the source can supply one. Only
+    -- Nextcloud does, and only for files uploaded with a checksum; local files
+    -- are never hashed, because that would mean reading every byte of the
+    -- library. NULL is the normal case and simply means "compare by name and
+    -- size instead".
+    checksum TEXT DEFAULT NULL,
     UNIQUE(path, category)
 );
 CREATE INDEX IF NOT EXISTS idx_media_category ON media(category);
@@ -156,6 +162,12 @@ class Database:
         # the rare write-vs-write race at the SQLite layer with a short
         # internal wait-and-retry instead of an exception.
         self._tls = threading.local()
+        # Whether any row carries a content checksum. None until first asked.
+        # The second dedup window costs real time (32 ms of a 91 ms page on a
+        # 12k-picture phone library) and buys nothing at all when no source
+        # supplies checksums — which is most of them. Answered once, then
+        # flipped to True by any write that stores one.
+        self._checksums_seen: bool | None = None
         # Shared by every thread — see the wlock property.
         self._write_lock = threading.RLock()
         # Initialise the *current* thread's connection so the schema/migration
@@ -465,6 +477,25 @@ class Database:
                 self.wconn.commit()
             except sqlite3.OperationalError as exc:
                 LOGGER.warning("Could not create the capture-date indexes: %s", exc)
+        if version < 11:
+            try:
+                self.wconn.execute("ALTER TABLE media ADD COLUMN checksum TEXT DEFAULT NULL")
+                # Partial: empty, and therefore free, on the libraries that
+                # have no checksums at all — which is what has_checksums()
+                # needs to answer instantly.
+                self.wconn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_media_checksum ON media(checksum) "
+                    "WHERE checksum IS NOT NULL"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    LOGGER.warning("Could not add the checksum column: %s", exc)
+            try:
+                self.wconn.execute("PRAGMA user_version = 11")
+                self.wconn.commit()
+            except sqlite3.OperationalError as exc:
+                LOGGER.warning("Could not pin schema version 11: %s", exc)
+
 
     def _repoint_legacy_thumb_paths(self) -> None:
         """Point thumb_path at the renamed cache directory.
@@ -504,6 +535,24 @@ class Database:
                 "Repointed %s thumbnail path(s) from %s to %s",
                 cur.rowcount, LEGACY_CACHE_DIR, CACHE_DIR,
             )
+
+    def has_checksums(self) -> bool:
+        """True when at least one row carries a content checksum.
+
+        Backed by a partial index, so on a library with none this is an empty
+        index probe rather than a table scan.
+        """
+        if self._checksums_seen is None:
+            try:
+                with self.lock:
+                    row = self.conn.execute(
+                        "SELECT 1 FROM media WHERE checksum IS NOT NULL LIMIT 1"
+                    ).fetchone()
+                self._checksums_seen = row is not None
+            except sqlite3.OperationalError:
+                # Column not there yet on a database mid-migration.
+                self._checksums_seen = False
+        return bool(self._checksums_seen)
 
     def load_scan_index(self, category: str) -> dict[str, tuple[float, int, bool]]:
         """Return ``{path: (mtime, size, exif_read)}`` for every row in *category*.
@@ -579,12 +628,14 @@ class Database:
             )
 
     def upsert_remote_media(self, *, path: str, category: str, media_type: str, folder: str,
-                             name: str, mtime: float, size: int, thumb_path: str | None) -> None:
+                             name: str, mtime: float, size: int, thumb_path: str | None,
+                             checksum: str | None = None) -> None:
         with self.wlock:
             self.wconn.execute(
                 """
-                INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO media(path, category, media_type, folder, name, mtime, size,
+                                  thumb_path, seen_at, checksum)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path, category) DO UPDATE SET
                     media_type=excluded.media_type,
                     folder=excluded.folder,
@@ -592,10 +643,17 @@ class Database:
                     mtime=excluded.mtime,
                     size=excluded.size,
                     thumb_path=COALESCE(excluded.thumb_path, media.thumb_path),
-                    seen_at=excluded.seen_at
+                    seen_at=excluded.seen_at,
+                    -- COALESCE, so a sync against a server that stopped
+                    -- reporting checksums does not erase what an earlier one
+                    -- already established.
+                    checksum=COALESCE(excluded.checksum, media.checksum)
                 """,
-                (path, category, media_type, folder, name, mtime, size, thumb_path, time.time()),
+                (path, category, media_type, folder, name, mtime, size, thumb_path,
+                 time.time(), checksum),
             )
+        if checksum:
+            self._checksums_seen = True
 
     def upsert_remote_media_bulk(self, rows: list[dict]) -> None:
         """Batched variant of upsert_remote_media — takes the lock once for the
@@ -608,14 +666,16 @@ class Database:
             (
                 r["path"], r["category"], r["media_type"], r["folder"],
                 r["name"], r["mtime"], r["size"], r.get("thumb_path"), now,
+                r.get("checksum"),
             )
             for r in rows
         ]
         with self.wlock:
             self.wconn.executemany(
                 """
-                INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO media(path, category, media_type, folder, name, mtime, size,
+                                  thumb_path, seen_at, checksum)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path, category) DO UPDATE SET
                     media_type=excluded.media_type,
                     folder=excluded.folder,
@@ -623,10 +683,13 @@ class Database:
                     mtime=excluded.mtime,
                     size=excluded.size,
                     thumb_path=COALESCE(excluded.thumb_path, media.thumb_path),
-                    seen_at=excluded.seen_at
+                    seen_at=excluded.seen_at,
+                    checksum=COALESCE(excluded.checksum, media.checksum)
                 """,
                 payload,
             )
+        if any(r.get("checksum") for r in rows):
+            self._checksums_seen = True
 
     def prune_missing(self, seen_since: float, categories: list[str]) -> int:
         if not categories:
@@ -693,7 +756,8 @@ class Database:
 
     @staticmethod
     def _one_row_per_file(where: str, args: list, *,
-                          merge_remote: bool = False) -> tuple[str, list]:
+                          merge_remote: bool = False,
+                          use_checksums: bool = False) -> tuple[str, list]:
         """Narrow *where* to a single row per file.
 
         The same photo legitimately sits in the index more than once: `media` is
@@ -762,18 +826,42 @@ class Database:
         # filter, which is the same reason the where clause is repeated above.
         # An index on (lower(name), size) does not help either way: the ORDER
         # BY still needs its temp B-tree, and it measured slightly slower.
+        # Two windows, both of which a row has to lead to survive.
+        #
+        # The first is name+size, which is all that is available for a local
+        # file — nothing hashes those, and doing so would mean reading every
+        # byte of the library. The second is the content checksum, which only
+        # Nextcloud can supply and only for files uploaded with one. It is
+        # purely additive: a row without a checksum sits alone in its own
+        # partition and is always rank 1, so a library with no checksums at
+        # all behaves exactly as it did before. Where they do exist, they also
+        # catch a copy that was renamed on the server, which name+size cannot.
+        order = "(category = 'nextcloud'), id"
+        if not use_checksums:
+            # No source in this library supplies one, so the second window
+            # could only ever rank every row 1 — pure cost. Measured at 32 ms
+            # of a 91 ms page on a 12k-picture phone library, for nothing.
+            return (
+                f"({where}) AND id IN (SELECT id FROM ("
+                f"SELECT id, ROW_NUMBER() OVER ("
+                f"PARTITION BY lower(name), size ORDER BY {order}) AS rn "
+                f"FROM media WHERE ({where})) WHERE rn = 1)",
+                args + args,
+            )
         return (
             f"({where}) AND id IN (SELECT id FROM ("
-            f"SELECT id, ROW_NUMBER() OVER ("
-            f"PARTITION BY lower(name), size "
-            f"ORDER BY (category = 'nextcloud'), id) AS rn "
-            f"FROM media WHERE ({where})) WHERE rn = 1)",
+            f"SELECT id, "
+            f"ROW_NUMBER() OVER (PARTITION BY lower(name), size ORDER BY {order}) AS rn_name, "
+            f"CASE WHEN checksum IS NULL OR checksum = '' THEN 1 ELSE "
+            f"ROW_NUMBER() OVER (PARTITION BY checksum ORDER BY {order}) END AS rn_sum "
+            f"FROM media WHERE ({where})) WHERE rn_name = 1 AND rn_sum = 1)",
             args + args,
         )
 
     @staticmethod
     def _build_list_where(category: str, folder: str | None, include_nc: bool,
-                          media_filter: str | None = None) -> tuple[str, list]:
+                          media_filter: str | None = None,
+                          use_checksums: bool = False) -> tuple[str, list]:
         """Return (where_sql, args) for filtering by category (+ optional folder).
         Built-in image categories restrict to media_type='image'; the videos
         and pictures (Overview) categories aggregate across every source.
@@ -803,7 +891,10 @@ class Database:
                 base_pic = (
                     f"({base_pic}) OR (category = 'nextcloud' AND media_type = 'image')"
                 )
-            return Database._one_row_per_file(base_pic, args_pic, merge_remote=include_nc)
+            return Database._one_row_per_file(
+                base_pic, args_pic, merge_remote=include_nc,
+                use_checksums=use_checksums,
+            )
         args: list = [category]
         if media_filter == "videos":
             local = "category = ? AND media_type = 'video'"
@@ -835,7 +926,8 @@ class Database:
             "folder":      f"folder COLLATE NOCASE ASC, {Database._SORT_DATE} DESC",
             "folder_desc": f"folder COLLATE NOCASE DESC, {Database._SORT_DATE} DESC",
         }.get(sort_mode, "mtime DESC")
-        where, args = self._build_list_where(category, folder, include_nc, media_filter)
+        where, args = self._build_list_where(category, folder, include_nc, media_filter,
+                                                    self.has_checksums())
         with self.lock:
             rows = self.conn.execute(
                 f"SELECT {self._ITEM_COLS} FROM media WHERE {where} ORDER BY {order}", args
@@ -845,7 +937,8 @@ class Database:
     def count_media(self, category: str, folder: str | None = None, include_nc: bool = False,
                     media_filter: str | None = None) -> int:
         """Return total count of media items (for pagination)."""
-        where, args = self._build_list_where(category, folder, include_nc, media_filter)
+        where, args = self._build_list_where(category, folder, include_nc, media_filter,
+                                                    self.has_checksums())
         with self.lock:
             result = self.conn.execute(f"SELECT COUNT(*) FROM media WHERE {where}", args).fetchone()
         return result[0] if result else 0
@@ -956,7 +1049,8 @@ class Database:
         """Total number of items matching the search query in the given
         category/folder context. Mirrors search_media so paginated callers
         can know when to stop fetching."""
-        base_where, args = self._build_list_where(category, folder, include_nc, media_filter)
+        base_where, args = self._build_list_where(category, folder, include_nc, media_filter,
+                                                    self.has_checksums())
         search_where, search_args = self._build_search_clause(query)
         full_where = f"({base_where}) AND {search_where}"
         args.extend(search_args)
@@ -989,7 +1083,8 @@ class Database:
             "folder":      f"folder COLLATE NOCASE ASC, {Database._SORT_DATE} DESC",
             "folder_desc": f"folder COLLATE NOCASE DESC, {Database._SORT_DATE} DESC",
         }.get(sort_mode, "mtime DESC")
-        base_where, args = self._build_list_where(category, folder, include_nc, media_filter)
+        base_where, args = self._build_list_where(category, folder, include_nc, media_filter,
+                                                    self.has_checksums())
         search_where, search_args = self._build_search_clause(query)
         full_where = f"({base_where}) AND {search_where}"
         args.extend(search_args)
@@ -1021,7 +1116,8 @@ class Database:
             "folder":      f"folder COLLATE NOCASE ASC, {Database._SORT_DATE} DESC",
             "folder_desc": f"folder COLLATE NOCASE DESC, {Database._SORT_DATE} DESC",
         }.get(sort_mode, "mtime DESC")
-        where, args = self._build_list_where(category, folder, include_nc, media_filter)
+        where, args = self._build_list_where(category, folder, include_nc, media_filter,
+                                                    self.has_checksums())
         args.extend([limit, offset])
         with self.lock:
             rows = self.conn.execute(

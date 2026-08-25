@@ -464,3 +464,56 @@ def test_the_eager_scan_skips_non_media(scanner) -> None:
     sc._scan_nextcloud(client, "Photos")
     db.commit()
     assert db.count_media("nextcloud") == 1
+
+
+# ---------------------------------------------------------------------------
+# Server-supplied checksums
+# ---------------------------------------------------------------------------
+
+def test_checksum_parsing_picks_the_strongest_offered() -> None:
+    import xml.etree.ElementTree as ET
+
+    from muga.nextcloud import _parse_checksum
+
+    def prop(inner):
+        return ET.fromstring(
+            f'<prop xmlns:oc="http://owncloud.org/ns">{inner}</prop>'
+        )
+
+    assert _parse_checksum(prop(
+        "<oc:checksums><oc:checksum>SHA1:ABC123 MD5:def456</oc:checksum></oc:checksums>"
+    )) == "sha1:abc123"
+    assert _parse_checksum(prop(
+        "<oc:checksums><oc:checksum>SHA256:aa SHA1:bb</oc:checksum></oc:checksums>"
+    )) == "sha256:aa"
+
+
+def test_a_missing_or_empty_checksum_is_none() -> None:
+    """Both are normal: most files on most servers carry none, and the caller
+    simply falls back to comparing names and sizes."""
+    import xml.etree.ElementTree as ET
+
+    from muga.nextcloud import _parse_checksum
+
+    def prop(inner):
+        return ET.fromstring(
+            f'<prop xmlns:oc="http://owncloud.org/ns">{inner}</prop>'
+        )
+
+    assert _parse_checksum(prop("")) is None
+    assert _parse_checksum(prop("<oc:checksums/>")) is None
+    assert _parse_checksum(prop("<oc:checksums></oc:checksums>")) is None
+    assert _parse_checksum(prop(
+        "<oc:checksums><oc:checksum>NONSENSE</oc:checksum></oc:checksums>"
+    )) is None
+
+
+def test_the_propfind_asks_for_checksums() -> None:
+    """Nothing downstream can use them if the request never requests them."""
+    import inspect
+
+    from muga import nextcloud
+
+    source = inspect.getsource(nextcloud.NextcloudClient.list_files)
+    assert "oc:checksums" in source
+    assert 'xmlns:oc="http://owncloud.org/ns"' in source
