@@ -954,3 +954,149 @@ def test_disconnect_clears_both_schemas(
     settings.clear_app_password()
 
     assert fake.store == {}, f"entries survived the disconnect: {fake.store}"
+
+
+# ---------------------------------------------------------------------------
+# 11.  The vulnerability audit covers what the project actually depends on
+# ---------------------------------------------------------------------------
+#
+# The CI audit step used to name its packages by hand, which made the list a
+# copy of pyproject.toml's — and a copy that nothing compared. A dependency
+# added to the project would simply never have been scanned, and the job would
+# still have gone green. scripts/audit_requirements.py derives the list now;
+# these pin down that it stays derived.
+
+def _pyproject() -> dict:
+    import tomllib
+
+    root = Path(__file__).resolve().parent.parent
+    return tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def test_every_declared_dependency_is_audited_or_named_as_an_exception() -> None:
+    """Nothing may fall out of the audit silently. A dependency that cannot be
+    installed from PyPI has to be listed in NOT_ON_PYPI, where it is visible,
+    rather than being left off the list where it is not."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    try:
+        from audit_requirements import NOT_ON_PYPI, _name_of, requirements
+    finally:
+        sys.path.pop(0)
+
+    data = _pyproject()
+    declared = [
+        *data["build-system"]["requires"],
+        *data["project"]["dependencies"],
+    ]
+    covered = {_name_of(req) for req in requirements()} | NOT_ON_PYPI
+    missing = [req for req in declared if _name_of(req) not in covered]
+    assert not missing, f"declared but neither audited nor excepted: {missing}"
+
+
+def test_the_audit_carries_the_version_floors_across() -> None:
+    """The floors are the whole point — Pillow's is pinned against specific
+    decoder advisories. Installing the bare names would audit whatever pip
+    happened to resolve, which is never the version being asserted about."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    try:
+        from audit_requirements import requirements
+    finally:
+        sys.path.pop(0)
+
+    audited = requirements()
+    assert any(req.startswith("Pillow>=") for req in audited), audited
+    assert any(req.startswith("setuptools>=") for req in audited), audited
+
+
+def test_the_build_backend_is_audited_too() -> None:
+    """setuptools has advisories of its own (CVE-2024-6345, CVE-2025-47273,
+    CVE-2026-59890). It builds every release, so leaving it out looks at half
+    the tree."""
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    try:
+        from audit_requirements import _name_of, requirements
+    finally:
+        sys.path.pop(0)
+
+    assert "setuptools" in {_name_of(req) for req in requirements()}
+
+
+def test_the_setuptools_floor_clears_its_known_advisories() -> None:
+    """83.0.0 is the first release past CVE-2026-59890 — an sdist silently
+    including a file MANIFEST.in excludes, via an NFC/NFD filename collision.
+    This project ships an sdist and uses MANIFEST.in to decide what is in it."""
+    import re
+
+    requires = _pyproject()["build-system"]["requires"]
+    floor = next(req for req in requires if req.lower().startswith("setuptools"))
+    major = int(re.search(r">=\s*(\d+)", floor).group(1))
+    assert major >= 83, f"{floor} still admits versions with known advisories"
+
+# ---------------------------------------------------------------------------
+# 12.  The two Flatpak manifests describe the same build
+# ---------------------------------------------------------------------------
+#
+# de.cais.Muga.flathub.yml says of itself that everything but the source —
+# runtime, modules, permissions — is "deliberately identical" to the repository
+# manifest. Nothing checked that. A runtime bump or a permission change applied
+# to one of them would ship a Flathub build that is not the one anyone tested,
+# and it would look right in both files read on their own.
+
+def _manifest_lines(name: str) -> list[str]:
+    root = Path(__file__).resolve().parent.parent
+    return (root / name).read_text(encoding="utf-8").split("\n")
+
+
+def _from_id_to_muga_module(lines: list[str]) -> list[str]:
+    """Everything the two manifests promise to share: the header, finish-args,
+    cleanup and every module up to (not including) muga's own, which is where
+    the documented difference — working tree vs tagged git state — lives."""
+    return lines[lines.index("id: de.cais.Muga"):lines.index("  - name: muga")]
+
+
+def test_the_two_manifests_agree_on_everything_but_the_source() -> None:
+    repo = _from_id_to_muga_module(_manifest_lines("de.cais.Muga.yml"))
+    flathub = _from_id_to_muga_module(_manifest_lines("de.cais.Muga.flathub.yml"))
+    if repo != flathub:
+        import difflib
+
+        diff = "\n".join(difflib.unified_diff(repo, flathub, "repo", "flathub", lineterm=""))
+        raise AssertionError(f"the manifests have drifted apart:\n{diff}")
+
+
+def test_the_muga_module_is_built_the_same_way_in_both() -> None:
+    """Only the sources differ. The build commands — what actually lands in
+    /app — must not."""
+    def build_commands(name: str) -> list[str]:
+        lines = _manifest_lines(name)
+        start = lines.index("  - name: muga")
+        return lines[start:lines.index("    sources:", start)]
+
+    assert build_commands("de.cais.Muga.yml") == build_commands("de.cais.Muga.flathub.yml")
+
+
+def test_the_documented_runtime_matches_the_one_that_is_built() -> None:
+    """The README's install line and the Makefile's cross-build check both name
+    a branch by hand. Following either one while the manifest asks for another
+    is a download that does not help."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    manifest = (root / "de.cais.Muga.yml").read_text(encoding="utf-8")
+    version = re.search(r"^runtime-version: '([^']+)'", manifest, re.M).group(1)
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert f"org.gnome.Platform//{version}" in readme, (
+        f"README does not tell people to install runtime {version}"
+    )
+
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    assert "$(FP_RUNTIME)" in makefile and "/49" not in makefile, (
+        "the Makefile still names a runtime branch of its own"
+    )

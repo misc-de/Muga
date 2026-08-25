@@ -142,19 +142,23 @@ def gtk_app():
 
 @pytest.fixture
 def gallery_window(gtk_app):
-    """A real GalleryWindow with the initial scan suppressed.
+    """A real GalleryWindow with the initial scan and the watcher suppressed.
 
     ``refresh`` is patched out because the constructor calls it with
     ``scan=True``, which would walk the user's actual media folders.
+    ``_start_watching`` for the same reason: it would put inotify watches on
+    every directory under them.
     """
     from unittest.mock import patch
 
     import muga.app as app_mod
 
-    with patch.object(app_mod.GalleryWindow, "refresh"):
+    with patch.object(app_mod.GalleryWindow, "refresh"), \
+            patch.object(app_mod.GalleryWindow, "_start_watching"):
         win = app_mod.GalleryWindow(gtk_app)
     yield win
     win._closing = True
+    win._stop_watching()
     win.destroy()
 
 

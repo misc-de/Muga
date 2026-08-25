@@ -3,8 +3,9 @@
 Muga already knows where every photo and video on the device is, what folder
 it sits in, when it was taken and what its EXIF says. This exposes that to an
 MCP client ("find the videos I shot last August", "how many screenshots are
-in the index") without giving anything on the network a way to modify, move
-or delete a file: every tool here is a SELECT.
+in the index"). The read tools are all a SELECT; the write ones (delete, move,
+add) exist only while the user has switched write access on, and every path
+they take goes through GalleryTools._resolve_for_write first.
 
 Transport is MCP's Streamable HTTP on ``POST /mcp``. Responses are plain
 ``application/json`` — the server never needs to push, so it does not open an
@@ -14,7 +15,9 @@ answers 405, telling a client not to wait for one.
 Authentication is a bearer token from :mod:`muga.mcp_tokens`, and a token has
 to exist before the server will start at all — without one there is nothing a
 client could authenticate with, and a listening socket that refuses every
-request is only a way to be wrong later.
+request is only a way to be wrong later. Ahead of the token, every request is
+checked against :func:`origin_is_allowed`, which is what keeps a page in the
+user's browser from reaching this port through DNS rebinding.
 
 How far it listens is the user's choice (``mcp_bind``): loopback only by
 default, or the LAN address, a public address, or every interface. Widening
@@ -39,6 +42,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
+from urllib.parse import urlsplit
 
 from . import APP_ID, VERSION
 from .config import DEFAULT_MCP_PORT
@@ -197,6 +201,58 @@ def resolve_bind(scope: str) -> tuple[str, str]:
         return ANY_ADDRESS, advertised
     address = addresses.get(scope) or LOOPBACK
     return address, address
+
+
+# ---------------------------------------------------------------------------
+# Origin validation
+# ---------------------------------------------------------------------------
+
+def origin_is_allowed(origin: str) -> bool:
+    """Whether a request carrying this ``Origin`` header may be served.
+
+    This is the DNS-rebinding defence the Streamable HTTP transport requires
+    of every server ("Servers MUST validate the Origin header on all incoming
+    connections"). The attack it stops: a page the user visits resolves its
+    own hostname to 127.0.0.1, then POSTs to the MCP port from inside their
+    browser, reaching a socket that is otherwise unreachable from the network.
+    The browser still labels those requests with the *page's* origin, so
+    refusing everything that is not itself loopback breaks the rebind while
+    leaving a genuinely local browser client working.
+
+    The bearer token already refuses such a request — but a token is a secret
+    that can leak into a client config a page can read, and the transport asks
+    for this check on its own account, so it does not lean on that.
+
+    An absent header is allowed: a browser always sends one on a cross-origin
+    POST, while the CLI and desktop MCP clients this server is actually for
+    send none at all. Rejecting them to catch an attacker who could simply
+    omit the header would cost every real client and buy nothing.
+    """
+    text = (origin or "").strip()
+    if not text:
+        return True
+    # A sandboxed iframe, a file:// page or a redirected form post sends the
+    # literal string "null". Nothing legitimate here does.
+    if text.lower() == "null":
+        return False
+    try:
+        parsed = urlsplit(text)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # A name, not an address — which is exactly what a rebound host looks
+        # like. Names are not resolved here on purpose: resolving one would
+        # ask the very DNS the attack controls.
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -980,6 +1036,8 @@ class _Handler(BaseHTTPRequestHandler):
     # -- verbs ----------------------------------------------------------
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's naming
+        if not self._check_origin():
+            return
         if not self._check_path():
             return
         token = self._authenticate()
@@ -1001,6 +1059,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, reply)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self._check_origin():
+            return
         if not self._check_path():
             return
         if self._authenticate() is None:
@@ -1014,6 +1074,8 @@ class _Handler(BaseHTTPRequestHandler):
         # Session termination. State lives entirely in the request, so there
         # is nothing to tear down — but answering keeps well-behaved clients
         # from logging a failure on disconnect.
+        if not self._check_origin():
+            return
         if not self._check_path():
             return
         if self._authenticate() is None:
@@ -1021,6 +1083,26 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_bytes(200, b"", "text/plain")
 
     # -- plumbing -------------------------------------------------------
+
+    def _check_origin(self) -> bool:
+        """Refuse a cross-origin browser request before anything else runs.
+
+        Ahead of the path and the token deliberately: a rebound page must not
+        be able to tell a live MCP port from a closed one by which error it
+        gets back, and a token comparison is not something an unvetted origin
+        should be able to reach at all. See :func:`origin_is_allowed`.
+        """
+        origin = self.headers.get("Origin", "")
+        if origin_is_allowed(origin):
+            return True
+        LOGGER.warning(
+            "MCP request from %s rejected: cross-origin request from %r",
+            self.address_string(), origin,
+        )
+        self._send_json(
+            403, _error(None, _INVALID_REQUEST, "Cross-origin requests are not accepted"),
+        )
+        return False
 
     def _check_path(self) -> bool:
         path = self.path.split("?", 1)[0].rstrip("/") or "/"

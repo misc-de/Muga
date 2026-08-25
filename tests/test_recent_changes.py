@@ -1571,13 +1571,15 @@ def test_gallery_window_places_the_auto_nav_per_display(
 
     monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
     monkeypatch.setattr(app_mod, "display_is_desktop", lambda: desktop)
-    with patch.object(app_mod.GalleryWindow, "refresh"):
+    with patch.object(app_mod.GalleryWindow, "refresh"), \
+            patch.object(app_mod.GalleryWindow, "_start_watching"):
         win = app_mod.GalleryWindow(gtk_app)
     try:
         assert win.settings.nav_position == "auto", "test needs an unset config"
         assert win._nav_position == expected
     finally:
         win._closing = True
+        win._stop_watching()
         win.destroy()
 
 
@@ -2271,7 +2273,7 @@ def test_recreate_destroys_tracked_settings_dialog_before_self() -> None:
 
 
 def test_open_settings_is_idempotent() -> None:
-    """Clicking the gear button twice must not stack two dialogs — the
+    """Clicking the settings button twice must not stack two dialogs — the
     second click presents the existing one. Pin via source order: the
     existing-dialog branch returns before constructing a new SettingsWindow."""
     src = gallery_source()

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 from .scanner import MediaScanner
 from .thumbnails import Thumbnailer, pillow_version_warning
 from .viewer import ViewerWindow
+from .watcher import MediaWatcher
 from .camera import CameraWindow, camera_supported
 
 LOGGER = logging.getLogger(__name__)
@@ -286,6 +287,12 @@ class GalleryWindow(
             "notify::dark", self._on_system_theme_changed,
         )
         self.refresh(scan=True)
+        # Watch the indexed folders so a picture written by anything else —
+        # the system camera, a screenshot tool, a file manager copy, a sync
+        # client — reaches the grid on its own. Started after the first render
+        # so the initial scan isn't racing a watcher over the same files.
+        self._watcher = MediaWatcher(self._on_disk_changed)
+        self._start_watching()
         pil_warning = pillow_version_warning()
         if pil_warning:
             LOGGER.warning("%s", pil_warning)
@@ -306,7 +313,7 @@ class GalleryWindow(
         # modal dialog left a stale grab in GTK's tracker. The reopened
         # dialog rendered and reacted visually but every action handler was
         # silent. Without auto-reopen the recreation works reliably; the
-        # user reopens settings via the header gear button if they want to
+        # user reopens settings via the header menu button if they want to
         # make further changes.
 
     def _(self, text: str) -> str:
@@ -477,10 +484,14 @@ class GalleryWindow(
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
 
-        self.settings_button = Gtk.Button.new_from_icon_name("emblem-system-symbolic")
+        # Pack order on the end (right) edge: settings first, so the three-dot
+        # menu ends up flush against the right-hand corner of the titlebar (the
+        # first pack_end widget is the outermost one) — the same spot Emilia
+        # puts it. Sort and camera line up to its left.
+        self.settings_button = Gtk.Button.new_from_icon_name("xsi-view-more-symbolic")
         self.settings_button.set_tooltip_text(self._("Settings"))
         self.settings_button.connect("clicked", self._open_settings)
-        self.header.pack_start(self.settings_button)
+        self.header.pack_end(self.settings_button)
 
         self.sort_button = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
         self.sort_button.set_tooltip_text(self._("Sort"))
@@ -1113,6 +1124,94 @@ class GalleryWindow(
             self.refresh_button.set_sensitive(True)
         return GLib.SOURCE_REMOVE
 
+    # ------------------------------------------------------------------
+    # Live filesystem watching
+    # ------------------------------------------------------------------
+
+    def _start_watching(self) -> None:
+        """(Re)point the watcher at the folders that are actually indexed.
+
+        Called again after a settings change, so a root the user just removed
+        stops firing and one they just added starts.
+        """
+        watcher = getattr(self, "_watcher", None)
+        if watcher is None:
+            return
+        roots = [
+            Path(path).expanduser()
+            for category, _label, path in self.settings.categories()
+            if category not in ("nextcloud", "pictures") and path
+        ]
+        try:
+            watcher.watch(roots)
+        except Exception:
+            # A library too deep for the inotify quota, a root that vanished
+            # mid-setup — none of it is worth losing the window over. Without
+            # a watcher the gallery is exactly as up-to-date as it was before
+            # one existed: refresh by hand.
+            LOGGER.exception("Could not watch the media folders")
+
+    def _stop_watching(self) -> None:
+        watcher = getattr(self, "_watcher", None)
+        if watcher is not None:
+            watcher.stop()
+
+    def _on_disk_changed(self, paths: set[str]) -> None:
+        """The watcher reports files that changed under the indexed roots.
+
+        Delivered on the main loop (that is where Gio dispatches monitor
+        events), so the indexing — a thumbnail decode and an EXIF read per
+        file — is handed to a worker and only the re-render comes back.
+        """
+        if self._closing or not paths:
+            return
+        threading.Thread(
+            target=self._index_paths, args=(sorted(paths),), daemon=True,
+        ).start()
+
+    def _index_paths(self, paths: list[str]) -> None:
+        """Worker: index each path that exists, forget each one that doesn't."""
+        categories = self.settings.categories()
+        excluded = self.settings.excluded_subtrees()
+        changed = False
+        try:
+            for raw in paths:
+                if self._closing:
+                    return
+                path = Path(raw)
+                try:
+                    if path.exists():
+                        changed |= self.scanner.index_file(path, categories, excluded)
+                    else:
+                        changed |= self.scanner.forget_file(path)
+                except Exception:
+                    LOGGER.exception("Could not index %s", path)
+            if changed and not self._closing:
+                GLib.idle_add(self.refresh, False)
+        finally:
+            # This thread lives for one batch, and reading the index opened a
+            # connection with a 16 MB page cache behind it. Long-lived threads
+            # keep theirs; a per-batch one has to hand it back or a busy day
+            # of photo-taking leaks one file descriptor per capture.
+            self.database.close_thread_connection()
+
+    def _on_camera_captured(self, path: Path) -> None:
+        """A shot from the built-in camera just hit disk.
+
+        Indexed directly instead of through a scoped rescan: the rescan this
+        used to trigger only covered the category being *viewed*, so a photo
+        taken while Videos or Nextcloud was open never reached the index at
+        all, and even on Overview the picture only appeared after a walk of
+        the whole library. The watcher would catch this file too — this path
+        just gets it on screen at once, and still works when the library is
+        too deep to watch.
+        """
+        if self._closing:
+            return
+        threading.Thread(
+            target=self._index_paths, args=([str(path)],), daemon=True,
+        ).start()
+
     def _nc_error_reason(self, error: Exception) -> str:
         """A short, human tooltip for the broken badge."""
         if isinstance(error, PermissionError):
@@ -1488,7 +1587,7 @@ class GalleryWindow(
         dialog.present()
 
     def _on_settings_dialog_closed(self, _dialog) -> bool:
-        # Drop the reference so the next gear-button click creates a fresh
+        # Drop the reference so the next menu-button click creates a fresh
         # dialog. Returning False on close-request lets the close proceed.
         self._settings_dialog = None
         return False
@@ -1501,7 +1600,7 @@ class GalleryWindow(
             save_dir=save_dir,
             video_dir=video_dir,
             translator=self._,
-            on_captured=lambda _p: self.refresh(scan=True, scope="current"),
+            on_captured=self._on_camera_captured,
             handedness=self.settings.handedness,
             settings=self.settings,
         )
@@ -1709,6 +1808,9 @@ class GalleryWindow(
         # changed; otherwise it's a pure re-render (picks up columns/sort/etc).
         self._build_ui()
         self.refresh(scan=getattr(self, "_settings_needs_scan", True))
+        # The configured roots may have moved with that change; re-point the
+        # watcher so it follows the folders the scanner now indexes.
+        self._start_watching()
         return GLib.SOURCE_REMOVE
 
     def _recreate_window_for_layout_change(self) -> None:
@@ -1738,6 +1840,10 @@ class GalleryWindow(
         # spin up the replacement so any in-flight worker callback that lands
         # during the swap bails instead of mutating our dying widget tree.
         self._closing = True
+        # Release the directory monitors with the window they belong to — the
+        # replacement builds its own, and a cancelled monitor cannot deliver
+        # an event into a widget tree that is about to be destroyed.
+        self._stop_watching()
         new_window = GalleryWindow(app)
         new_window.present()
         # Explicitly tear down our tracked settings dialog before destroying
