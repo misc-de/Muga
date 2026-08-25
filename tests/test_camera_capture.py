@@ -287,7 +287,7 @@ def _exif_win(tmp_path: Path, **attrs) -> SimpleNamespace:
     """A ``self`` for _write_exif_pillow, which calls two sibling methods —
     bind the real ones so the test exercises the whole writer."""
     win = _win(tmp_path, **attrs)
-    for name in ("_current_exif_basics", "_pillow_set_gps"):
+    for name in ("_current_exif_basics", "_pillow_set_gps", "_captured_exif"):
         setattr(win, name, getattr(camera.CameraWindow, name).__get__(win, type(win)))
     return win
 
@@ -297,6 +297,56 @@ def _photo(tmp_path: Path) -> Path:
     path = tmp_path / "shot.jpg"
     PILImage.new("RGB", (48, 32), (5, 10, 15)).save(path, quality=90)
     return path
+
+
+def _photo_with_capture_exif(tmp_path: Path) -> Path:
+    """A JPEG carrying the kind of block the HAL writes."""
+    PILImage = pytest.importorskip("PIL.Image")
+    from PIL.Image import Exif
+
+    exif = Exif()
+    exif[0x010F] = "FuriLabs"                    # Make
+    ifd = exif.get_ifd(0x8769)
+    ifd[0x829A] = (1, 100)                       # ExposureTime
+    ifd[0x8827] = 150                            # ISOSpeedRatings
+    path = tmp_path / "hal.jpg"
+    PILImage.new("RGB", (48, 32), (5, 10, 15)).save(path, quality=90, exif=exif)
+    return path
+
+
+def test_pillow_exif_keeps_what_the_camera_recorded(tmp_path: Path) -> None:
+    """The HAL writes ~30 tags; Muga used to patch a block of four over
+    them. Exposure time and ISO are the numbers that say why a photo came
+    out the way it did — and the only way to see whether the exposure
+    ceiling is doing anything."""
+    PILImage = pytest.importorskip("PIL.Image")
+    path = _photo_with_capture_exif(tmp_path)
+    win = _exif_win(tmp_path, _current_device=lambda: {"name": "TestCam"})
+
+    camera.CameraWindow._write_exif_pillow(win, path, 1)
+
+    with PILImage.open(path) as img:
+        exif = img.getexif()
+        ifd = exif.get_ifd(0x8769)
+        assert ifd[0x829A] == (1, 100), "the exposure time was thrown away"
+        assert ifd[0x8827] == 150, "the ISO was thrown away"
+        assert exif[0x010F] == "Muga", "Muga still identifies itself"
+        assert ifd[0x9003], "and still stamps the capture date"
+
+
+def test_pillow_exif_survives_an_unreadable_capture_block(tmp_path: Path) -> None:
+    """A corrupt or absent block must cost the photo nothing beyond the
+    tags that were unreadable anyway."""
+    PILImage = pytest.importorskip("PIL.Image")
+    path = tmp_path / "notajpeg.jpg"
+    path.write_bytes(b"\xff\xd8not really a jpeg\xff\xd9")
+    win = _exif_win(tmp_path)
+    assert camera.CameraWindow._captured_exif(win, path) is not None
+
+    path = _photo(tmp_path)
+    camera.CameraWindow._write_exif_pillow(win, path, 1)
+    with PILImage.open(path) as img:
+        assert img.getexif()[0x010F] == "Muga"
 
 
 def test_pillow_exif_writes_the_basic_tags(tmp_path: Path) -> None:

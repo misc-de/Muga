@@ -30,7 +30,11 @@ camera_video = pytest.importorskip("muga.camera_video")
 def _win(gst: FakeGst, **attrs) -> SimpleNamespace:
     attrs.setdefault("_", lambda s: s)
     attrs["_Gst"] = gst
-    return SimpleNamespace(**attrs)
+    win = SimpleNamespace(**attrs)
+    # Every droidcamsrc Muga builds gets the exposure ceiling applied.
+    if "_apply_exposure_ceiling" not in attrs:
+        bind(win, camera.CameraWindow, "_apply_exposure_ceiling")
+    return win
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +50,23 @@ def test_halium_device_gets_droidcamsrc_in_video_mode() -> None:
     assert src.factory == "droidcamsrc"
     assert src.props["mode"] == 2
     assert src.props["camera-device"] == 1
+
+
+def test_droidcam_source_caps_the_exposure() -> None:
+    """Left to itself in a dim room this HAL exposes long enough that
+    handshake smears the frame — and the preview never shows it, because
+    at 24 fps it cannot expose that long in the first place."""
+    gst = FakeGst()
+    src = camera.CameraWindow._make_droidcam_source(_win(gst), {"droidcam_id": 0})
+    assert src.props["max-exposure-time"] == camera._MAX_EXPOSURE_TIME_US
+
+
+def test_a_hal_without_the_exposure_property_is_not_an_error() -> None:
+    """Not every droidcamsrc build carries the Photography properties.
+    Without the ceiling the photo is exposed as before — nothing breaks."""
+    src = MagicMock()
+    src.set_property.side_effect = TypeError("no property max-exposure-time")
+    camera.CameraWindow._apply_exposure_ceiling(_win(FakeGst()), src, "test")
 
 
 def test_droidcam_source_defaults_the_camera_id() -> None:
@@ -267,6 +288,17 @@ def _image_win(gst, **extra):
 
 def _droid_pads():
     return {"droidcamsrc": {"vfsrc": FakePad("vfsrc"), "imgsrc": FakePad("imgsrc")}}
+
+
+def test_image_capture_session_caps_the_exposure() -> None:
+    """The transient mode=1 pipeline is the session that actually takes
+    the photo, so it is the one the ceiling has to reach."""
+    gst = FakeGst(element_pads=_droid_pads())
+    win = _image_win(gst)
+    camera.CameraWindow._image_pipeline_build(win, 0)
+    src = gst.element("droidcamsrc")
+    assert src.props["max-exposure-time"] == camera._MAX_EXPOSURE_TIME_US
+    assert src.props["mode"] == 1, "the ceiling must not cost us still mode"
 
 
 def test_image_pipeline_uses_still_capture_mode() -> None:
