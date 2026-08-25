@@ -145,6 +145,14 @@ class GallerySelectionMixin:
     ) -> None:
         popover = Gtk.Popover()
         popover.set_parent(parent)
+        # Dismiss on a click or tap anywhere outside. autohide defaults to
+        # True, but the popover also has to let go of its parent when it
+        # closes: set_parent() keeps it alive, so every long-press was leaving
+        # another invisible popover attached to the same tile, and those stack
+        # up in front of the live one and swallow the very clicks that are
+        # supposed to dismiss it.
+        popover.set_autohide(True)
+        popover.connect("closed", lambda pop: pop.unparent())
         popover.set_pointing_to(Gdk.Rectangle(int(x), int(y), 1, 1))
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         for label, icon, callback in [

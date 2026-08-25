@@ -1697,6 +1697,11 @@ class ViewerWindow(Adw.ApplicationWindow):
 
         popover = Gtk.Popover()
         popover.set_parent(self.info_button)
+        # Same as the gallery's context menu: dismiss on an outside click, and
+        # unparent on close so repeated opens do not pile invisible popovers
+        # onto the info button.
+        popover.set_autohide(True)
+        popover.connect("closed", lambda pop: pop.unparent())
         popover.set_child(grid)
         popover.popup()
 
