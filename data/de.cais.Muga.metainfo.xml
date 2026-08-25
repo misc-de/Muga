@@ -69,6 +69,15 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.4.1" date="2026-08-25">
+      <description>
+        <p>Fixes: hidden directories are no longer scanned. A folder whose name
+        starts with a dot holds tooling, not photos — a build tree beside a
+        checkout, or the caches under your home directory — and the icons and
+        assets inside them were turning up in the gallery as pictures. A hidden
+        folder you pick as a media location yourself is still scanned.</p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-08-24">
       <description>
         <p>New: a built-in MCP server. An AI assistant or any other MCP client
