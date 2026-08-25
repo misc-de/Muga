@@ -69,6 +69,19 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.15" date="2026-08-25">
+      <description>
+        <p>Photos taken by hand in a dim room are sharp instead of smeared. The
+        camera hardware was holding the shutter open far longer than a hand can
+        stay still — the preview never showed it, because a live preview cannot
+        expose that long in the first place. The capture now has the same limit,
+        and brightens the picture by raising sensitivity instead, which trades a
+        little noise for a photo that is actually there.</p>
+        <p>Photos also keep what the camera recorded about them again: exposure
+        time, ISO, aperture and focal length used to be dropped when Muga added
+        its own details.</p>
+      </description>
+    </release>
     <release version="0.5.14" date="2026-08-25">
       <description>
         <p>Photos on Halium phones are taken sooner after the shutter, and are
