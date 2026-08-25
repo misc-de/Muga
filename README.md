@@ -42,7 +42,7 @@ browse your Nextcloud photo library directly, no FUSE or GVFS mount needed; thum
 - **QR code scanner**  
 scan Nextcloud app-password QR codes straight from the camera to connect your account instantly
 - **Date grouping**  
-sort by date and photos are grouped under clear section headers (day / week / month / year). Long galleries use a sliding window: only the visible months stay in memory so jumping forward through years stays fast.
+sort by date and photos are grouped under clear section headers (day / week / month / year). Two date sorts, because a photo has two dates: **Date (recorded)** uses the EXIF capture date, **Date (file)** the file's own timestamp — a shoot copied off a card today lands under the year it was taken, not under today. Long galleries use a sliding window: only the visible months stay in memory so jumping forward through years stays fast.
 - **Built-in editor**  
 crop, rotate, adjust brightness / contrast / colour channels, add frames for holidays and occasions, drop stickers
 - **Video playback**  
@@ -52,7 +52,7 @@ long-press any photo to enter multi-select, then delete or move a whole batch at
 - **Folder view**  
 drill into subfolders; folder tiles show a 2×2 preview mosaic
 - **MCP server**  
-let an AI assistant search your library — a built-in, read-only [MCP](https://modelcontextprotocol.io) endpoint over HTTP. Off by default, needs a token you issue, and listens on this device only until you widen it
+let an AI assistant search your library by date, camera or GPS — a built-in [MCP](https://modelcontextprotocol.io) endpoint over HTTP. Off by default, read-only unless you allow writes separately, needs a token you issue, and listens on this device only until you widen it
 
 ---
 
@@ -175,9 +175,26 @@ with `Authorization: Bearer <token>`. Point a client at it:
 }
 ```
 
-Six tools, all read-only: `list_categories`, `list_media`, `search_media`,
-`list_folders`, `get_media`, `gallery_stats`. Nothing an MCP client can call
-changes, moves or deletes a file — it reads the index and nothing else.
+Six read-only tools: `list_categories`, `list_media`, `search_media`,
+`list_folders`, `get_media`, `gallery_stats`. Search covers filenames, camera
+make and model, GPS coordinates, and dates — a year, a year-month, or a month
+name in German or English. Dates mean the **capture date** from EXIF where the
+file has one, so a photo shot in 2019 and copied over today is found under
+2019, not under this year; files with no EXIF date fall back to their
+modification time.
+
+### Write access
+
+Off by default, behind its own switch in *Settings → MCP* that asks for
+confirmation before it turns on. Turning the server on, or widening how far it
+listens, does not grant it.
+
+With it on, three more tools appear: `add_media`, `move_media` and
+`delete_media`. They are confined to your configured media folders — paths are
+resolved before they are checked, so `../..` and symlinks pointing out of the
+library are refused — and deletions go to the desktop trash rather than being
+erased. While the switch is off the tools are not offered to a client at all,
+and a client that names one anyway is turned away.
 
 ### Reachable from
 

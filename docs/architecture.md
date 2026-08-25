@@ -35,6 +35,14 @@ Not part of either window — a module-level singleton, started and stopped from
 |---|---|
 | `mcp_server.py` | The HTTP transport, the JSON-RPC/MCP layer, the read-only tool surface, the bind-scope resolution, and the process-wide start/stop |
 | `mcp_tokens.py` | The bearer tokens: a `0600` JSON file, add / rename / remove / verify |
+| `exif.py` | EXIF parsing, shared by the scanner and the viewer: camera, GPS, capture time |
+
+The write tools sit behind `mcp_write_enabled`, checked on every call rather
+than cached, so flipping the switch takes effect on the next request in both
+directions. Their entire security boundary is `_resolve_for_write`: resolve
+first, then require the result to sit inside a configured media folder, and
+refuse symlinks outright — deleting a link and deleting its target are
+different acts and the client cannot say which it meant.
 
 Where it listens is a scope, not an address: `local` / `lan` / `public` /
 `all`, resolved against the machine's actual interfaces at bind time
@@ -49,6 +57,26 @@ window-owned server would still be holding the listening port at that moment,
 and the new window's start would fail with "address already in use".
 `sync_with_settings()` instead re-points the existing server at the new
 window's database and leaves the socket alone.
+
+## The two dates
+
+A photo carries a file mtime and, usually, an EXIF capture date. They are
+different facts — copying a card gives every file today's mtime — so both are
+kept and the user picks which one orders the grid.
+
+`MediaItem.display_time` (capture date, else mtime) and the SQL
+`COALESCE(taken_at, mtime)` are the same rule on either side of the database.
+`GalleryRenderMixin._DATE_MODES` maps each grouped sort mode to the pair
+*(query order, which timestamp the month headers are cut from)*, so a mode
+cannot sort by one date and label by the other — the failure that would look
+like the grid being randomly wrong.
+
+The capture-date sort needs its own indexes: no index on `mtime` can serve
+`ORDER BY COALESCE(taken_at, mtime)`, and without them SQLite scans the table
+and sorts it into a temp B-tree (0.1 ms → 9.9 ms per page at 30k rows). They
+are created in `_MIGRATION_V10` and deliberately *not* in `SCHEMA_V1`: that
+script runs against pre-`taken_at` databases, where naming the column raises
+"no such column" — an error the constructor answers by discarding the index.
 
 ## Why mixins
 
