@@ -69,6 +69,14 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.6" date="2026-08-25">
+      <description>
+        <p>Tapping the section you are already in reloads it and takes you
+        back to the top, out of any subfolder and clear of a search filter.
+        It used to reload where you stood, which looked like nothing had
+        happened.</p>
+      </description>
+    </release>
     <release version="0.5.5" date="2026-08-25">
       <description>
         <p>The camera's flash button shows a bolt again on phones without a
