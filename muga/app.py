@@ -938,12 +938,17 @@ class GalleryWindow(
     # Rendering
     # ------------------------------------------------------------------
 
-    def refresh(self, scan: bool = False, scope: str | None = None) -> None:
-        """scope=None scans all local + NC; scope="current" scans only the active category."""
+    def refresh(self, scan: bool = False, scope: str | None = None,
+                reset_scroll: bool = False) -> None:
+        """scope=None scans all local + NC; scope="current" scans only the active category.
+
+        reset_scroll goes through to _render: the view is being started over
+        rather than refreshed in place, so it must not come back where it was.
+        """
         if self._closing:
             return
         if scan:
-            self._render()
+            self._render(reset_scroll=reset_scroll)
             self.refresh_button.set_sensitive(False)
             nc_folder = self.current_folder if self.category == "nextcloud" else None
             threading.Thread(
@@ -951,7 +956,7 @@ class GalleryWindow(
             ).start()
             return
         self.refresh_button.set_sensitive(True)
-        self._render()
+        self._render(reset_scroll=reset_scroll)
 
     def _scan_thread(self, nc_folder: str | None, scope: str | None = None) -> None:
         import time as _time
@@ -1533,15 +1538,7 @@ class GalleryWindow(
             button.set_active(True)
             button.handler_unblock_by_func(self._on_category_toggled)
             self._cancel_nc_thumb_queue()
-            if self.current_folder is not None:
-                # Drilled into a subfolder — the tap means "back to the top".
-                self.current_folder = None
-                self._render()
-            else:
-                # Already at the top of this category, so the tap can only mean
-                # "load it again". Previously nothing happened at all, which
-                # made the tab look unresponsive.
-                self.refresh(scan=True, scope="current")
+            self._reset_category_view()
             return
         self._cancel_nc_thumb_queue()
         self.category = category
@@ -1552,6 +1549,29 @@ class GalleryWindow(
         self.settings.last_category = category
         self.settings.save()
         self._render()
+
+    def _reset_category_view(self) -> None:
+        """Take the current category back to how it looks when you first walk
+        into it — out of any subfolder, no search filter, nothing selected,
+        scrolled to the top — and then load it again.
+
+        This is what tapping the tab you are already on does. It used to
+        reload in place, and reloading in place is invisible: _render keeps
+        the scroll position for an unchanged view, so a tap taken halfway
+        down a long gallery left the screen exactly as it was and read as the
+        tab not answering at all.
+        """
+        if self._selection_mode:
+            self._exit_selection_mode()
+        if self.search_bar.get_search_mode() or self._search_query:
+            # Drop the query BEFORE closing the bar: _on_search_mode_toggled
+            # renders on its way out only when it finds a query still
+            # standing, and the reload below is about to render anyway.
+            self._search_query = ""
+            self.search_entry.set_text("")
+            self.search_bar.set_search_mode(False)
+        self.current_folder = None
+        self.refresh(scan=True, scope="current", reset_scroll=True)
 
     def _on_back(self, _button: Gtk.Button) -> None:
         self._go_back_folder()

@@ -94,11 +94,19 @@ class GalleryRenderMixin:
         def _sync_sort_controls(self) -> None: ...
         def _sync_new_folder_button(self) -> None: ...
 
-    def _render(self) -> None:
-        # Preserve scroll position when refreshing the same view (e.g. after scan)
+    def _render(self, reset_scroll: bool = False) -> None:
+        # Preserve scroll position when refreshing the same view (e.g. after
+        # scan). reset_scroll overrides that for the one caller that means
+        # "start this view over" — re-tapping the tab you are already on,
+        # where keeping the position is exactly what made the tap look like
+        # it had done nothing.
         render_key = (self.category, self.current_folder)
         vadj = self.gallery_grid.get_vadjustment()
-        saved_pos = vadj.get_value() if render_key == self._last_render_key else 0.0
+        saved_pos = (
+            vadj.get_value()
+            if render_key == self._last_render_key and not reset_scroll
+            else 0.0
+        )
         self._last_render_key = render_key
 
         self.gallery_grid.clear()
@@ -127,7 +135,16 @@ class GalleryRenderMixin:
             self._render_flat(sort_mode)
         self.gallery_grid.finish()
 
-        if saved_pos > 0:
+        if reset_scroll:
+            # Clearing the grid collapses the adjustment to 0 on its own, but
+            # only once GTK has re-measured. Say it outright on the same idle
+            # the restore path uses, so "back to the top" doesn't depend on
+            # when that lands.
+            def _to_top() -> bool:
+                vadj.set_value(0.0)
+                return GLib.SOURCE_REMOVE
+            GLib.idle_add(_to_top, priority=GLib.PRIORITY_HIGH_IDLE)
+        elif saved_pos > 0:
             def _restore() -> bool:
                 vadj.set_value(saved_pos)
                 return GLib.SOURCE_REMOVE

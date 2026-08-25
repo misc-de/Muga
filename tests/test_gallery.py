@@ -705,6 +705,41 @@ def test_render_resets_position_when_the_view_changes(seeded_window, pump) -> No
     assert seeded_window._last_render_key == ("photos", "/x")
 
 
+def _render_with_fake_scroll(window, pump, position, **kwargs):
+    """Render twice through a stand-in adjustment sitting at *position* and
+    report what the second render did with it. Twice, because the first one
+    is what makes the view "the same view" for the second."""
+    vadj = MagicMock()
+    vadj.get_value.return_value = position
+    with patch.object(type(window.gallery_grid), "get_vadjustment",
+                      return_value=vadj):
+        window._render()
+        pump()
+        vadj.set_value.reset_mock()
+        window._render(**kwargs)
+        pump()
+    return vadj
+
+
+@requires_display
+def test_render_comes_back_to_where_it_was(seeded_window, pump) -> None:
+    """The rule reset_scroll is the exception to."""
+    _seed(seeded_window, 500)
+    vadj = _render_with_fake_scroll(seeded_window, pump, 1200.0)
+    vadj.set_value.assert_called_once_with(1200.0)
+
+
+@requires_display
+def test_render_with_reset_scroll_goes_back_to_the_top(seeded_window, pump) -> None:
+    """Re-tapping the tab you are already on reloads the view from the start.
+    Without this the rebuilt grid returns to the same offset and the tap
+    leaves the screen looking untouched — the whole reason the tap felt
+    like it had done nothing."""
+    _seed(seeded_window, 500)
+    vadj = _render_with_fake_scroll(seeded_window, pump, 1200.0, reset_scroll=True)
+    vadj.set_value.assert_called_once_with(0.0)
+
+
 @requires_display
 @pytest.mark.parametrize(
     "sort_mode",

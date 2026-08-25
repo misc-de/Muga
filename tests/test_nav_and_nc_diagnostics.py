@@ -27,8 +27,10 @@ GalleryWindow = app_mod.GalleryWindow
 # Category tabs
 # ---------------------------------------------------------------------------
 
-def _nav_window(*, category: str = "photos", folder: str | None = None):
-    return SimpleNamespace(
+def _nav_window(*, category: str = "photos", folder: str | None = None,
+                query: str = "", search_open: bool = False,
+                selecting: bool = False):
+    win = SimpleNamespace(
         category=category,
         current_folder=folder,
         settings=SimpleNamespace(last_category="", save=MagicMock()),
@@ -39,7 +41,18 @@ def _nav_window(*, category: str = "photos", folder: str | None = None):
         # The handler blocks itself around the programmatic set_active, so the
         # stand-in has to carry the attribute it looks up.
         _on_category_toggled=lambda *a: None,
+        # State a re-tap has to put back the way it found it.
+        _search_query=query,
+        search_bar=MagicMock(),
+        search_entry=MagicMock(),
+        _selection_mode=selecting,
+        _exit_selection_mode=MagicMock(),
     )
+    win.search_bar.get_search_mode.return_value = search_open
+    # The reset itself is under test rather than mocked out — it is where the
+    # "start this view over" decisions live.
+    win._reset_category_view = lambda: GalleryWindow._reset_category_view(win)
+    return win
 
 
 def _button(active: bool):
@@ -48,11 +61,15 @@ def _button(active: bool):
     return button
 
 
-def test_tapping_the_active_tab_reloads_it() -> None:
-    """The reported behaviour: nothing happened at all."""
+def test_tapping_the_active_tab_reloads_it_from_the_top() -> None:
+    """The reported behaviour, twice over: first the tap did nothing at all,
+    then it reloaded in place — which looks the same from the sofa, because
+    a reload that keeps the scroll position changes nothing on screen."""
     win = _nav_window()
     GalleryWindow._on_category_toggled(win, _button(False), "photos")
-    win.refresh.assert_called_once_with(scan=True, scope="current")
+    win.refresh.assert_called_once_with(
+        scan=True, scope="current", reset_scroll=True,
+    )
 
 
 def test_tapping_the_active_tab_keeps_it_lit() -> None:
@@ -64,14 +81,56 @@ def test_tapping_the_active_tab_keeps_it_lit() -> None:
     button.set_active.assert_called_once_with(True)
 
 
-def test_tapping_the_active_tab_inside_a_folder_goes_up_instead(tmp_path) -> None:
-    """Drilled into a subfolder, the tap means "back to the top" — that was
-    the one case which already worked, and it must keep working."""
+def test_tapping_the_active_tab_inside_a_folder_comes_back_up(tmp_path) -> None:
+    """Drilled into a subfolder, the tap still climbs back out — and now
+    reloads from there like every other re-tap, rather than only re-rendering
+    what was already in hand."""
     win = _nav_window(folder="/photos/holiday")
     GalleryWindow._on_category_toggled(win, _button(False), "photos")
     assert win.current_folder is None
-    win._render.assert_called_once()
-    win.refresh.assert_not_called()
+    win.refresh.assert_called_once_with(
+        scan=True, scope="current", reset_scroll=True,
+    )
+
+
+def test_tapping_the_active_tab_drops_the_search_filter() -> None:
+    """A filtered gallery is not what the tab looks like when you walk into
+    it, so "start over" has to include the query."""
+    win = _nav_window(query="holiday", search_open=True)
+    GalleryWindow._on_category_toggled(win, _button(False), "photos")
+    assert win._search_query == ""
+    win.search_entry.set_text.assert_called_once_with("")
+    win.search_bar.set_search_mode.assert_called_once_with(False)
+
+
+def test_dropping_the_filter_does_not_render_on_the_way_out() -> None:
+    """_on_search_mode_toggled renders when it closes on a live query. The
+    query is cleared first so the reload is the only render — closing the bar
+    first would build the unfiltered view twice."""
+    win = _nav_window(query="holiday", search_open=True)
+    order = []
+    win.search_bar.set_search_mode.side_effect = lambda _m: order.append(
+        win._search_query,
+    )
+    GalleryWindow._on_category_toggled(win, _button(False), "photos")
+    assert order == [""], "the bar was closed while the query still stood"
+
+
+def test_tapping_the_active_tab_leaves_selection_mode() -> None:
+    """The tabs stay reachable while multi-select is on; reloading underneath
+    a selection would leave check-marks pointing at rows that were rebuilt."""
+    win = _nav_window(selecting=True)
+    GalleryWindow._on_category_toggled(win, _button(False), "photos")
+    win._exit_selection_mode.assert_called_once()
+
+
+def test_tapping_the_active_tab_leaves_a_quiet_view_alone() -> None:
+    """No search, no selection: nothing to undo, and in particular no
+    pointless set_search_mode on a bar that is already closed."""
+    win = _nav_window()
+    GalleryWindow._on_category_toggled(win, _button(False), "photos")
+    win.search_bar.set_search_mode.assert_not_called()
+    win._exit_selection_mode.assert_not_called()
 
 
 def test_a_tab_switched_off_by_another_tab_does_nothing() -> None:
