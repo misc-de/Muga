@@ -358,13 +358,64 @@ def test_closing_the_qr_dialog_releases_the_camera() -> None:
 def test_qr_success_fills_the_credential_rows(settings_dialog) -> None:
     dialog = settings_dialog()
     dialog._closing = False
-    dialog._nc_qr_success(
-        MagicMock(),
-        "nc://login/user:alice&password:pw123&server:https://cloud.example.org",
-    )
+    with patch.object(dialog, "_nc_force_reconnect") as reconnect:
+        dialog._nc_qr_success(
+            MagicMock(),
+            "nc://login/user:alice&password:pw123&server:https://cloud.example.org",
+        )
     assert dialog._nc_user_row.get_text() == "alice"
     assert dialog._nc_pass_row.get_text() == "pw123"
     assert dialog._nc_url_row.get_text() == "https://cloud.example.org"
+    # The credentials are in place before the reconnect reads them back.
+    reconnect.assert_called_once_with()
+
+
+@requires_display
+def test_qr_success_reconnects_without_being_asked(settings_dialog) -> None:
+    """A scanned code is a request to use it, not to fill in a form."""
+    dialog = settings_dialog()
+    dialog._closing = False
+    with patch.object(dialog, "_nc_force_reconnect") as reconnect:
+        dialog._nc_qr_success(MagicMock(), "raw-app-password")
+    reconnect.assert_called_once_with()
+
+
+def test_force_reconnect_drops_the_live_session_first() -> None:
+    """Nextcloud issues a fresh app password per code, so the session running
+    on the previous one must not survive the scan."""
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    client = MagicMock()
+    dialog.parent_window = SimpleNamespace(
+        _nc_thumb_shared_client=client, _nc_session_active=True,
+    )
+    dialog._nc_runtime_connected = True
+    dialog._nc_update_buttons = MagicMock()
+    dialog._nc_connect = MagicMock()
+
+    dialog._nc_force_reconnect()
+
+    client.close.assert_called_once_with()
+    assert dialog.parent_window._nc_thumb_shared_client is None
+    assert dialog.parent_window._nc_session_active is False
+    assert dialog._nc_runtime_connected is False
+    dialog._nc_connect.assert_called_once_with(None)
+
+
+def test_force_reconnect_survives_a_client_that_wont_close() -> None:
+    """A half-dead client must not strand the user without a reconnect."""
+    dialog = SettingsWindow.__new__(SettingsWindow)
+    client = MagicMock()
+    client.close.side_effect = OSError("already gone")
+    dialog.parent_window = SimpleNamespace(
+        _nc_thumb_shared_client=client, _nc_session_active=True,
+    )
+    dialog._nc_runtime_connected = True
+    dialog._nc_update_buttons = MagicMock()
+    dialog._nc_connect = MagicMock()
+
+    dialog._nc_force_reconnect()
+
+    dialog._nc_connect.assert_called_once_with(None)
 
 
 @requires_display
@@ -372,7 +423,8 @@ def test_qr_success_treats_plain_text_as_a_password(settings_dialog) -> None:
     """Nextcloud's app-password page also offers a bare-token QR code."""
     dialog = settings_dialog()
     dialog._closing = False
-    dialog._nc_qr_success(MagicMock(), "raw-app-password")
+    with patch.object(dialog, "_nc_force_reconnect"):
+        dialog._nc_qr_success(MagicMock(), "raw-app-password")
     assert dialog._nc_pass_row.get_text() == "raw-app-password"
 
 

@@ -770,7 +770,7 @@ class SettingsWindow(Adw.PreferencesWindow):
         else:
             self._nc_set_status(self._("Disconnected"), ok=False)
 
-    def _nc_connect(self, _btn: Gtk.Button) -> None:
+    def _nc_connect(self, _btn: Gtk.Button | None = None) -> None:
         url  = self._nc_url_row.get_text().strip()
         user = self._nc_user_row.get_text().strip()
         pwd  = self._nc_pass_row.get_text()
@@ -985,6 +985,32 @@ class SettingsWindow(Adw.PreferencesWindow):
         else:
             self._nc_pass_row.set_text(text)
             self._nc_set_status(self._("QR code scanned successfully ✓"), ok=True)
+        # Scanning a code is a request to use it, so connect right away rather
+        # than leaving the user in front of a filled-in form with one more
+        # button to find.
+        self._nc_force_reconnect()
+
+    def _nc_force_reconnect(self) -> None:
+        """Drop the running Nextcloud session, then connect from the
+        credential rows as they now stand.
+
+        Forced rather than "connect if idle": Nextcloud hands out a fresh app
+        password per QR code, so a session still running on the previous one
+        has to go — otherwise the gallery keeps fetching with credentials the
+        user just replaced, and the status row would claim a connection that
+        was never tested against the new code.
+        """
+        old_client = self.parent_window._nc_thumb_shared_client
+        self.parent_window._nc_thumb_shared_client = None
+        if old_client is not None:
+            try:
+                old_client.close()
+            except Exception:
+                LOGGER.debug("old_client.close failed", exc_info=True)
+        self.parent_window._nc_session_active = False
+        self._nc_runtime_connected = False
+        self._nc_update_buttons()
+        self._nc_connect(None)
 
     def _nc_qr_error(self, message: str) -> None:
         if self._closing:
