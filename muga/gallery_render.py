@@ -261,6 +261,16 @@ class GalleryRenderMixin:
             )
             return
         offset, target_year, target_month = target
+        # Already on hand? Then this is a scroll, and it has to be: rebuilding
+        # the window costs a full grid clear and rebuild — ~190 ms measured on
+        # a desktop, several times that on a phone — which is a long wait for
+        # a month that is sitting just below the fold.
+        if self.gallery_grid.scroll_to_loaded_month(target_year, target_month):
+            LOGGER.info(
+                "Monatssprung: %04d-%02d %+d → %04d-%02d (bereits geladen)",
+                year, month, direction, target_year, target_month,
+            )
+            return
         # Logged at info so a report from a device can be checked against what
         # the jump actually decided, rather than against a guess.
         LOGGER.info(

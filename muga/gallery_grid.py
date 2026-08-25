@@ -548,6 +548,97 @@ class GalleryGrid(Gtk.Overlay):
             return
         jump(year, month, direction)
 
+    def scroll_to_loaded_month(self, year: int, month: int) -> bool:
+        """Put an already-loaded month at the top of the viewport, without
+        touching the row store. Returns False when that month is not among
+        the loaded rows and the caller has to load it instead.
+
+        This is the difference between a jump to the month just below — which
+        should be instant — and one into a part of the library that is not
+        there yet. Rebuilding the window costs the grid a full clear and
+        rebuild, measured at ~190 ms on a desktop and several times that on a
+        phone; when the target is already on hand, none of that is needed.
+
+        The position comes from summing measured row heights, not from any
+        widget's own coordinates: every row in this view is the same height,
+        so the sum is the target's content Y exactly, and writing it to the
+        adjustment puts that row at the top.
+        """
+        pos = self._find_month_header(year, month)
+        if pos is None:
+            return False
+        content_y = self._estimate_content_y(pos)
+        if content_y is None:
+            return False
+        self._set_vadj_clamped(self.scroller.get_vadjustment(), content_y)
+        return True
+
+    def _find_month_header(self, year: int, month: int) -> int | None:
+        for pos in range(self.row_store.get_n_items()):
+            row = self.row_store.get_item(pos)
+            if row is None or not row.is_header:
+                continue
+            if (row.header_year, row.header_month) == (year, month):
+                return pos
+        return None
+
+    def _estimate_content_y(self, target_pos: int) -> float | None:
+        """Content Y of a row, from row heights measured off the rendered
+        ones. Headers and tile rows are allocated the same height here (the
+        row widget is a Gtk.Stack, which sizes to its largest page), so this
+        is exact rather than an approximation — checked against the
+        adjustment's own upper bound."""
+        sample = None
+        for list_item in list(self._bound_list_items):
+            child = list_item.get_child()
+            if child is None:
+                continue
+            sample = child
+            row = list_item.get_item()
+            if row is not None and row.is_header:
+                break  # a header is the better sample; take one if offered
+        if sample is None:
+            return None
+        header_h, tile_h = self._measure_row_heights(sample)
+        y = 0.0
+        for i in range(min(target_pos, self.row_store.get_n_items())):
+            row = self.row_store.get_item(i)
+            if row is None:
+                continue
+            y += header_h if row.is_header else tile_h
+        return y
+
+    def _measure_row_heights(self, src_widget: Gtk.Widget) -> tuple[float, float]:
+        """(header_h, tile_h) from currently-bound widgets. The sample row is
+        rendered by definition — it is on screen — and the tile height comes
+        from any bound tile row. Falls back to the CSS cell estimate only when
+        no tile row happens to be bound at all."""
+        header_h = float(src_widget.get_height() or 152)
+        tile_h: float | None = None
+        for list_item in list(self._bound_list_items):
+            try:
+                row = list_item.get_item()
+                if row is None or row.is_header:
+                    continue
+                widget = list_item.get_child()
+                if widget is None:
+                    continue
+                height = widget.get_height()
+                if height > 0:
+                    tile_h = float(height)
+                    break
+            except Exception:
+                continue
+        if tile_h is None:
+            scroller_width = self.scroller.get_width() or 800
+            cols = self._cols or 4
+            tile_h = float(max(32, scroller_width // cols))
+        return header_h, tile_h
+
+    def _set_vadj_clamped(self, vadj: Gtk.Adjustment, value: float) -> None:
+        upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
+        vadj.set_value(max(0.0, min(value, upper)))
+
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header
         row is found. Returns the row index, or None if the boundary is hit
