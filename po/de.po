@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Muga 0.3.0\n"
 "Report-Msgid-Bugs-To: https://github.com/misc-de/Muga/issues\n"
-"POT-Creation-Date: 2026-08-24 18:27+0200\n"
+"POT-Creation-Date: 2026-08-25 07:48+0200\n"
 "PO-Revision-Date: 2026-08-21 00:00+0000\n"
 "Last-Translator: Muga contributors\n"
 "Language-Team: German\n"
@@ -16,7 +16,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: muga/gallery_selection.py:489
+#: muga/gallery_selection.py:497
 #, python-format
 msgid "%d Nextcloud item(s) skipped (not downloaded locally)."
 msgstr "%d Nextcloud-Element(e) übersprungen (nicht lokal verfügbar)."
@@ -29,7 +29,7 @@ msgstr "0 = unbegrenzt"
 msgid "2K"
 msgstr "2K"
 
-#: muga/settings_window.py:1239
+#: muga/settings_window.py:1270
 msgid ""
 "A client authenticates with a token, so the server only starts once there is "
 "one. Add a token first."
@@ -37,7 +37,7 @@ msgstr ""
 "Ein Client meldet sich mit einem Token an — der Server startet also erst, "
 "wenn es eines gibt. Lege zuerst ein Token an."
 
-#: muga/settings_window.py:1048
+#: muga/settings_window.py:1078
 msgid ""
 "A client has to present one of these as a bearer token. Give every client "
 "its own, so a single one can be withdrawn without locking out the rest."
@@ -46,12 +46,26 @@ msgstr ""
 "eigenes, damit du ein einzelnes zurückziehen kannst, ohne die übrigen "
 "auszusperren."
 
-#: muga/app.py:1238
+#: muga/settings_window.py:1306
+msgid ""
+"A client with a token will be able to add files, move them, and delete them "
+"to the trash — anywhere inside your media folders.\n"
+"\n"
+"Nothing outside those folders can be touched, and deletions go to the trash "
+"rather than being erased."
+msgstr ""
+"Ein Client mit Token kann dann Dateien hinzufügen, verschieben und in den "
+"Papierkorb löschen — überall in deinen Medienordnern.\n"
+"\n"
+"Außerhalb dieser Ordner kann nichts angefasst werden, und Gelöschtes landet "
+"im Papierkorb statt vernichtet zu werden."
+
+#: muga/app.py:1317
 #, python-format
 msgid "A folder named %s already exists here."
 msgstr "Hier gibt es bereits einen Ordner namens %s."
 
-#: muga/settings_window.py:1046
+#: muga/settings_window.py:1076
 msgid "Access tokens"
 msgstr "Zugriffs-Tokens"
 
@@ -63,15 +77,15 @@ msgstr "Hinzufügen"
 msgid "Add location"
 msgstr "Ort hinzufügen"
 
-#: muga/settings_window.py:1313
+#: muga/settings_window.py:1382
 msgid "Add one to let a client connect"
 msgstr "Lege eines an, damit sich ein Client verbinden kann"
 
-#: muga/settings_window.py:1065 muga/settings_window.py:1364
+#: muga/settings_window.py:1095 muga/settings_window.py:1433
 msgid "Add token"
 msgstr "Token hinzufügen"
 
-#: muga/settings_window.py:1018
+#: muga/settings_window.py:1024
 msgid "Address"
 msgstr "Adresse"
 
@@ -79,27 +93,39 @@ msgstr "Adresse"
 msgid "Adjust"
 msgstr "Anpassen"
 
-#: muga/settings_window.py:1092
+#: muga/settings_window.py:1122
 msgid "All interfaces"
 msgstr "Alle Schnittstellen"
 
-#: muga/settings_window.py:1543
+#: muga/settings_window.py:1612
 msgid "All other folders combined"
 msgstr "Inhalt aller anderen Ordner"
 
-#: muga/app.py:429
+#: muga/settings_window.py:1313
+msgid "Allow"
+msgstr "Erlauben"
+
+#: muga/settings_window.py:1065
+msgid "Allow write access"
+msgstr "Schreibzugriff erlauben"
+
+#: muga/settings_window.py:1304
+msgid "Allow write access?"
+msgstr "Schreibzugriff erlauben?"
+
+#: muga/app.py:436
 msgid "An error occurred while accessing Nextcloud."
 msgstr "Beim Zugriff auf Nextcloud ist ein Fehler aufgetreten."
 
-#: muga/app.py:398
+#: muga/app.py:405
 msgid "An unexpected error occurred."
 msgstr "Ein unerwarteter Fehler ist aufgetreten."
 
-#: muga/settings_window.py:1183
+#: muga/settings_window.py:1213
 msgid "Anyone on that network who has a token can connect"
 msgstr "Jeder in diesem Netz, der ein Token hat, kann sich verbinden"
 
-#: muga/settings_window.py:589
+#: muga/settings_window.py:595
 msgid "App password"
 msgstr "App-Passwort"
 
@@ -115,7 +141,7 @@ msgstr "Darstellung"
 msgid "Apply"
 msgstr "Übernehmen"
 
-#: muga/app.py:752
+#: muga/app.py:785
 msgid "Ascending"
 msgstr "Aufsteigend"
 
@@ -124,11 +150,11 @@ msgstr "Aufsteigend"
 msgid "Auto"
 msgstr "Automatisch"
 
-#: muga/app.py:455
+#: muga/app.py:462
 msgid "Back"
 msgstr "Zurück"
 
-#: muga/settings_window.py:2004 muga/settings_window.py:2218
+#: muga/settings_window.py:2073 muga/settings_window.py:2287
 msgid "Both"
 msgstr "Beides"
 
@@ -144,7 +170,7 @@ msgstr "Pinselgröße"
 msgid "Cache"
 msgstr "Zwischenspeicher"
 
-#: muga/camera.py:202 muga/viewer.py:1729 muga/viewer.py:1734
+#: muga/camera.py:202 muga/viewer.py:1690 muga/viewer.py:1695
 msgid "Camera"
 msgstr "Kamera"
 
@@ -176,33 +202,34 @@ msgstr ""
 "Kamera%s wird von einer anderen App verwendet – bitte schließen und erneut "
 "versuchen."
 
-#: muga/app.py:1181 muga/gallery_selection.py:244 muga/gallery_selection.py:492
-#: muga/settings_window.py:653 muga/settings_window.py:794
-#: muga/settings_window.py:901 muga/settings_window.py:1368
-#: muga/settings_window.py:1466 muga/settings_window.py:1503
-#: muga/settings_window.py:1826 muga/settings_window.py:2019
-#: muga/settings_window.py:2069 muga/settings_window.py:2236 muga/viewer.py:302
-#: muga/viewer.py:608 muga/viewer.py:1061 muga/viewer.py:1608
+#: muga/app.py:1260 muga/gallery_selection.py:252 muga/gallery_selection.py:500
+#: muga/settings_window.py:659 muga/settings_window.py:800
+#: muga/settings_window.py:907 muga/settings_window.py:1312
+#: muga/settings_window.py:1437 muga/settings_window.py:1535
+#: muga/settings_window.py:1572 muga/settings_window.py:1895
+#: muga/settings_window.py:2088 muga/settings_window.py:2138
+#: muga/settings_window.py:2305 muga/viewer.py:263 muga/viewer.py:569
+#: muga/viewer.py:1022 muga/viewer.py:1569
 msgid "Cancel"
 msgstr "Abbrechen"
 
-#: muga/app.py:520
+#: muga/app.py:527
 msgid "Cancel selection"
 msgstr "Auswahl aufheben"
 
-#: muga/settings_window.py:806
+#: muga/settings_window.py:812
 msgid "Cancelled"
 msgstr "Abgebrochen"
 
-#: muga/app.py:1164
+#: muga/app.py:1243
 msgid "Cannot create folder"
 msgstr "Ordner kann nicht erstellt werden"
 
-#: muga/gallery_selection.py:417
+#: muga/gallery_selection.py:425
 msgid "Cannot delete"
 msgstr "Löschen nicht möglich"
 
-#: muga/gallery_selection.py:477
+#: muga/gallery_selection.py:485
 msgid "Cannot share Nextcloud items directly — open them first to download."
 msgstr ""
 "Nextcloud-Elemente lassen sich nicht direkt teilen – bitte vorher öffnen, "
@@ -233,14 +260,14 @@ msgstr "Auf Updates prüfen"
 msgid "Checking…"
 msgstr "Prüfe …"
 
-#: muga/gallery_selection.py:310 muga/gallery_selection.py:432
-#: muga/settings_window.py:1521 muga/settings_window.py:1691
-#: muga/settings_window.py:1762 muga/settings_window.py:1929
-#: muga/settings_window.py:1947 muga/settings_window.py:2180
+#: muga/gallery_selection.py:318 muga/gallery_selection.py:440
+#: muga/settings_window.py:1590 muga/settings_window.py:1760
+#: muga/settings_window.py:1831 muga/settings_window.py:1998
+#: muga/settings_window.py:2016 muga/settings_window.py:2249
 msgid "Choose folder"
 msgstr "Ordner wählen"
 
-#: muga/gallery_selection.py:486
+#: muga/gallery_selection.py:494
 msgid "Choose how to share:"
 msgstr "Übertragungsweg wählen:"
 
@@ -248,39 +275,39 @@ msgstr "Übertragungsweg wählen:"
 msgid "Clear cache"
 msgstr "Cache löschen"
 
-#: muga/app.py:368 muga/viewer.py:273 muga/viewer.py:1477
+#: muga/app.py:375 muga/viewer.py:234 muga/viewer.py:1438
 msgid "Close"
 msgstr "Schließen"
 
-#: muga/settings_window.py:565
+#: muga/settings_window.py:571
 msgid "Connect"
 msgstr "Verbinden"
 
-#: muga/settings_window.py:795
+#: muga/settings_window.py:801
 msgid "Connect anyway"
 msgstr "Trotzdem verbinden"
 
-#: muga/viewer.py:609
+#: muga/viewer.py:570
 msgid "Connect once"
 msgstr "Einmalig verbinden"
 
-#: muga/viewer.py:610
+#: muga/viewer.py:571
 msgid "Connect permanently"
 msgstr "Dauerhaft verbinden"
 
-#: muga/settings_window.py:547
+#: muga/settings_window.py:553
 msgid "Connect to your Nextcloud"
 msgstr "Mit deiner Nextcloud verbinden"
 
-#: muga/settings_window.py:759
+#: muga/settings_window.py:765
 msgid "Connected ✓"
 msgstr "Verbunden ✓"
 
-#: muga/settings_window.py:827
+#: muga/settings_window.py:833
 msgid "Connecting…"
 msgstr "Verbinde…"
 
-#: muga/app.py:422 muga/settings_window.py:863
+#: muga/app.py:429 muga/settings_window.py:869
 msgid "Connection failed"
 msgstr "Verbindung fehlgeschlagen"
 
@@ -292,12 +319,12 @@ msgstr "Kontrast"
 msgid "Controls reset"
 msgstr "Einstellungen zurückgesetzt"
 
-#: muga/settings_window.py:425 muga/settings_window.py:1442
+#: muga/settings_window.py:425 muga/settings_window.py:1511
 msgid "Copied"
 msgstr "Kopiert"
 
 #: muga/settings_window.py:246 muga/settings_window.py:426
-#: muga/settings_window.py:1021
+#: muga/settings_window.py:1027
 msgid "Copy"
 msgstr "Kopieren"
 
@@ -306,17 +333,17 @@ msgid "Copy this when reporting camera, Nextcloud, or media-scan issues."
 msgstr ""
 "Beim Melden von Kamera-, Nextcloud- oder Medien-Scan-Problemen kopieren."
 
-#: muga/settings_window.py:1327 muga/settings_window.py:1416
-#: muga/settings_window.py:1446
+#: muga/settings_window.py:1396 muga/settings_window.py:1485
+#: muga/settings_window.py:1515
 msgid "Copy token"
 msgstr "Token kopieren"
 
-#: muga/app.py:392
+#: muga/app.py:399
 msgid "Could not access the file due to a system error."
 msgstr ""
 "Auf die Datei konnte wegen eines Systemfehlers nicht zugegriffen werden."
 
-#: muga/app.py:379
+#: muga/app.py:386
 msgid ""
 "Could not access the file. It may have been moved, deleted, or you don't "
 "have permission."
@@ -324,16 +351,16 @@ msgstr ""
 "Auf die Datei konnte nicht zugegriffen werden. Möglicherweise wurde sie "
 "verschoben oder gelöscht, oder die Berechtigung fehlt."
 
-#: muga/gallery_selection.py:447 muga/gallery_selection.py:517
-#: muga/viewer.py:1627
+#: muga/gallery_selection.py:455 muga/gallery_selection.py:525
+#: muga/viewer.py:1588
 msgid "Could not complete action"
 msgstr "Aktion konnte nicht ausgeführt werden"
 
-#: muga/app.py:1062
+#: muga/app.py:1119
 msgid "Could not connect to Nextcloud"
 msgstr "Keine Verbindung zu Nextcloud"
 
-#: muga/app.py:423
+#: muga/app.py:430
 msgid ""
 "Could not connect to Nextcloud. Check your internet connection and server "
 "URL."
@@ -341,31 +368,31 @@ msgstr ""
 "Keine Verbindung zu Nextcloud. Bitte Internetverbindung und Server-URL "
 "prüfen."
 
-#: muga/app.py:1243 muga/app.py:1283
+#: muga/app.py:1322 muga/app.py:1362
 msgid "Could not create folder"
 msgstr "Ordner konnte nicht erstellt werden"
 
-#: muga/gallery_selection.py:294
+#: muga/gallery_selection.py:302
 msgid "Could not delete all files. Check file permissions or disk state."
 msgstr ""
 "Es konnten nicht alle Dateien gelöscht werden. Bitte Dateirechte und "
 "Datenträger prüfen."
 
-#: muga/viewer.py:722
+#: muga/viewer.py:683
 msgid "Could not load file"
 msgstr "Datei konnte nicht geladen werden"
 
-#: muga/gallery_selection.py:371
+#: muga/gallery_selection.py:379
 msgid "Could not move files. Check file permissions and disk space."
 msgstr ""
 "Dateien konnten nicht verschoben werden. Bitte Dateirechte und freien "
 "Speicher prüfen."
 
-#: muga/gallery_selection.py:424
+#: muga/gallery_selection.py:432
 msgid "Could not move the file to trash."
 msgstr "Die Datei konnte nicht in den Papierkorb verschoben werden."
 
-#: muga/viewer.py:1401 muga/viewer.py:1420 muga/viewer.py:1474
+#: muga/viewer.py:1362 muga/viewer.py:1381 muga/viewer.py:1435
 msgid "Could not open editor"
 msgstr "Editor konnte nicht geöffnet werden"
 
@@ -373,7 +400,7 @@ msgstr "Editor konnte nicht geöffnet werden"
 msgid "Could not read frame"
 msgstr "Bild konnte nicht gelesen werden"
 
-#: muga/viewer.py:1551
+#: muga/viewer.py:1512
 msgid "Could not save edited image"
 msgstr "Bearbeitetes Bild konnte nicht gespeichert werden"
 
@@ -381,20 +408,20 @@ msgstr "Bearbeitetes Bild konnte nicht gespeichert werden"
 msgid "Could not start camera"
 msgstr "Kamera konnte nicht gestartet werden"
 
-#: muga/settings_window.py:1250
+#: muga/settings_window.py:1281
 msgid "Could not start the MCP server"
 msgstr "MCP-Server konnte nicht gestartet werden"
 
-#: muga/app.py:1182 muga/settings_window.py:1369
+#: muga/app.py:1261 muga/settings_window.py:1438
 msgid "Create"
 msgstr "Erstellen"
 
-#: muga/app.py:1178
+#: muga/app.py:1257
 #, python-format
 msgid "Create a new folder in %s"
 msgstr "Neuen Ordner in %s erstellen"
 
-#: muga/settings_window.py:557
+#: muga/settings_window.py:563
 msgid "Credentials"
 msgstr "Zugangsdaten"
 
@@ -406,50 +433,58 @@ msgstr "Zuschneiden"
 msgid "Current cache size"
 msgstr "Aktuelle Größe"
 
-#: muga/gallery_selection.py:245 muga/settings_window.py:1467
-#: muga/settings_window.py:1504 muga/viewer.py:278 muga/viewer.py:1609
+#: muga/app.py:723
+msgid "Date (file)"
+msgstr "Datum (Datei)"
+
+#: muga/app.py:722
+msgid "Date (recorded)"
+msgstr "Datum (Aufnahme)"
+
+#: muga/gallery_selection.py:253 muga/settings_window.py:1536
+#: muga/settings_window.py:1573 muga/viewer.py:239 muga/viewer.py:1570
 msgid "Delete"
 msgstr "Löschen"
 
-#: muga/gallery_selection.py:293 muga/gallery_selection.py:423
+#: muga/gallery_selection.py:301 muga/gallery_selection.py:431
 msgid "Delete failed"
 msgstr "Löschen fehlgeschlagen"
 
-#: muga/viewer.py:1605
+#: muga/viewer.py:1566
 msgid "Delete media?"
 msgstr "Medium löschen?"
 
-#: muga/app.py:498
+#: muga/app.py:505
 msgid "Delete selected"
 msgstr "Ausgewählte löschen"
 
-#: muga/gallery_selection.py:241
+#: muga/gallery_selection.py:249
 msgid "Delete selection?"
 msgstr "Auswahl löschen?"
 
-#: muga/viewer.py:1606
+#: muga/viewer.py:1567
 msgid "Delete this item from the gallery?"
 msgstr "Dieses Element aus der Galerie löschen?"
 
-#: muga/settings_window.py:1497
+#: muga/settings_window.py:1566
 msgid "Delete token?"
 msgstr "Token löschen?"
 
-#: muga/gallery_selection.py:300
+#: muga/gallery_selection.py:308
 #, python-format
 msgid "Deleted %d/%d items (%d failed)"
 msgstr "%d/%d Elemente gelöscht (%d fehlgeschlagen)"
 
-#: muga/gallery_selection.py:256
+#: muga/gallery_selection.py:264
 #, python-format
 msgid "Deleting %d items…"
 msgstr "Lösche %d Elemente …"
 
-#: muga/app.py:1453
+#: muga/app.py:1544
 msgid "Deleting Photos"
 msgstr "Fotos löschen"
 
-#: muga/app.py:752
+#: muga/app.py:785
 msgid "Descending"
 msgstr "Absteigend"
 
@@ -461,19 +496,19 @@ msgstr "Diagnosebericht"
 msgid "Diagnostics"
 msgstr "Diagnose"
 
-#: muga/viewer.py:1725
+#: muga/viewer.py:1686
 msgid "Dimensions"
 msgstr "Abmessungen"
 
-#: muga/viewer.py:1059
+#: muga/viewer.py:1020
 msgid "Discard"
 msgstr "Verwerfen"
 
-#: muga/settings_window.py:572
+#: muga/settings_window.py:578
 msgid "Disconnect"
 msgstr "Trennen"
 
-#: muga/settings_window.py:761 muga/settings_window.py:887
+#: muga/settings_window.py:767 muga/settings_window.py:893
 msgid "Disconnected"
 msgstr "Getrennt"
 
@@ -486,11 +521,11 @@ msgstr ""
 "Ist die Grenze erreicht, werden die am längsten unbenutzten Dateien zuerst "
 "gelöscht."
 
-#: muga/settings_window.py:2207
+#: muga/settings_window.py:2276
 msgid "Don't inherit"
 msgstr "Nicht vererben"
 
-#: muga/settings_window.py:1432
+#: muga/settings_window.py:1501
 msgid "Done"
 msgstr "Fertig"
 
@@ -498,11 +533,11 @@ msgstr "Fertig"
 msgid "Downstream element has no sink pad"
 msgstr "Das nachgelagerte Element hat keinen Eingang"
 
-#: muga/settings_window.py:1637
+#: muga/settings_window.py:1706
 msgid "Drag to reorder"
 msgstr "Zum Sortieren ziehen"
 
-#: muga/app.py:1429
+#: muga/app.py:1520
 msgid "EXIF Data"
 msgstr "EXIF-Daten"
 
@@ -510,16 +545,16 @@ msgstr "EXIF-Daten"
 msgid "Eco"
 msgstr "Eco"
 
-#: muga/settings_window.py:1334 muga/settings_window.py:1661
-#: muga/settings_window.py:1697 muga/settings_window.py:1701 muga/viewer.py:291
+#: muga/settings_window.py:1403 muga/settings_window.py:1730
+#: muga/settings_window.py:1766 muga/settings_window.py:1770 muga/viewer.py:252
 msgid "Edit"
 msgstr "Bearbeiten"
 
-#: muga/settings_window.py:1999 muga/settings_window.py:2164
+#: muga/settings_window.py:2068 muga/settings_window.py:2233
 msgid "Edit folder"
 msgstr "Ordner bearbeiten"
 
-#: muga/settings_window.py:1462
+#: muga/settings_window.py:1531
 msgid "Edit token"
 msgstr "Token bearbeiten"
 
@@ -527,19 +562,19 @@ msgstr "Token bearbeiten"
 msgid "Effects"
 msgstr "Effekte"
 
-#: muga/gallery_selection.py:494
+#: muga/gallery_selection.py:502
 msgid "Email"
 msgstr "E-Mail"
 
-#: muga/viewer.py:605
+#: muga/viewer.py:566
 msgid "Enable the connection now so the image can be loaded."
 msgstr "Aktiviere jetzt die Verbindung, damit das Bild geladen werden kann."
 
-#: muga/settings_window.py:537
+#: muga/settings_window.py:543
 msgid "Enables or disables all Nextcloud functions"
 msgstr "Aktiviert oder deaktiviert alle Nextcloud-Funktionen"
 
-#: muga/app.py:397
+#: muga/app.py:404
 msgid "Error"
 msgstr "Fehler"
 
@@ -565,11 +600,11 @@ msgstr "Speichern fehlgeschlagen: %s"
 msgid "Failed to save: too many collisions"
 msgstr "Speichern fehlgeschlagen: zu viele Namenskonflikte"
 
-#: muga/app.py:378
+#: muga/app.py:385
 msgid "File not found"
 msgstr "Datei nicht gefunden"
 
-#: muga/app.py:530
+#: muga/app.py:537
 msgid "Filename, date, month, EXIF…"
 msgstr "Dateiname, Datum, Monat, EXIF…"
 
@@ -589,24 +624,24 @@ msgstr "Blitz an"
 msgid "Focus"
 msgstr "Fokus"
 
-#: muga/viewer.py:1685
+#: muga/app.py:724 muga/viewer.py:1646
 msgid "Folder"
 msgstr "Ordner"
 
-#: muga/app.py:360
+#: muga/app.py:367
 #, python-format
 msgid "Folder %s not found"
 msgstr "Ordner %s nicht gefunden"
 
-#: muga/app.py:1237
+#: muga/app.py:1316
 msgid "Folder exists"
 msgstr "Ordner existiert bereits"
 
-#: muga/app.py:1170
+#: muga/app.py:1249
 msgid "Folder name"
 msgstr "Ordnername"
 
-#: muga/app.py:1216
+#: muga/app.py:1295
 msgid "Folder names cannot contain slashes."
 msgstr "Ordnernamen dürfen keine Schrägstriche enthalten."
 
@@ -614,11 +649,11 @@ msgstr "Ordnernamen dürfen keine Schrägstriche enthalten."
 msgid "Folders"
 msgstr "Ordner"
 
-#: muga/viewer.py:1731 muga/viewer.py:1735
+#: muga/viewer.py:1692 muga/viewer.py:1696
 msgid "GPS"
 msgstr "GPS"
 
-#: muga/settings_window.py:907
+#: muga/settings_window.py:913
 msgid ""
 "GStreamer camera support missing.\n"
 "Install: apt install gstreamer1.0-plugins-bad\n"
@@ -636,7 +671,7 @@ msgstr "Verstärkung"
 msgid "Geotagging"
 msgstr "Standortdaten"
 
-#: muga/settings_window.py:1429
+#: muga/settings_window.py:1498
 #, python-format
 msgid "Give this to “%s”. It is the client's password."
 msgstr "Gib dies an „%s“ weiter. Es ist das Passwort des Clients."
@@ -653,7 +688,7 @@ msgstr "HD"
 msgid "Handedness"
 msgstr "Händigkeit"
 
-#: muga/settings_window.py:1670
+#: muga/settings_window.py:1739
 msgid "Hide"
 msgstr "Ausblenden"
 
@@ -661,7 +696,7 @@ msgstr "Ausblenden"
 msgid "High"
 msgstr "Hoch"
 
-#: muga/settings_window.py:648
+#: muga/settings_window.py:654
 msgid ""
 "How would you like to connect to your Nextcloud?\n"
 "\n"
@@ -677,7 +712,7 @@ msgstr ""
 msgid "Image"
 msgstr "Bild"
 
-#: muga/settings_window.py:2004 muga/settings_window.py:2218
+#: muga/settings_window.py:2073 muga/settings_window.py:2287
 msgid "Images only"
 msgstr "Nur Bilder"
 
@@ -685,15 +720,15 @@ msgstr "Nur Bilder"
 msgid "Includes paths, runtime versions, camera plugins, and status flags."
 msgstr "Enthält Pfade, Laufzeitversionen, Kamera-Plugins und Statuswerte."
 
-#: muga/viewer.py:285
+#: muga/viewer.py:246
 msgid "Info"
 msgstr "Info"
 
-#: muga/app.py:1215
+#: muga/app.py:1294
 msgid "Invalid folder name"
 msgstr "Ungültiger Ordnername"
 
-#: muga/settings_window.py:2067
+#: muga/settings_window.py:2136
 msgid ""
 "It will disappear from the gallery navigation. The files on disk are not "
 "deleted."
@@ -717,7 +752,11 @@ msgstr "Leer lassen für integrierte Wiedergabe"
 msgid "Left"
 msgstr "Links"
 
-#: muga/settings_window.py:999
+#: muga/settings_window.py:1066
+msgid "Lets a client add, move and delete files"
+msgstr "Lässt einen Client Dateien hinzufügen, verschieben und löschen"
+
+#: muga/settings_window.py:1005
 msgid ""
 "Lets an MCP client — an AI assistant, for instance — search this device's "
 "photo and video index. Read-only: it can look up files, never change, move "
@@ -735,19 +774,19 @@ msgstr "Licht aus"
 msgid "Light on"
 msgstr "Licht an"
 
-#: muga/settings_window.py:607
+#: muga/settings_window.py:613
 msgid "Load thumbnails only"
 msgstr "Nur Vorschaubilder laden"
 
-#: muga/viewer.py:1694
+#: muga/viewer.py:1655
 msgid "Loading…"
 msgstr "Lädt …"
 
-#: muga/settings_window.py:1090
+#: muga/settings_window.py:1120
 msgid "Local network"
 msgstr "Lokales Netz"
 
-#: muga/settings_window.py:997 muga/settings_window.py:1007
+#: muga/settings_window.py:1003 muga/settings_window.py:1013
 msgid "MCP server"
 msgstr "MCP-Server"
 
@@ -755,7 +794,7 @@ msgstr "MCP-Server"
 msgid "Managed by Flatpak"
 msgstr "Über Flatpak verwaltet"
 
-#: muga/settings_window.py:654
+#: muga/settings_window.py:660
 msgid "Manually"
 msgstr "Manuell"
 
@@ -767,49 +806,49 @@ msgstr "Max"
 msgid "Maximum cache size (MB)"
 msgstr "Maximale Größe (MB)"
 
-#: muga/settings_window.py:616
+#: muga/settings_window.py:622
 msgid "Merge Nextcloud items into the Overview (thumbnails load on demand)"
 msgstr ""
 "Nextcloud-Inhalte in die Übersicht einblenden (Vorschaubilder werden bei "
 "Bedarf geladen)"
 
-#: muga/viewer.py:1687
+#: muga/viewer.py:1648
 msgid "Modified"
 msgstr "Geändert"
 
-#: muga/gallery_selection.py:370
+#: muga/gallery_selection.py:378
 msgid "Move failed"
 msgstr "Verschieben fehlgeschlagen"
 
-#: muga/app.py:505
+#: muga/app.py:512
 msgid "Move selected"
 msgstr "Ausgewählte verschieben"
 
-#: muga/gallery_selection.py:445
+#: muga/gallery_selection.py:453
 msgid "Moved"
 msgstr "Verschoben"
 
-#: muga/gallery_selection.py:367
+#: muga/gallery_selection.py:375
 #, python-format
 msgid "Moved %d items"
 msgstr "%d Elemente verschoben"
 
-#: muga/gallery_selection.py:376
+#: muga/gallery_selection.py:384
 #, python-format
 msgid "Moved %d items (%d failed)"
 msgstr "%d Elemente verschoben (%d fehlgeschlagen)"
 
-#: muga/gallery_selection.py:330
+#: muga/gallery_selection.py:338
 #, python-format
 msgid "Moving %d items…"
 msgstr "Verschiebe %d Elemente …"
 
-#: muga/settings_window.py:1358 muga/settings_window.py:1455
-#: muga/settings_window.py:2168 muga/viewer.py:1684
+#: muga/app.py:725 muga/settings_window.py:1427 muga/settings_window.py:1524
+#: muga/settings_window.py:2237 muga/viewer.py:1645
 msgid "Name"
 msgstr "Name"
 
-#: muga/settings_window.py:1365
+#: muga/settings_window.py:1434
 msgid "Name it after the client that will use it."
 msgstr "Benenne es nach dem Client, der es verwenden wird."
 
@@ -821,35 +860,35 @@ msgstr "Navigation"
 msgid "Neutral"
 msgstr "Neutral"
 
-#: muga/app.py:466 muga/app.py:1156 muga/app.py:1177
+#: muga/app.py:473 muga/app.py:1235 muga/app.py:1256
 msgid "New folder"
 msgstr "Neuer Ordner"
 
-#: muga/app.py:1474
+#: muga/app.py:1565
 msgid "Nextcloud Integration"
 msgstr "Nextcloud-Anbindung"
 
-#: muga/settings_window.py:536
+#: muga/settings_window.py:542
 msgid "Nextcloud active"
 msgstr "Nextcloud aktiv"
 
-#: muga/app.py:406 muga/app.py:1059
+#: muga/app.py:413 muga/app.py:1116
 msgid "Nextcloud authentication failed"
 msgstr "Nextcloud-Anmeldung fehlgeschlagen"
 
-#: muga/viewer.py:603
+#: muga/viewer.py:564
 msgid "Nextcloud connection disabled"
 msgstr "Nextcloud-Verbindung deaktiviert"
 
-#: muga/app.py:428
+#: muga/app.py:435
 msgid "Nextcloud error"
 msgstr "Nextcloud-Fehler"
 
-#: muga/app.py:1254
+#: muga/app.py:1333
 msgid "Nextcloud password is unavailable."
 msgstr "Das Nextcloud-Passwort ist nicht verfügbar."
 
-#: muga/app.py:1481
+#: muga/app.py:1572
 msgid ""
 "Nextcloud passwords are stored in your system keyring (or local file with "
 "restricted permissions). Ensure your Nextcloud instance uses HTTPS to "
@@ -859,11 +898,15 @@ msgstr ""
 "lokalen Datei mit eingeschränkten Rechten). Achte darauf, dass deine "
 "Nextcloud HTTPS verwendet, damit die Übertragung geschützt ist."
 
-#: muga/app.py:412 muga/app.py:1061
+#: muga/app.py:419 muga/app.py:1118
 msgid "Nextcloud path not found"
 msgstr "Nextcloud-Pfad nicht gefunden"
 
-#: muga/settings_window.py:1237
+#: muga/app.py:996
+msgid "No Nextcloud password could be read"
+msgstr "Nextcloud-Passwort konnte nicht gelesen werden"
+
+#: muga/settings_window.py:1268
 msgid "No access token"
 msgstr "Kein Zugriffs-Token"
 
@@ -893,64 +936,77 @@ msgstr ""
 "Keine Berechtigung für %s. Füge dich der Gruppe „video“ hinzu: sudo usermod "
 "-a -G video $USER"
 
-#: muga/app.py:362
+#: muga/app.py:369
 msgid "No pictures found"
 msgstr "Keine Bilder gefunden"
 
-#: muga/settings_window.py:1312
+#: muga/settings_window.py:1381
 msgid "No tokens yet"
 msgstr "Noch keine Tokens"
 
-#: muga/app.py:1253
+#: muga/app.py:721
+msgid "None"
+msgstr "Keine"
+
+#: muga/app.py:1332
 msgid "Not connected"
 msgstr "Nicht verbunden"
 
-#: muga/app.py:1499 muga/settings_window.py:1300
+#: muga/app.py:1590 muga/settings_window.py:1369
 msgid "OK"
 msgstr "OK"
 
-#: muga/settings_window.py:1181
+#: muga/settings_window.py:1057
+msgid ""
+"Off by default. While off, the server can only read the index — the tools "
+"for adding, moving and deleting are not even offered to a client."
+msgstr ""
+"Standardmäßig aus. Solange er aus ist, kann der Server den Index nur lesen — "
+"die Werkzeuge zum Hinzufügen, Verschieben und Löschen werden einem Client "
+"gar nicht erst angeboten."
+
+#: muga/settings_window.py:1211
 msgid "Only clients running on this device can connect"
 msgstr "Nur Clients auf diesem Gerät können sich verbinden"
 
-#: muga/app.py:487
+#: muga/app.py:494
 msgid "Open camera"
 msgstr "Kamera öffnen"
 
-#: muga/app.py:1157
+#: muga/app.py:1236
 msgid ""
 "Overview combines your other folders — open one to create a folder in it"
 msgstr ""
 "Die Übersicht fasst deine anderen Ordner zusammen — öffne einen, um darin "
 "einen Ordner anzulegen"
 
-#: muga/settings_window.py:2000
+#: muga/settings_window.py:2069
 msgid "Overview shows the combined content of every other folder."
 msgstr "Übersicht zeigt den kombinierten Inhalt aller anderen Ordner."
 
-#: muga/settings_window.py:2209
+#: muga/settings_window.py:2278
 msgid "Parent folders won't include this folder's content during scans."
 msgstr ""
 "Übergeordnete Ordner berücksichtigen den Inhalt dieses Ordners beim Scan "
 "nicht."
 
-#: muga/settings_window.py:2170
+#: muga/settings_window.py:2239
 msgid "Path"
 msgstr "Pfad"
 
-#: muga/settings_window.py:1816
+#: muga/settings_window.py:1885
 msgid "Path of the Photos folder on your Nextcloud server."
 msgstr "Pfad des Foto-Ordners auf deinem Nextcloud-Server."
 
-#: muga/settings_window.py:603
+#: muga/settings_window.py:609
 msgid "Performance"
 msgstr "Leistung"
 
-#: muga/app.py:384
+#: muga/app.py:391
 msgid "Permission denied"
 msgstr "Zugriff verweigert"
 
-#: muga/gallery_selection.py:418
+#: muga/gallery_selection.py:426
 msgid "Permission denied. The file or folder is protected."
 msgstr "Zugriff verweigert. Die Datei oder der Ordner ist geschützt."
 
@@ -966,11 +1022,11 @@ msgstr "Fotoqualität"
 msgid "Photo size"
 msgstr "Fotogröße"
 
-#: muga/settings_window.py:1815
+#: muga/settings_window.py:1884
 msgid "Photos folder on Nextcloud"
 msgstr "Foto-Ordner auf Nextcloud"
 
-#: muga/app.py:1436
+#: muga/app.py:1527
 msgid ""
 "Photos often contain sensitive metadata (EXIF data):\n"
 "• Camera make & model\n"
@@ -993,23 +1049,23 @@ msgstr ""
 msgid "Photos per row"
 msgstr "Fotos pro Zeile"
 
-#: muga/gallery_selection.py:242
+#: muga/gallery_selection.py:250
 msgid "Photos will be moved to trash."
 msgstr "Fotos werden in den Papierkorb verschoben."
 
-#: muga/app.py:285
+#: muga/app.py:292
 msgid "Pillow is outdated — please update it."
 msgstr "Pillow ist veraltet — bitte aktualisieren."
 
-#: muga/settings_window.py:769
+#: muga/settings_window.py:775
 msgid "Please fill in all fields."
 msgstr "Bitte alle Felder ausfüllen."
 
-#: muga/settings_window.py:1039
+#: muga/settings_window.py:1045
 msgid "Port"
 msgstr "Port"
 
-#: muga/settings_window.py:1251
+#: muga/settings_window.py:1282
 #, python-format
 msgid "Port %d is already in use. Pick another one."
 msgstr "Port %d ist bereits belegt. Wähle einen anderen."
@@ -1018,23 +1074,23 @@ msgstr "Port %d ist bereits belegt. Wähle einen anderen."
 msgid "Position"
 msgstr "Position"
 
-#: muga/app.py:1417
+#: muga/app.py:1508
 msgid "Privacy & Help"
 msgstr "Datenschutz & Hilfe"
 
-#: muga/settings_window.py:1091
+#: muga/settings_window.py:1121
 msgid "Public address"
 msgstr "Öffentliche Adresse"
 
-#: muga/settings_window.py:964
+#: muga/settings_window.py:970
 msgid "QR code scan error"
 msgstr "QR-Code-Fehler"
 
-#: muga/settings_window.py:959
+#: muga/settings_window.py:965
 msgid "QR code scanned successfully ✓"
 msgstr "QR-Code erfolgreich gescannt ✓"
 
-#: muga/settings_window.py:956
+#: muga/settings_window.py:962
 msgid "QR code scanned – credentials entered ✓"
 msgstr "QR-Code gescannt – Zugangsdaten eingetragen ✓"
 
@@ -1042,11 +1098,11 @@ msgstr "QR-Code gescannt – Zugangsdaten eingetragen ✓"
 msgid "Quality"
 msgstr "Qualität"
 
-#: muga/viewer.py:1415
+#: muga/viewer.py:1376
 msgid "RAW images cannot be edited with the built-in editor"
 msgstr "RAW-Bilder lassen sich mit dem eingebauten Editor nicht bearbeiten"
 
-#: muga/settings_window.py:1031
+#: muga/settings_window.py:1037
 msgid "Reachable from"
 msgstr "Erreichbar von"
 
@@ -1063,23 +1119,23 @@ msgstr "Aufnahme fehlgeschlagen: %s"
 msgid "Recording…"
 msgstr "Nimmt auf …"
 
-#: muga/viewer.py:318
+#: muga/viewer.py:279
 msgid "Redo"
 msgstr "Wiederherstellen"
 
-#: muga/app.py:450
+#: muga/app.py:457
 msgid "Refresh"
 msgstr "Aktualisieren"
 
-#: muga/settings_window.py:1683 muga/settings_window.py:2070
+#: muga/settings_window.py:1752 muga/settings_window.py:2139
 msgid "Remove"
 msgstr "Entfernen"
 
-#: muga/settings_window.py:2066
+#: muga/settings_window.py:2135
 msgid "Remove this folder?"
 msgstr "Diesen Ordner entfernen?"
 
-#: muga/settings_window.py:1463
+#: muga/settings_window.py:1532
 msgid "Rename this token, or remove it from the server."
 msgstr "Benenne dieses Token um oder entferne es vom Server."
 
@@ -1115,7 +1171,7 @@ msgstr "Neustart erforderlich"
 msgid "Right"
 msgstr "Rechts"
 
-#: muga/viewer.py:297
+#: muga/viewer.py:258
 msgid "Rotate clockwise"
 msgstr "Im Uhrzeigersinn drehen"
 
@@ -1123,17 +1179,17 @@ msgstr "Im Uhrzeigersinn drehen"
 msgid "Saturation"
 msgstr "Sättigung"
 
-#: muga/settings_window.py:1468 muga/settings_window.py:1827
-#: muga/settings_window.py:2020 muga/settings_window.py:2237 muga/viewer.py:324
-#: muga/viewer.py:1060
+#: muga/settings_window.py:1537 muga/settings_window.py:1896
+#: muga/settings_window.py:2089 muga/settings_window.py:2306 muga/viewer.py:285
+#: muga/viewer.py:1021
 msgid "Save"
 msgstr "Speichern"
 
-#: muga/viewer.py:1119
+#: muga/viewer.py:1080
 msgid "Save failed"
 msgstr "Speichern fehlgeschlagen"
 
-#: muga/viewer.py:1056
+#: muga/viewer.py:1017
 msgid "Save rotation?"
 msgstr "Rotation speichern?"
 
@@ -1142,12 +1198,12 @@ msgstr "Rotation speichern?"
 msgid "Saved %s"
 msgstr "%s gespeichert"
 
-#: muga/settings_window.py:592 muga/settings_window.py:655
-#: muga/settings_window.py:893
+#: muga/settings_window.py:598 muga/settings_window.py:661
+#: muga/settings_window.py:899
 msgid "Scan QR code"
 msgstr "QR-Code scannen"
 
-#: muga/app.py:462
+#: muga/app.py:469
 msgid "Search"
 msgstr "Suchen"
 
@@ -1164,57 +1220,57 @@ msgstr "Selbstauslöser aus"
 msgid "Self-timer: %d seconds"
 msgstr "Selbstauslöser: %d Sekunden"
 
-#: muga/settings_window.py:579
+#: muga/settings_window.py:585
 msgid "Server URL"
 msgstr "Server-URL"
 
-#: muga/settings_window.py:549
+#: muga/settings_window.py:555
 msgid "Set up"
 msgstr "Einrichten"
 
-#: muga/settings_window.py:546 muga/settings_window.py:646
+#: muga/settings_window.py:552 muga/settings_window.py:652
 msgid "Set up connection"
 msgstr "Verbindung einrichten"
 
-#: muga/app.py:474 muga/camera.py:594 muga/settings_window.py:71
+#: muga/app.py:481 muga/camera.py:594 muga/settings_window.py:71
 msgid "Settings"
 msgstr "Einstellungen"
 
-#: muga/viewer.py:337
+#: muga/viewer.py:298
 msgid "Share"
 msgstr "Teilen"
 
-#: muga/gallery_selection.py:484
+#: muga/gallery_selection.py:492
 #, python-format
 msgid "Share %d images"
 msgstr "%d Bilder teilen"
 
-#: muga/gallery_selection.py:482
+#: muga/gallery_selection.py:490
 msgid "Share image"
 msgstr "Bild teilen"
 
-#: muga/app.py:511
+#: muga/app.py:518
 msgid "Share selected"
 msgstr "Ausgewählte teilen"
 
-#: muga/settings_window.py:1670 muga/settings_window.py:2009
-#: muga/settings_window.py:2223
+#: muga/settings_window.py:1739 muga/settings_window.py:2078
+#: muga/settings_window.py:2292
 msgid "Show"
 msgstr "Anzeigen"
 
-#: muga/settings_window.py:615
+#: muga/settings_window.py:621
 msgid "Show in Overview"
 msgstr "In Übersicht anzeigen"
 
-#: muga/viewer.py:1686
+#: muga/viewer.py:1647
 msgid "Size"
 msgstr "Größe"
 
-#: muga/settings_window.py:608
+#: muga/settings_window.py:614
 msgid "Skip downloading full files during sync"
 msgstr "Beim Abgleich keine vollständigen Dateien herunterladen"
 
-#: muga/app.py:479
+#: muga/app.py:486
 msgid "Sort"
 msgstr "Sortierung"
 
@@ -1222,7 +1278,7 @@ msgstr "Sortierung"
 msgid "Source element has no usable output pad"
 msgstr "Das Quellelement hat keinen nutzbaren Ausgang"
 
-#: muga/viewer.py:331 muga/viewer.py:1799
+#: muga/viewer.py:292 muga/viewer.py:1765
 msgid "Start slideshow"
 msgstr "Diaschau starten"
 
@@ -1234,7 +1290,7 @@ msgstr "Std"
 msgid "Sticker"
 msgstr "Sticker"
 
-#: muga/viewer.py:1792
+#: muga/viewer.py:1758
 msgid "Stop slideshow"
 msgstr "Diaschau beenden"
 
@@ -1242,7 +1298,7 @@ msgstr "Diaschau beenden"
 msgid "Switch camera"
 msgstr "Kamera wechseln"
 
-#: muga/app.py:391
+#: muga/app.py:398
 msgid "System error"
 msgstr "Systemfehler"
 
@@ -1258,12 +1314,12 @@ msgstr "Textfarbe"
 msgid "Text input…"
 msgstr "Text eingeben…"
 
-#: muga/app.py:1284
+#: muga/app.py:1363
 #, python-format
 msgid "The Nextcloud server rejected the new folder %s."
 msgstr "Der Nextcloud-Server hat den neuen Ordner %s abgelehnt."
 
-#: muga/app.py:407
+#: muga/app.py:414
 msgid ""
 "The app password is incorrect or the account has been revoked. Check "
 "Nextcloud settings."
@@ -1271,11 +1327,11 @@ msgstr ""
 "Das App-Passwort ist falsch oder der Zugang wurde widerrufen. Bitte in den "
 "Nextcloud-Einstellungen prüfen."
 
-#: muga/app.py:1165
+#: muga/app.py:1244
 msgid "The current location is not available."
 msgstr "Der aktuelle Ort ist nicht verfügbar."
 
-#: muga/app.py:413
+#: muga/app.py:420
 msgid ""
 "The folder or file doesn't exist on the Nextcloud server. It may have been "
 "deleted."
@@ -1283,7 +1339,7 @@ msgstr ""
 "Der Ordner oder die Datei existiert nicht auf dem Nextcloud-Server. "
 "Möglicherweise wurde sie gelöscht."
 
-#: muga/viewer.py:1475
+#: muga/viewer.py:1436
 msgid ""
 "The image editor could not start. This may be due to insufficient memory or "
 "unsupported image format."
@@ -1291,25 +1347,30 @@ msgstr ""
 "Der Bildeditor konnte nicht gestartet werden. Möglicherweise fehlt "
 "Arbeitsspeicher oder das Bildformat wird nicht unterstützt."
 
-#: muga/viewer.py:1057
+#: muga/viewer.py:1018
 msgid "The image has been rotated. Save the change?"
 msgstr "Das Bild wurde gedreht. Änderung speichern?"
 
-#: muga/app.py:294
+#: muga/app.py:301
 msgid "The media index was damaged and is being rebuilt."
 msgstr "Der Medienindex war beschädigt und wird neu aufgebaut."
 
-#: muga/settings_window.py:2165
+#: muga/app.py:1063
+#, python-format
+msgid "The media scan failed: %s"
+msgstr "Der Medien-Scan ist fehlgeschlagen: %s"
+
+#: muga/settings_window.py:2234
 msgid "The name appears as the entry label in the gallery navigation."
 msgstr "Der Name erscheint als Beschriftung in der Galerie-Navigation."
 
-#: muga/viewer.py:1120
+#: muga/viewer.py:1081
 msgid "The rotation could not be saved. The photo on disk is unchanged."
 msgstr ""
 "Die Drehung konnte nicht gespeichert werden. Das Foto auf der Festplatte ist "
 "unverändert."
 
-#: muga/settings_window.py:788
+#: muga/settings_window.py:794
 msgid ""
 "The server URL starts with http:// — your password and photos will be "
 "transmitted unencrypted. Anyone on the same network can read them. Use "
@@ -1319,7 +1380,7 @@ msgstr ""
 "werden unverschlüsselt übertragen. Jeder im selben Netzwerk kann sie "
 "mitlesen. Verwende https://, sofern nichts ausdrücklich dagegen spricht."
 
-#: muga/settings_window.py:1254
+#: muga/settings_window.py:1285
 #, python-format
 msgid "The server could not bind to port %d."
 msgstr "Der Server konnte sich nicht an Port %d binden."
@@ -1330,11 +1391,11 @@ msgstr ""
 "Das Update wurde installiert. Starte Muga neu, um die neue Version zu "
 "verwenden."
 
-#: muga/settings_window.py:1089
+#: muga/settings_window.py:1119
 msgid "This device only"
 msgstr "Nur dieses Gerät"
 
-#: muga/viewer.py:582
+#: muga/viewer.py:543
 msgid ""
 "This image is stored in your Nextcloud.\n"
 "The connection is currently disabled."
@@ -1346,25 +1407,29 @@ msgstr ""
 msgid "Time"
 msgstr "Zeit"
 
-#: muga/settings_window.py:1385
+#: muga/settings_window.py:1454
 msgid "Token"
 msgstr "Token"
 
-#: muga/settings_window.py:1428
+#: muga/settings_window.py:1497
 msgid "Token created"
 msgstr "Token erstellt"
 
-#: muga/settings_window.py:1008
+#: muga/settings_window.py:1014
 msgid "Turn the server on or off"
 msgstr "Den Server ein- oder ausschalten"
 
-#: muga/viewer.py:311
+#: muga/viewer.py:272
 msgid "Undo"
 msgstr "Rückgängig"
 
-#: muga/settings_window.py:786
+#: muga/settings_window.py:792
 msgid "Unencrypted connection"
 msgstr "Unverschlüsselte Verbindung"
+
+#: muga/app.py:1097
+msgid "Unknown reason"
+msgstr "Unbekannter Grund"
 
 #: muga/settings_window.py:355
 msgid "Up to date"
@@ -1387,7 +1452,7 @@ msgstr "Aktualisierungen"
 msgid "Updating…"
 msgstr "Aktualisiere …"
 
-#: muga/settings_window.py:584
+#: muga/settings_window.py:590
 msgid "Username"
 msgstr "Benutzername"
 
@@ -1407,11 +1472,11 @@ msgstr "Videomodus"
 msgid "Video quality"
 msgstr "Videoqualität"
 
-#: muga/settings_window.py:2004 muga/settings_window.py:2218
+#: muga/settings_window.py:2073 muga/settings_window.py:2287
 msgid "Videos only"
 msgstr "Nur Videos"
 
-#: muga/app.py:1460
+#: muga/app.py:1551
 msgid ""
 "When you delete photos in Muga, they are moved to trash. They can typically "
 "be recovered from your system trash until it is permanently emptied. For "
@@ -1426,7 +1491,7 @@ msgstr ""
 msgid "Where the category bar is shown around the gallery."
 msgstr "Wo die Kategorieleiste um die Galerie herum erscheint."
 
-#: muga/settings_window.py:2010 muga/settings_window.py:2224
+#: muga/settings_window.py:2079 muga/settings_window.py:2293
 msgid "Which media types appear when this folder is opened."
 msgstr "Welche Medientypen erscheinen, wenn dieser Ordner geöffnet wird."
 
@@ -1438,11 +1503,15 @@ msgstr "Auf welcher Seite die daumengerechten Kamerabedienelemente liegen."
 msgid "White balance"
 msgstr "Weißabgleich"
 
-#: muga/app.py:385
+#: muga/settings_window.py:1055
+msgid "Write access"
+msgstr "Schreibzugriff"
+
+#: muga/app.py:392
 msgid "You don't have permission to access this file."
 msgstr "Du hast keine Berechtigung für diese Datei."
 
-#: muga/app.py:290
+#: muga/app.py:297
 msgid "Your settings could not be read and were reset to defaults."
 msgstr ""
 "Deine Einstellungen konnten nicht gelesen werden und wurden zurückgesetzt."
@@ -1451,15 +1520,15 @@ msgstr ""
 msgid "camera"
 msgstr "Kamera"
 
-#: muga/gallery_selection.py:229
+#: muga/gallery_selection.py:237
 msgid "selected"
 msgstr "ausgewählt"
 
-#: muga/settings_window.py:1161
+#: muga/settings_window.py:1191
 msgid "unavailable"
 msgstr "nicht verfügbar"
 
-#: muga/settings_window.py:1499
+#: muga/settings_window.py:1568
 #, python-format
 msgid ""
 "“%s” stops working immediately. Any client still using it will be refused "
@@ -1649,10 +1718,6 @@ msgstr "Noch kein konfigurierter Ordner vorhanden."
 #. Referenced indirectly — passed to _() as a variable.
 msgid "No results"
 msgstr "Keine Treffer"
-
-#. Referenced indirectly — passed to _() as a variable.
-msgid "None"
-msgstr "Keine"
 
 #. Referenced indirectly — passed to _() as a variable.
 msgid "November"

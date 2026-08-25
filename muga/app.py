@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import faulthandler
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 import signal
 import shlex
@@ -172,7 +173,9 @@ class GalleryWindow(
         # before destroying the old one, and a window-owned server would still
         # be holding the port at that moment.
         try:
-            mcp_server.sync_with_settings(self.settings, self.database)
+            mcp_server.sync_with_settings(
+                self.settings, self.database, on_change=self._on_mcp_change,
+            )
         except Exception:
             LOGGER.exception("Could not bring up the MCP server")
         self.category = self._first_existing_category()
@@ -192,6 +195,10 @@ class GalleryWindow(
         self._sel_busy: bool = False
         self._nc_spinner: Gtk.Spinner | None = None
         self._nc_broken_img: Gtk.Image | None = None
+        # Why the broken badge is showing, and since when. Kept on the window
+        # so the diagnostics report can name it — see _set_nc_broken.
+        self._nc_broken_reason: str = ""
+        self._nc_broken_since: str = ""
         # On-demand NC thumbnail loader (used by gallery_grid when binding tiles)
         self._nc_thumb_pending: set[str] = set()
         self._nc_thumb_lock = threading.Lock()
@@ -679,25 +686,51 @@ class GalleryWindow(
     # ------------------------------------------------------------------
 
     # Internal sort_mode strings ↔ (mode-key, descending bool) tuples.
-    _SORT_KEYS = ["none", "date", "folder", "name"]
+    # "none" is the ungrouped default; the two date modes add month headers.
+    # They are split because a photo's two dates are genuinely different facts:
+    # date_file is when the file last changed, date_taken is when the shutter
+    # fired. Copying a shoot off a card gives every file today's date_file and
+    # leaves date_taken where it belongs.
+    _SORT_KEYS = ["none", "date_taken", "date_file", "folder", "name"]
     _SORT_TO_INTERNAL = {
-        ("none",   True):  "newest",
-        ("none",   False): "oldest",
-        ("date",   True):  "date",
-        ("date",   False): "date_asc",
-        ("folder", True):  "folder_desc",
-        ("folder", False): "folder",
-        ("name",   True):  "name_desc",
-        ("name",   False): "name",
+        ("none",       True):  "newest",
+        ("none",       False): "oldest",
+        # Legacy keys: "date"/"date_asc" predate the split and mean the file
+        # date, which is what they always sorted by. Settings written before
+        # this keep working untouched.
+        ("date_file",  True):  "date",
+        ("date_file",  False): "date_asc",
+        ("date_taken", True):  "date_taken",
+        ("date_taken", False): "date_taken_asc",
+        ("folder",     True):  "folder_desc",
+        ("folder",     False): "folder",
+        ("name",       True):  "name_desc",
+        ("name",       False): "name",
     }
     _INTERNAL_TO_SORT = {v: k for k, v in _SORT_TO_INTERNAL.items()}
 
+    def _sort_labels(self) -> list[str]:
+        """Dropdown labels, in _SORT_KEYS order and already translated.
+
+        Written as literals inside _() rather than translated from a list of
+        msgids: xgettext only sees string constants, so `self._(labels[i])`
+        would ship them untranslated — and the regression test that catches
+        missing msgids inspects literals too, so nothing would flag it.
+        """
+        return [
+            self._("None"),
+            self._("Date (recorded)"),
+            self._("Date (file)"),
+            self._("Folder"),
+            self._("Name"),
+        ]
+
     def _build_sort_controls(self) -> Gtk.Box:
         # Label texts in the dropdown — matched 1:1 with self._SORT_KEYS.
-        self._sort_dropdown_labels = ["None", "Date", "Folder", "Name"]
+        self._sort_dropdown_labels = self._sort_labels()
         store = Gtk.StringList()
         for label in self._sort_dropdown_labels:
-            store.append(self._(label))
+            store.append(label)
         self._sort_dropdown = Gtk.DropDown.new(store, None)
         self._sort_dropdown.set_valign(Gtk.Align.CENTER)
         self._sort_dropdown.connect("notify::selected", self._on_sort_dropdown_changed)
@@ -948,8 +981,20 @@ class GalleryWindow(
                     )
                     LOGGER.info("Nextcloud client created for %s", self.settings.nextcloud_url)
                 else:
-                    LOGGER.info("No Nextcloud app password available; skipping scan")
-                    GLib.idle_add(self._set_nc_broken, True)
+                    # A configured account with no retrievable password: the
+                    # keyring is locked, or the secret was removed behind the
+                    # app's back. Warning, not info — this is exactly the state
+                    # that shows a red badge, and at info level it never
+                    # reached the log the user is asked to send in.
+                    LOGGER.warning(
+                        "Nextcloud: no app password could be read for %s@%s "
+                        "(keyring locked or entry removed) — skipping sync",
+                        self.settings.nextcloud_user, self.settings.nextcloud_url,
+                    )
+                    GLib.idle_add(
+                        self._set_nc_broken, True,
+                        self._("No Nextcloud password could be read"),
+                    )
             elif need_nc:
                 LOGGER.info("Nextcloud: keine URL/Benutzer konfiguriert, übersprungen")
 
@@ -1002,7 +1047,6 @@ class GalleryWindow(
                     # fast: flag broken, tell the user once, and trip the
                     # breaker so on-demand thumbnail fetches don't keep
                     # blocking ~20 s each against a server we know is down.
-                    LOGGER.warning("Nextcloud sync failed: %s", nc_err)
                     self._on_nc_sync_failed(nc_err)
                 else:
                     # Sync went through → clear any stale broken state so a
@@ -1014,7 +1058,10 @@ class GalleryWindow(
                 # they scroll into view, which keeps the UI responsive on large folders.
         except Exception as e:
             LOGGER.exception("Media scan failed: %s", e)
-            GLib.idle_add(self._set_nc_broken, True)
+            GLib.idle_add(
+                self._set_nc_broken, True,
+                self._("The media scan failed: %s") % type(e).__name__,
+            )
         finally:
             nc_client = None
             GLib.idle_add(self._set_nc_syncing, False)
@@ -1042,6 +1089,16 @@ class GalleryWindow(
     def _set_nc_broken(self, active: bool, reason: str = "") -> None:
         if self._closing:
             return
+        # Remembered even when the badge widget is not built yet (a narrow
+        # window hides it), so the diagnostics report can always answer "why is
+        # Nextcloud red" — a tooltip is no use to someone pasting a log into a
+        # bug report, and on a phone it is not reachable at all.
+        if active:
+            self._nc_broken_reason = reason or self._("Unknown reason")
+            self._nc_broken_since = datetime.now().isoformat(timespec="seconds")
+        else:
+            self._nc_broken_reason = ""
+            self._nc_broken_since = ""
         if self._nc_broken_img is not None:
             self._nc_broken_img.set_visible(active)
             # A hovered tooltip explains *why* the connection is marked broken,
@@ -1069,6 +1126,16 @@ class GalleryWindow(
         exactly once per broken episode (so repeated retries don't spam dialogs).
         """
         first_failure = not self._nc_unreachable
+        # Logged here rather than at each call site: this is the one funnel
+        # every network failure passes through, and the exception type plus the
+        # traceback are what tell a timeout apart from a rejected password.
+        # exc_info=error, not True: this is also called from the thumbnail
+        # worker outside any except block, where exc_info=True would log a bare
+        # "NoneType: None" instead of the traceback.
+        LOGGER.warning(
+            "Nextcloud unreachable — %s: %s", type(error).__name__, error,
+            exc_info=error,
+        )
         self._nc_unreachable = True
         # Drop anything still queued so workers stop blocking on the dead server.
         self._cancel_nc_thumb_queue()
@@ -1137,6 +1204,21 @@ class GalleryWindow(
             if cat == category:
                 return path
         return None
+
+    def _on_mcp_change(self) -> None:
+        """An MCP write tool changed something on disk — re-render.
+
+        Called on the MCP server's worker thread, so the refresh is bounced to
+        the main loop: touching the widget tree from another thread is what GTK
+        crashes on. Skipped once the window is tearing down, like every other
+        deferred callback here.
+        """
+        def _refresh() -> bool:
+            if not self._closing:
+                self.refresh(scan=False)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(_refresh)
 
     def _sync_new_folder_button(self) -> None:
         """Offer "New folder" only where a new folder could actually land.
@@ -1339,13 +1421,25 @@ class GalleryWindow(
 
     def _on_category_toggled(self, button: Gtk.ToggleButton, category: str) -> None:
         if not button.get_active():
-            if category == self.category and self.current_folder is not None:
-                button.handler_block_by_func(self._on_category_toggled)
-                button.set_active(True)
-                button.handler_unblock_by_func(self._on_category_toggled)
-                self._cancel_nc_thumb_queue()
+            # Tapping the category you are already in. A ToggleButton reports
+            # that as being switched *off*, but the tab must stay lit — there
+            # is no such thing as "no category selected" here.
+            if category != self.category:
+                # Some other tab took over; that path re-activates the new one.
+                return
+            button.handler_block_by_func(self._on_category_toggled)
+            button.set_active(True)
+            button.handler_unblock_by_func(self._on_category_toggled)
+            self._cancel_nc_thumb_queue()
+            if self.current_folder is not None:
+                # Drilled into a subfolder — the tap means "back to the top".
                 self.current_folder = None
                 self._render()
+            else:
+                # Already at the top of this category, so the tap can only mean
+                # "load it again". Previously nothing happened at all, which
+                # made the tab look unresponsive.
+                self.refresh(scan=True, scope="current")
             return
         self._cancel_nc_thumb_queue()
         self.category = category
@@ -1532,7 +1626,9 @@ class GalleryWindow(
         # is now stale — resync rather than leaving its tools reading a copy
         # that no longer reflects what the user just changed.
         try:
-            mcp_server.sync_with_settings(self.settings, self.database)
+            mcp_server.sync_with_settings(
+                self.settings, self.database, on_change=self._on_mcp_change,
+            )
         except Exception:
             LOGGER.exception("Could not apply MCP settings")
         # Invalidate the shared NC client — credentials/URL may have changed.

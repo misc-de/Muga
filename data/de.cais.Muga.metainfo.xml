@@ -69,6 +69,22 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.0" date="2026-08-25">
+      <description>
+        <p>New: Muga reads the capture date from your photos while it scans, so
+        the gallery can sort and search by when a picture was taken rather than
+        when its file was written. A shoot copied off a card today lands under
+        the year it was shot. The sort menu offers both — "Date (recorded)" and
+        "Date (file)" — and searching now reaches the camera model and GPS
+        coordinates too.</p>
+        <p>The MCP server can optionally add, move and delete files. This sits
+        behind its own switch, off by default, asks for confirmation, and is
+        confined to your media folders; deletions go to the trash.</p>
+        <p>Fixes: tapping the tab you are already on reloads it instead of
+        doing nothing. Popovers close when you tap beside them. A red Nextcloud
+        badge now says why, in the tooltip and in the diagnostics report.</p>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-08-25">
       <description>
         <p>Fixes: hidden directories are no longer scanned. A folder whose name

@@ -111,7 +111,7 @@ def test_apply_sort_scopes_to_the_open_folder() -> None:
     settings = SimpleNamespace(sort_mode="newest", sort_modes={}, save=MagicMock())
     win = _win(category="photos", current_folder="/holiday", settings=settings,
                _sync_sort_controls=MagicMock(), _render=MagicMock(), _sort_popover=None)
-    GalleryWindow._apply_sort_mode(win, "date", desc=True)
+    GalleryWindow._apply_sort_mode(win, "date_file", desc=True)
     assert settings.sort_modes == {"photos\x00/holiday": "date"}
 
 
@@ -130,7 +130,7 @@ def test_sort_dropdown_keeps_the_direction() -> None:
     settings = SimpleNamespace(sort_mode="name", sort_modes={"photos": "name"},
                                save=MagicMock())
     dropdown = MagicMock()
-    dropdown.get_selected.return_value = GalleryWindow._SORT_KEYS.index("date")
+    dropdown.get_selected.return_value = GalleryWindow._SORT_KEYS.index("date_file")
     win = _win("_current_sort_internal", "_apply_sort_mode",
                category="photos", current_folder=None, settings=settings,
                _sort_updating=False, _sync_sort_controls=MagicMock(),
@@ -707,7 +707,9 @@ def test_render_resets_position_when_the_view_changes(seeded_window, pump) -> No
 
 @requires_display
 @pytest.mark.parametrize(
-    "sort_mode", ["newest", "oldest", "name", "name_desc", "date", "date_asc"],
+    "sort_mode",
+    ["newest", "oldest", "name", "name_desc", "date", "date_asc",
+     "date_taken", "date_taken_asc"],
 )
 def test_every_sort_mode_renders(seeded_window, pump, sort_mode) -> None:
     _seed(seeded_window, 60)
@@ -1060,7 +1062,13 @@ def test_scan_flags_a_missing_password_as_broken() -> None:
     win.settings.nextcloud_user = "alice"
     with patch.object(Settings, "load_app_password", return_value=""):
         scheduled = _run_scan(win)
-    assert (win._set_nc_broken, (True,)) in scheduled
+    # With a reason, not bare: a red badge that explains nothing was the
+    # complaint that prompted this — no tooltip, and nothing in the log either.
+    broken = [args for fn, args in scheduled
+              if fn is win._set_nc_broken and args and args[0] is True]
+    assert broken, "the badge was never flagged broken"
+    assert len(broken[0]) == 2 and broken[0][1], f"flagged without a reason: {broken[0]}"
+    assert "password" in broken[0][1].lower()
 
 
 def test_scan_reports_a_failed_nextcloud_sync() -> None:

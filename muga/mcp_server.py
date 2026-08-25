@@ -242,14 +242,189 @@ class GalleryTools:
     underneath a running server.
     """
 
-    def __init__(self, database: "Database", settings: "Settings") -> None:
+    def __init__(self, database: "Database", settings: "Settings",
+                 on_change: Callable[[], None] | None = None) -> None:
         self.database = database
         self.settings = settings
+        # Called after a write tool changed something on disk, so the gallery
+        # can re-render. Without it a photo deleted over MCP stays on screen
+        # until the user refreshes by hand and then opens a tile that is gone.
+        self.on_change = on_change
+
+    # -- write gate ------------------------------------------------------
+
+    def writes_allowed(self) -> bool:
+        """Whether the write tools exist at all right now.
+
+        Read straight from settings on every call rather than cached: the user
+        can flip the switch while a client is connected, and the next request
+        has to see it — including turning it *off*, which must take effect
+        without restarting the server.
+        """
+        return bool(getattr(self.settings, "mcp_write_enabled", False))
+
+    def _media_roots(self) -> list[Path]:
+        """The local directories a write tool may touch, fully resolved.
+
+        Everything the user configured as a media folder, and nothing else.
+        Resolved so the comparison in _inside_roots comes down to plain path
+        prefixes with no symlink left to reinterpret them.
+        """
+        roots: list[Path] = []
+        for key, _label, path in self.settings.categories():
+            # Overview aggregates the others and its path slot holds a legacy
+            # value that is never scanned; Nextcloud is a server-side path, not
+            # a local directory.
+            if key in (_ALL, "nextcloud") or not path:
+                continue
+            try:
+                resolved = Path(path).expanduser().resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if resolved.is_dir():
+                roots.append(resolved)
+        return roots
+
+    def _inside_roots(self, candidate: Path, roots: list[Path]) -> bool:
+        return any(candidate == root or root in candidate.parents for root in roots)
+
+    def _resolve_for_write(self, raw: str, *, must_exist: bool = True) -> Path:
+        """Turn a client-supplied path into one it is allowed to write to.
+
+        This is the whole security boundary of the write tools, so it is
+        deliberately strict:
+
+        * the path is resolved first, so ``photos/link/../../../etc/passwd``
+          and a symlink pointing out of the library both collapse to what they
+          really are before anything is compared;
+        * the result has to sit inside a configured media folder — the same
+          directories the gallery already shows;
+        * a symlink is refused outright even when its target is inside, because
+          deleting one and deleting what it points at are different acts and
+          the client cannot tell which it asked for.
+        """
+        text = (raw or "").strip()
+        if not text:
+            raise ValueError("path is required")
+        candidate = Path(text).expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("path must be absolute")
+        if candidate.is_symlink():
+            raise ValueError("refusing to operate on a symlink")
+        try:
+            resolved = candidate.resolve(strict=must_exist)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"path cannot be resolved: {exc}") from exc
+        roots = self._media_roots()
+        if not roots:
+            raise ValueError("no media folders are configured")
+        if not self._inside_roots(resolved, roots):
+            raise ValueError("path is outside the configured media folders")
+        return resolved
+
+    def _notify_change(self) -> None:
+        if self.on_change is None:
+            return
+        try:
+            self.on_change()
+        except Exception:
+            LOGGER.debug("MCP change callback failed", exc_info=True)
 
     # -- schema ---------------------------------------------------------
 
     def descriptors(self) -> list[dict]:
-        """The ``tools/list`` payload."""
+        """The ``tools/list`` payload.
+
+        The write tools are appended only while the user has switched write
+        access on, so a client with read-only access is not shown capabilities
+        it will be refused. tools/list is also re-read by clients after a
+        change notification, and this is computed fresh each time.
+        """
+        tools = self._read_descriptors()
+        if self.writes_allowed():
+            tools.extend(self._write_descriptors())
+        return tools
+
+    def _write_descriptors(self) -> list[dict]:
+        folder_arg = {
+            "type": "string",
+            "description": (
+                "Absolute path of the destination folder. Must be inside one "
+                "of the gallery's media folders."
+            ),
+        }
+        name_arg = {
+            "type": "string",
+            "description": "New file name. Defaults to the source's own name.",
+        }
+        return [
+            {
+                "name": "delete_media",
+                "title": "Delete a file",
+                "description": (
+                    "Move a file to the desktop trash and drop it from the "
+                    "index. Recoverable from the trash until it is emptied. "
+                    "Only works on files inside the gallery's media folders. "
+                    "Fails on filesystems with no trash of their own (FAT "
+                    "cards, many network mounts) rather than deleting outright."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Absolute path, as returned by the read tools.",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            },
+            {
+                "name": "move_media",
+                "title": "Move or rename a file",
+                "description": (
+                    "Move a file to another folder, optionally under a new "
+                    "name. Both the file and the destination must be inside "
+                    "the gallery's media folders."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute path of the file."},
+                        "target_folder": folder_arg,
+                        "name": name_arg,
+                    },
+                    "required": ["path", "target_folder"],
+                },
+            },
+            {
+                "name": "add_media",
+                "title": "Add a file to the gallery",
+                "description": (
+                    "Copy an image or video from elsewhere on this device into "
+                    "one of the gallery's media folders. The original is left "
+                    "alone. The copy shows up in the gallery after the next "
+                    "scan."
+                ),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_path": {
+                            "type": "string",
+                            "description": (
+                                "Absolute path of the file to copy. Must be an "
+                                "image or video; may be anywhere readable."
+                            ),
+                        },
+                        "target_folder": folder_arg,
+                        "name": name_arg,
+                    },
+                    "required": ["source_path", "target_folder"],
+                },
+            },
+        ]
+
+    def _read_descriptors(self) -> list[dict]:
         return [
             {
                 "name": "list_categories",
@@ -355,7 +530,15 @@ class GalleryTools:
 
     # -- dispatch -------------------------------------------------------
 
+    _WRITE_TOOLS = ("delete_media", "move_media", "add_media")
+
     def call(self, name: str, arguments: dict) -> Any:
+        if name in self._WRITE_TOOLS and not self.writes_allowed():
+            # Checked here as well as in descriptors(): hiding a tool from the
+            # listing is presentation, refusing to run it is the actual rule.
+            # A client that remembers the name from an earlier session, or
+            # guesses it, must still be turned away.
+            raise PermissionError(name)
         handler: Callable[[dict], Any] | None = {
             "list_categories": self._list_categories,
             "search_media": self._search_media,
@@ -363,10 +546,113 @@ class GalleryTools:
             "list_folders": self._list_folders,
             "get_media": self._get_media,
             "gallery_stats": self._gallery_stats,
+            "delete_media": self._delete_media,
+            "move_media": self._move_media,
+            "add_media": self._add_media,
         }.get(name)
         if handler is None:
             raise LookupError(name)
         return handler(arguments or {})
+
+    # -- write tools ----------------------------------------------------
+
+    def _delete_media(self, args: dict) -> dict:
+        path = self._resolve_for_write(args.get("path", ""))
+        if not path.is_file():
+            raise ValueError("not a file")
+        # The trash, not unlink: the gallery's own delete does the same, and a
+        # mistaken tool call should be recoverable from the desktop's trash
+        # rather than gone. A failure here is reported, never quietly
+        # downgraded to a permanent delete.
+        from gi.repository import Gio
+
+        try:
+            ok = Gio.File.new_for_path(str(path)).trash(None)
+        except Exception as exc:
+            raise ValueError(f"could not move to trash: {exc}") from exc
+        if not ok:
+            raise ValueError("could not move to trash")
+        self.database.delete_path(str(path))
+        self.database.commit()
+        self._notify_change()
+        return {"deleted": True, "path": str(path), "to": "trash"}
+
+    def _move_media(self, args: dict) -> dict:
+        source = self._resolve_for_write(args.get("path", ""))
+        if not source.is_file():
+            raise ValueError("not a file")
+        target_dir = self._resolve_for_write(args.get("target_folder", ""))
+        if not target_dir.is_dir():
+            raise ValueError("target_folder is not a directory")
+        name = str(args.get("name") or source.name).strip()
+        if "/" in name or name in ("", ".", ".."):
+            raise ValueError("name must be a plain file name")
+        destination = target_dir / name
+        if destination.exists():
+            raise ValueError(f"{name} already exists in the target folder")
+        try:
+            source.rename(destination)
+        except OSError as exc:
+            # Across filesystems rename fails with EXDEV; copy+remove is what
+            # the gallery's own move does in that case.
+            import shutil
+
+            try:
+                shutil.move(str(source), str(destination))
+            except Exception as inner:
+                raise ValueError(f"could not move: {inner}") from exc
+        self.database.delete_path(str(source))
+        self.database.commit()
+        self._notify_change()
+        return {"moved": True, "from": str(source), "to": str(destination)}
+
+    def _add_media(self, args: dict) -> dict:
+        raw_source = str(args.get("source_path") or "").strip()
+        if not raw_source:
+            raise ValueError("source_path is required")
+        source = Path(raw_source).expanduser()
+        if not source.is_absolute():
+            raise ValueError("source_path must be absolute")
+        try:
+            source = source.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"source_path cannot be resolved: {exc}") from exc
+        if not source.is_file():
+            raise ValueError("source_path is not a file")
+        # The source may sit anywhere the user can read, but it has to be
+        # something this gallery would show. Without that check the tool is a
+        # way to copy arbitrary files into the media folders — and then to have
+        # their paths listed back out.
+        from .models import media_type_for
+
+        if media_type_for(source) is None:
+            raise ValueError("source_path is not an image or video")
+
+        target_dir = self._resolve_for_write(args.get("target_folder", ""))
+        if not target_dir.is_dir():
+            raise ValueError("target_folder is not a directory")
+        name = str(args.get("name") or source.name).strip()
+        if "/" in name or name in ("", ".", ".."):
+            raise ValueError("name must be a plain file name")
+        destination = target_dir / name
+        if destination.exists():
+            raise ValueError(f"{name} already exists in the target folder")
+
+        import shutil
+
+        try:
+            # copy2 keeps the mtime, so a photo imported today does not sort to
+            # the top of a gallery ordered by date.
+            shutil.copy2(str(source), str(destination))
+        except Exception as exc:
+            raise ValueError(f"could not copy: {exc}") from exc
+        self._notify_change()
+        return {
+            "added": True,
+            "path": str(destination),
+            "indexed": False,
+            "note": "The file is on disk; it appears in the gallery after the next scan.",
+        }
 
     # -- helpers --------------------------------------------------------
 
@@ -406,7 +692,7 @@ class GalleryTools:
     def _item(item) -> dict:
         from datetime import datetime, timezone
 
-        return {
+        out = {
             "path": item.path,
             "name": item.name,
             "category": item.category,
@@ -415,6 +701,14 @@ class GalleryTools:
             "size_bytes": item.size,
             "modified": datetime.fromtimestamp(item.mtime, timezone.utc).isoformat(timespec="seconds"),
         }
+        # Only present when the file carries a capture date. Local time
+        # without an offset, because that is what EXIF records — the camera's
+        # wall clock, with no zone to convert from. A client must not read it
+        # as UTC, and an absent key says "unknown" more honestly than a
+        # timestamp copied from the file's mtime would.
+        if getattr(item, "taken_at", None):
+            out["taken"] = datetime.fromtimestamp(item.taken_at).isoformat(timespec="seconds")
+        return out
 
     def _include_nc(self) -> bool:
         """Whether Nextcloud rows belong in an aggregate listing — the same
@@ -617,6 +911,12 @@ class _Protocol:
             arguments = {}
         try:
             payload = self.tools.call(name, arguments)
+        except PermissionError:
+            return _tool_error(
+                f"{name} is unavailable: write access is switched off in "
+                "Muga's settings (Settings \u2192 MCP \u2192 Allow write access). "
+                "Only the person at the device can turn it on."
+            )
         except LookupError:
             # A tool error is reported inside the result, not as a JSON-RPC
             # error — that is what lets the model see it and retry.
@@ -817,8 +1117,9 @@ class MCPServer:
     """Owns the socket and the thread that serves it."""
 
     def __init__(self, database: "Database", settings: "Settings",
-                 tokens_path: Path = TOKENS_PATH) -> None:
-        self.tools = GalleryTools(database, settings)
+                 tokens_path: Path = TOKENS_PATH,
+                 on_change: Callable[[], None] | None = None) -> None:
+        self.tools = GalleryTools(database, settings, on_change=on_change)
         # Where the tokens are read from. A parameter rather than the module
         # constant so a test can point one server at its own file without
         # monkeypatching the loader out from under the rest of the process.
@@ -867,11 +1168,19 @@ class MCPServer:
         if self._httpd is not None:
             self._httpd.tokens = self.tokens
 
-    def rebind_sources(self, database: "Database", settings: "Settings") -> None:
+    def rebind_sources(self, database: "Database", settings: "Settings",
+                       on_change: Callable[[], None] | None = None) -> None:
         """Point the tools at a different database/settings pair — used when a
-        layout change replaces GalleryWindow while the server keeps running."""
+        layout change replaces GalleryWindow while the server keeps running.
+
+        The change callback goes with them: it closes over the old window, and
+        calling it after that window is gone would refresh a widget tree that
+        no longer exists.
+        """
         self.tools.database = database
         self.tools.settings = settings
+        if on_change is not None:
+            self.tools.on_change = on_change
 
     # -- lifecycle ------------------------------------------------------
 
@@ -947,7 +1256,8 @@ def instance() -> MCPServer | None:
     return _instance
 
 
-def sync_with_settings(settings: "Settings", database: "Database") -> MCPServer:
+def sync_with_settings(settings: "Settings", database: "Database",
+                       on_change: Callable[[], None] | None = None) -> MCPServer:
     """Bring the shared server in line with *settings*.
 
     Idempotent: safe to call at startup, after every settings change, and
@@ -958,10 +1268,10 @@ def sync_with_settings(settings: "Settings", database: "Database") -> MCPServer:
     with _instance_lock:
         server = _instance
         if server is None:
-            server = MCPServer(database, settings)
+            server = MCPServer(database, settings, on_change=on_change)
             _instance = server
         else:
-            server.rebind_sources(database, settings)
+            server.rebind_sources(database, settings, on_change)
         if getattr(settings, "mcp_enabled", False):
             server.start(
                 getattr(settings, "mcp_port", DEFAULT_MCP_PORT),

@@ -25,6 +25,7 @@ from .camera_orientation import (
     ORIENT_RIGHT_UP,
     OrientationClient,
 )
+from . import exif as exif_module
 from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem
 from .nextcloud import is_nc_path
@@ -160,53 +161,13 @@ def _exif_for_upright_save(img) -> bytes | None:
 
 
 def _extract_exif(path: str) -> dict[str, str]:
-    """Extract camera model and GPS coords from EXIF, if available."""
-    exif_info: dict[str, str] = {}
-    if not _PIL_OK or PILImage is None:
-        return exif_info
-    try:
-        img = PILImage.open(path)
-        exif_data = img.getexif()
-        if not exif_data:
-            return exif_info
-        # Tag 271: Make, Tag 272: Model
-        make = exif_data.get(271, "").strip()
-        model = exif_data.get(272, "").strip()
-        camera = ""
-        if make and model:
-            camera = f"{make} {model}"
-        elif model:
-            camera = model
-        elif make:
-            camera = make
-        if camera:
-            exif_info["Camera"] = camera
-        # Tag 34853: GPS IFD Pointer → parse GPS tags
-        if 34853 in exif_data:
-            gps_ifd = exif_data.get_ifd(34853)
-            # GPS Latitude (Tag 2), Longitude (Tag 4)
-            lat_data = gps_ifd.get(2)
-            lon_data = gps_ifd.get(4)
-            lat_ref = gps_ifd.get(1, "N")  # N/S
-            lon_ref = gps_ifd.get(3, "E")  # E/W
-            if lat_data and lon_data:
-                try:
-                    lat = float(lat_data[0]) + float(lat_data[1]) / 60 + float(lat_data[2]) / 3600
-                    lon = float(lon_data[0]) + float(lon_data[1]) / 60 + float(lon_data[2]) / 3600
-                    if lat_ref == "S":
-                        lat = -lat
-                    if lon_ref == "W":
-                        lon = -lon
-                    exif_info["GPS"] = f"{lat:.4f}, {lon:.4f}"
-                except (TypeError, IndexError, ZeroDivisionError):
-                    # Truncated or zero-denominator GPS rationals — drop the
-                    # coordinate, keep the rest of the EXIF block.
-                    LOGGER.debug("malformed EXIF GPS rationals in %s", path, exc_info=True)
-    except Exception:
-        # EXIF is decoration here — a malformed tag block must never stop the
-        # photo from opening.
-        LOGGER.debug("EXIF parse failed for %s", path, exc_info=True)
-    return exif_info
+    """The displayable EXIF fields for the info popover.
+
+    The parser itself lives in muga.exif now: the scanner needs the same one
+    to fill the index for every file, not just the ones opened here. Kept as a
+    named function because the popover and its tests reach for it directly.
+    """
+    return exif_module.extract_fields(path)
 
 
 class ViewerWindow(Adw.ApplicationWindow):
@@ -979,7 +940,7 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _update_date_label(self, item: MediaItem) -> None:
         try:
-            dt = datetime.fromtimestamp(item.mtime)
+            dt = datetime.fromtimestamp(item.display_time)
         except (OverflowError, OSError, ValueError):
             self._date_label_has_value = False
             self.date_revealer.set_reveal_child(False)
@@ -1443,7 +1404,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         # truncate aggressively, so we instead float the filename at the *top*
         # of the editor (with the same black-pill look as before).
         try:
-            dt = datetime.fromtimestamp(item.mtime)
+            dt = datetime.fromtimestamp(item.display_time)
             date_str = dt.strftime('%-d %B %Y')
         except (OverflowError, OSError, ValueError):
             date_str = ""
@@ -1736,6 +1697,11 @@ class ViewerWindow(Adw.ApplicationWindow):
 
         popover = Gtk.Popover()
         popover.set_parent(self.info_button)
+        # Same as the gallery's context menu: dismiss on an outside click, and
+        # unparent on close so repeated opens do not pile invisible popovers
+        # onto the info button.
+        popover.set_autohide(True)
+        popover.connect("closed", lambda pop: pop.unparent())
         popover.set_child(grid)
         popover.popup()
 

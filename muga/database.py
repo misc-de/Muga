@@ -17,6 +17,15 @@ LOGGER = logging.getLogger(__name__)
 _WRITE_RETRIES = 5
 
 
+_MIGRATION_V10 = """
+CREATE INDEX IF NOT EXISTS idx_media_cat_type_folder_taken_name
+    ON media(category, media_type, folder, COALESCE(taken_at, mtime) DESC, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_media_cat_type_taken_name
+    ON media(category, media_type, COALESCE(taken_at, mtime) DESC, name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_media_type_taken_name
+    ON media(media_type, COALESCE(taken_at, mtime) DESC, name COLLATE NOCASE);
+"""
+
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS media (
     id INTEGER PRIMARY KEY,
@@ -29,6 +38,10 @@ CREATE TABLE IF NOT EXISTS media (
     size INTEGER NOT NULL,
     thumb_path TEXT,
     seen_at REAL NOT NULL,
+    -- EXIF capture time, NULL when the file has none. Kept beside mtime
+    -- rather than replacing it: mtime always exists and still drives the
+    -- gallery's sort order, while date search prefers this when present.
+    taken_at REAL DEFAULT NULL,
     UNIQUE(path, category)
 );
 CREATE INDEX IF NOT EXISTS idx_media_category ON media(category);
@@ -45,6 +58,13 @@ CREATE INDEX IF NOT EXISTS idx_media_type_mtime_name
 -- whole result into a temp B-tree to GROUP BY path; on a 12k-row index that
 -- was the difference between 42 ms and 24 ms per Overview count.
 CREATE INDEX IF NOT EXISTS idx_media_type_path ON media(media_type, path);
+-- The capture-date indexes are deliberately NOT here. This script runs with
+-- CREATE TABLE IF NOT EXISTS against databases whose media table predates
+-- taken_at, and an index naming a column that does not exist yet raises
+-- "no such column" — which the constructor treats as an unusable database and
+-- answers by discarding the whole index. They live in _MIGRATION_V10, which
+-- runs after the column has been added and covers fresh databases too
+-- (a new file starts at user_version 0 and walks every step).
 """
 
 _MIGRATION_V1 = """
@@ -119,7 +139,9 @@ class Database:
     # big `exif_data` TEXT blob out of every list/search/lookup result set —
     # it's never used to build a MediaItem and only fetched on demand via
     # get_exif_data, so `SELECT *` was hauling it across the lock for nothing.
-    _ITEM_COLS = "id, path, category, media_type, folder, name, mtime, size, thumb_path"
+    _ITEM_COLS = (
+        "id, path, category, media_type, folder, name, mtime, size, thumb_path, taken_at"
+    )
 
     def __init__(self, path: Path = DB_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -417,6 +439,32 @@ class Database:
                 self.wconn.commit()
             except sqlite3.OperationalError as exc:
                 LOGGER.warning("Could not create the media_type/path index: %s", exc)
+        if version < 9:
+            # EXIF capture time. Existing rows get NULL and fall back to mtime
+            # in every query, so the column is useful from the moment it exists
+            # and fills in as the scanner re-reads files.
+            try:
+                self.wconn.execute("ALTER TABLE media ADD COLUMN taken_at REAL DEFAULT NULL")
+            except sqlite3.OperationalError as exc:
+                # Already there when the table was created from SCHEMA_V1 in
+                # this same run — a fresh database goes through _migrate too.
+                if "duplicate column" not in str(exc).lower():
+                    LOGGER.warning("Could not add the taken_at column: %s", exc)
+            try:
+                self.wconn.execute("PRAGMA user_version = 9")
+                self.wconn.commit()
+            except sqlite3.OperationalError as exc:
+                LOGGER.warning("Could not pin schema version 9: %s", exc)
+        if version < 10:
+            # Indexes for the capture-date sort. Expression indexes need
+            # SQLite 3.9; on anything older this fails and the sort still
+            # works, just by scanning — correctness never depends on them.
+            try:
+                self.wconn.executescript(_MIGRATION_V10)
+                self.wconn.execute("PRAGMA user_version = 10")
+                self.wconn.commit()
+            except sqlite3.OperationalError as exc:
+                LOGGER.warning("Could not create the capture-date indexes: %s", exc)
 
     def _repoint_legacy_thumb_paths(self) -> None:
         """Point thumb_path at the renamed cache directory.
@@ -457,18 +505,31 @@ class Database:
                 cur.rowcount, LEGACY_CACHE_DIR, CACHE_DIR,
             )
 
-    def load_scan_index(self, category: str) -> dict[str, tuple[float, int]]:
-        """Return ``{path: (mtime, size)}`` for every row in *category*.
+    def load_scan_index(self, category: str) -> dict[str, tuple[float, int, bool]]:
+        """Return ``{path: (mtime, size, exif_read)}`` for every row in *category*.
 
         The scanner uses this to skip files whose mtime+size are unchanged
         since the last sweep: an unchanged file needs neither a re-decode nor
         a row rewrite (the latter would also pointlessly fire the FTS update
-        trigger). Keyed by path because that's the scanner's per-file lookup."""
+        trigger). Keyed by path because that's the scanner's per-file lookup.
+
+        ``exif_read`` is what keeps an existing library from staying without
+        capture dates forever. Every file in it is "unchanged", so the skip
+        would never let the scanner near it and taken_at would only ever fill
+        in for photos added after the upgrade. A non-NULL ``exif_data`` means
+        the parse has already happened — including the ``{}`` written for a
+        file that turned out to have no EXIF, so a screenshot is not re-parsed
+        on every single scan.
+        """
         with self.lock:
             rows = self.conn.execute(
-                "SELECT path, mtime, size FROM media WHERE category = ?", (category,)
+                "SELECT path, mtime, size, exif_data FROM media WHERE category = ?",
+                (category,),
             ).fetchall()
-        return {row["path"]: (row["mtime"], row["size"]) for row in rows}
+        return {
+            row["path"]: (row["mtime"], row["size"], row["exif_data"] is not None)
+            for row in rows
+        }
 
     def touch_seen(self, paths: list[str], category: str) -> None:
         """Bump ``seen_at`` for *paths* without rewriting any indexed column.
@@ -488,14 +549,17 @@ class Database:
             )
 
     def upsert_media(self, *, path: Path, category: str, media_type: str, folder: str,
-                     thumb_path: str | None, stat: os.stat_result | None = None) -> None:
+                     thumb_path: str | None, stat: os.stat_result | None = None,
+                     taken_at: float | None = None,
+                     exif_json: str | None = None) -> None:
         if stat is None:
             stat = path.stat()
         with self.wlock:
             self.wconn.execute(
                 """
-                INSERT INTO media(path, category, media_type, folder, name, mtime, size, thumb_path, seen_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO media(path, category, media_type, folder, name, mtime, size,
+                                  thumb_path, seen_at, taken_at, exif_data)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(path, category) DO UPDATE SET
                     media_type=excluded.media_type,
                     folder=excluded.folder,
@@ -503,9 +567,15 @@ class Database:
                     mtime=excluded.mtime,
                     size=excluded.size,
                     thumb_path=COALESCE(excluded.thumb_path, media.thumb_path),
-                    seen_at=excluded.seen_at
+                    seen_at=excluded.seen_at,
+                    -- COALESCE both ways round: a caller that did not parse
+                    -- EXIF (the Nextcloud path, a re-index that skipped it)
+                    -- must not wipe what an earlier pass already found.
+                    taken_at=COALESCE(excluded.taken_at, media.taken_at),
+                    exif_data=COALESCE(excluded.exif_data, media.exif_data)
                 """,
-                (str(path), category, media_type, folder, path.name, stat.st_mtime, stat.st_size, thumb_path, time.time()),
+                (str(path), category, media_type, folder, path.name, stat.st_mtime,
+                 stat.st_size, thumb_path, time.time(), taken_at, exif_json),
             )
 
     def upsert_remote_media(self, *, path: str, category: str, media_type: str, folder: str,
@@ -699,12 +769,18 @@ class Database:
     def list_media(self, category: str, sort_mode: str = "newest", folder: str | None = None,
                    include_nc: bool = False, media_filter: str | None = None) -> list[MediaItem]:
         order = {
-            "newest":      "mtime DESC, name COLLATE NOCASE ASC",
-            "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
+            "newest":      f"{Database._SORT_DATE} DESC, name COLLATE NOCASE ASC",
+            "oldest":      f"{Database._SORT_DATE} ASC, name COLLATE NOCASE ASC",
+            # The file's own timestamp, for the "Date (file)" sort. Kept apart
+            # from newest/oldest rather than folded in: those answer "when is
+            # this photo from", this one answers "when did this file change",
+            # and for anything copied off a camera the two differ by years.
+            "file_newest": "mtime DESC, name COLLATE NOCASE ASC",
+            "file_oldest": "mtime ASC, name COLLATE NOCASE ASC",
             "name":        "name COLLATE NOCASE ASC",
             "name_desc":   "name COLLATE NOCASE DESC",
-            "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
-            "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
+            "folder":      f"folder COLLATE NOCASE ASC, {Database._SORT_DATE} DESC",
+            "folder_desc": f"folder COLLATE NOCASE DESC, {Database._SORT_DATE} DESC",
         }.get(sort_mode, "mtime DESC")
         where, args = self._build_list_where(category, folder, include_nc, media_filter)
         with self.lock:
@@ -720,6 +796,24 @@ class Database:
         with self.lock:
             result = self.conn.execute(f"SELECT COUNT(*) FROM media WHERE {where}", args).fetchone()
         return result[0] if result else 0
+
+    # What a date search matches against.
+    #
+    # taken_at first: "photos from 2019" means the year they were shot, not the
+    # year the file happened to be written. A photo pulled off a camera today
+    # has today's mtime, so before this the search answered with whatever the
+    # copy date was. mtime remains the fallback for everything with no EXIF
+    # date — videos, screenshots, downloads.
+    #
+    # 'localtime' because both are stored as real epoch seconds while the user
+    # thinks in wall-clock dates. Without it SQLite formats in UTC, and a photo
+    # taken at 00:30 on New Year's Day was found under the previous year.
+    # The date a row is filed under, mirroring MediaItem.display_time: the
+    # capture date when there is one, the file's mtime otherwise. Used for
+    # ordering as well as for the year/month extraction below, so the grid's
+    # sort and its month headers can never disagree.
+    _SORT_DATE = "COALESCE(taken_at, mtime)"
+    _DATE_EXPR = f"{_SORT_DATE}, 'unixepoch', 'localtime'"
 
     # Month-name → number lookup for search. Covers German + English, both
     # short and long forms. Lower-cased keys.
@@ -782,21 +876,21 @@ class Database:
         if ym:
             year, month = ym.group(1), int(ym.group(2))
             clauses.append(
-                "(strftime('%Y', mtime, 'unixepoch') = ? "
-                "AND CAST(strftime('%m', mtime, 'unixepoch') AS INTEGER) = ?)"
+                f"(strftime('%Y', {self._DATE_EXPR}) = ? "
+                f"AND CAST(strftime('%m', {self._DATE_EXPR}) AS INTEGER) = ?)"
             )
             args.extend([year, month])
         else:
             year = re.search(r"\b(\d{4})\b", q)
             if year:
-                clauses.append("strftime('%Y', mtime, 'unixepoch') = ?")
+                clauses.append(f"strftime('%Y', {self._DATE_EXPR}) = ?")
                 args.append(year.group(1))
         # Month name
         q_low = q.lower()
         for name, num in Database._MONTH_LOOKUP.items():
             if name in q_low:
                 clauses.append(
-                    "CAST(strftime('%m', mtime, 'unixepoch') AS INTEGER) = ?"
+                    f"CAST(strftime('%m', {self._DATE_EXPR}) AS INTEGER) = ?"
                 )
                 args.append(num)
                 break
@@ -829,12 +923,18 @@ class Database:
         year (4-digit), year-month (YYYY-MM / YYYY/MM / YYYY.MM) and locale
         month names (German + English)."""
         order = {
-            "newest":      "mtime DESC, name COLLATE NOCASE ASC",
-            "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
+            "newest":      f"{Database._SORT_DATE} DESC, name COLLATE NOCASE ASC",
+            "oldest":      f"{Database._SORT_DATE} ASC, name COLLATE NOCASE ASC",
+            # The file's own timestamp, for the "Date (file)" sort. Kept apart
+            # from newest/oldest rather than folded in: those answer "when is
+            # this photo from", this one answers "when did this file change",
+            # and for anything copied off a camera the two differ by years.
+            "file_newest": "mtime DESC, name COLLATE NOCASE ASC",
+            "file_oldest": "mtime ASC, name COLLATE NOCASE ASC",
             "name":        "name COLLATE NOCASE ASC",
             "name_desc":   "name COLLATE NOCASE DESC",
-            "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
-            "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
+            "folder":      f"folder COLLATE NOCASE ASC, {Database._SORT_DATE} DESC",
+            "folder_desc": f"folder COLLATE NOCASE DESC, {Database._SORT_DATE} DESC",
         }.get(sort_mode, "mtime DESC")
         base_where, args = self._build_list_where(category, folder, include_nc, media_filter)
         search_where, search_args = self._build_search_clause(query)
@@ -855,12 +955,18 @@ class Database:
     ) -> list[MediaItem]:
         """Return paginated media items with LIMIT and OFFSET."""
         order = {
-            "newest":      "mtime DESC, name COLLATE NOCASE ASC",
-            "oldest":      "mtime ASC, name COLLATE NOCASE ASC",
+            "newest":      f"{Database._SORT_DATE} DESC, name COLLATE NOCASE ASC",
+            "oldest":      f"{Database._SORT_DATE} ASC, name COLLATE NOCASE ASC",
+            # The file's own timestamp, for the "Date (file)" sort. Kept apart
+            # from newest/oldest rather than folded in: those answer "when is
+            # this photo from", this one answers "when did this file change",
+            # and for anything copied off a camera the two differ by years.
+            "file_newest": "mtime DESC, name COLLATE NOCASE ASC",
+            "file_oldest": "mtime ASC, name COLLATE NOCASE ASC",
             "name":        "name COLLATE NOCASE ASC",
             "name_desc":   "name COLLATE NOCASE DESC",
-            "folder":      "folder COLLATE NOCASE ASC, mtime DESC",
-            "folder_desc": "folder COLLATE NOCASE DESC, mtime DESC",
+            "folder":      f"folder COLLATE NOCASE ASC, {Database._SORT_DATE} DESC",
+            "folder_desc": f"folder COLLATE NOCASE DESC, {Database._SORT_DATE} DESC",
         }.get(sort_mode, "mtime DESC")
         where, args = self._build_list_where(category, folder, include_nc, media_filter)
         args.extend([limit, offset])
@@ -1030,4 +1136,5 @@ class Database:
             mtime=row["mtime"],
             size=row["size"],
             thumb_path=row["thumb_path"],
+            taken_at=row["taken_at"],
         )
