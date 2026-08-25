@@ -4,7 +4,7 @@
 #
 #   make flatpak-gpg-key                  # once: create the signing key
 #   make flatpak-build FP_GPG=... FP_GPGHOME=...
-#   scripts/build-arch.sh on the phone, copy its repo/ back
+#   scripts/build-arch.sh on the phone, copy its .repo/ back
 #   make flatpak-merge ARM_REPO=<path>
 #   make flatpak-publish FP_GPG=... FP_GPGHOME=...
 #   make flatpak-pages PUSH=1
@@ -52,10 +52,11 @@ flatpak-install:
 	$(FP_BUILDER) --force-clean --user --install $(FP_BUILDDIR) $(FP_MANIFEST)
 	@echo "Run it with: flatpak run $(APPID)"
 
-# Merges in a repo built on another architecture (ARM_REPO=<path>, the repo/
-# copied off the phone).
+# Merges in a repo built on another architecture (ARM_REPO=<path>, the .repo/
+# copied off the phone — build-arch.sh writes there, dot-prefixed, so it stays
+# out of the folder views on the device).
 flatpak-merge:
-	@test -n "$(ARM_REPO)" || { echo "Pass ARM_REPO=<path> (the repo/ copied off the phone)"; exit 1; }
+	@test -n "$(ARM_REPO)" || { echo "Pass ARM_REPO=<path> (the .repo/ copied off the phone)"; exit 1; }
 	ostree --repo=$(FP_REPO) pull-local $(ARM_REPO)
 	@echo "Merged. Now: make flatpak-publish"
 
