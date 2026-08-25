@@ -1571,13 +1571,15 @@ def test_gallery_window_places_the_auto_nav_per_display(
 
     monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
     monkeypatch.setattr(app_mod, "display_is_desktop", lambda: desktop)
-    with patch.object(app_mod.GalleryWindow, "refresh"):
+    with patch.object(app_mod.GalleryWindow, "refresh"), \
+            patch.object(app_mod.GalleryWindow, "_start_watching"):
         win = app_mod.GalleryWindow(gtk_app)
     try:
         assert win.settings.nav_position == "auto", "test needs an unset config"
         assert win._nav_position == expected
     finally:
         win._closing = True
+        win._stop_watching()
         win.destroy()
 
 

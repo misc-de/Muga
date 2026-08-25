@@ -169,6 +169,140 @@ class MediaScanner:
         )
         return changed_rows > 0 or pruned > 0
 
+    # ------------------------------------------------------------------
+    # Single-file indexing
+    # ------------------------------------------------------------------
+
+    def categories_for(
+        self, path: Path, categories: list[tuple[str, str, str]],
+        excluded_subtrees: list[str] | None = None,
+    ) -> list[tuple[str, str]]:
+        """``(category, folder)`` for every local category that claims *path*.
+
+        Mirrors the decisions ``scan`` makes while walking, so a file indexed
+        one at a time lands exactly where the same file would land in a full
+        sweep: a root only claims what lives under it, hidden directories are
+        never descended into, and a subtree flagged "do not inherit" belongs to
+        its own category alone. Overlapping roots claim the same file twice on
+        purpose — that is what the full scan does, and the Overview's dedup is
+        what collapses it back to one tile.
+        """
+        excluded = [Path(p).expanduser() for p in (excluded_subtrees or [])]
+        out: list[tuple[str, str]] = []
+        for category, _label, root_text in categories:
+            if category in ("nextcloud", "pictures") or not root_text:
+                continue
+            root = Path(root_text).expanduser()
+            if root.is_symlink():
+                continue
+            try:
+                rel = path.parent.relative_to(root)
+            except ValueError:
+                continue
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            if self._in_skipped_subtree(path, root, excluded):
+                continue
+            out.append((category, self._relative_folder(root, path.parent)))
+        return out
+
+    @staticmethod
+    def _in_skipped_subtree(path: Path, root: Path, excluded: list[Path]) -> bool:
+        """True when *path* sits in a no-inherit subtree *strictly* inside
+        *root* — the same carve-out ``scan`` builds its skip_prefixes from. An
+        excluded location that *is* the root is not a carve-out: it is that
+        category, and refusing it there would leave the file unindexed."""
+        for ex in excluded:
+            if ex == root:
+                continue
+            try:
+                if not ex.is_relative_to(root):
+                    continue
+            except ValueError:
+                continue
+            if path == ex or ex in path.parents:
+                return True
+        return False
+
+    def index_file(
+        self, path: Path, categories: list[tuple[str, str, str]],
+        excluded_subtrees: list[str] | None = None,
+    ) -> bool:
+        """Fold one file that just appeared or changed into the index.
+
+        The cheap counterpart to ``scan`` for the case where the caller already
+        knows which file moved: a capture from the built-in camera, or a path
+        the filesystem watcher just reported. Returns True when a row was
+        written, so the caller knows whether the gallery needs re-rendering.
+        """
+        media_type = media_type_for(path)
+        if media_type is None:
+            return False
+        try:
+            if path.is_symlink() or not path.is_file():
+                return False
+            st = path.stat()
+        except OSError:
+            LOGGER.debug("Cannot stat %s", path, exc_info=True)
+            return False
+        targets = self.categories_for(path, categories, excluded_subtrees)
+        if not targets:
+            return False
+
+        # Same skip the full sweep applies: a row that already matches the file
+        # on disk, with its thumbnail still there, is nothing to write. It also
+        # keeps the callers from re-rendering for nothing — the watcher reports
+        # a capture the camera callback has already indexed, and events fire on
+        # files that were only touched.
+        missing = False
+        stale = False
+        for category, _folder in targets:
+            prev = self.database.get_media_by_path(str(path), category)
+            if prev is None:
+                missing = True
+            elif abs(prev.mtime - st.st_mtime) > _MTIME_EPS or prev.size != st.st_size:
+                stale = True
+        thumb_file = self.thumbnailer.thumb_path_for(path)
+        if not missing and not stale and thumb_file.exists():
+            return False
+        # An edit in place leaves the path-keyed thumbnail showing the old
+        # pixels. ensure_thumbnail self-invalidates when the source is newer,
+        # but only in that one direction, so going by the index catches a file
+        # restored from a backup too, whose mtime goes *backwards*.
+        if stale:
+            try:
+                thumb_file.unlink()
+            except OSError:
+                LOGGER.debug("stale thumbnail unlink failed", exc_info=True)
+
+        thumb = self.thumbnailer.ensure_thumbnail(path, media_type)
+        info = self._read_exif(path, media_type)
+        exif_json = (
+            json.dumps(info.fields, ensure_ascii=False)
+            if media_type == "image" else None
+        )
+        for category, folder in targets:
+            self.database.upsert_media(
+                path=path, category=category, media_type=media_type,
+                folder=folder, thumb_path=thumb, stat=st,
+                taken_at=info.taken_at, exif_json=exif_json,
+            )
+        # Committed right away: unlike a sweep there is no end-of-scan commit
+        # coming, and the caller re-renders from the read connections the
+        # moment this returns.
+        self.database.commit()
+        LOGGER.info("Indexed new file %s under %s", path,
+                    ", ".join(c for c, _f in targets))
+        return True
+
+    def forget_file(self, path: Path) -> bool:
+        """Drop a file that vanished from disk. True when a row went away."""
+        if self.database.get_media_by_path(str(path)) is None:
+            return False
+        self.database.delete_path(str(path))
+        LOGGER.info("Dropped vanished file %s from the index", path)
+        return True
+
     def _scan_nextcloud(self, client, photos_path: str, thumbnail_only: bool = True) -> None:
         from .nextcloud import nc_path
         LOGGER.info("Scanning Nextcloud folder %r", photos_path)
