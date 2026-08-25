@@ -692,7 +692,8 @@ class Database:
         self._run_write(self.wconn.commit)
 
     @staticmethod
-    def _one_row_per_file(where: str, args: list) -> tuple[str, list]:
+    def _one_row_per_file(where: str, args: list, *,
+                          merge_remote: bool = False) -> tuple[str, list]:
         """Narrow *where* to a single row per file.
 
         The same photo legitimately sits in the index more than once: `media` is
@@ -712,9 +713,61 @@ class Database:
         The where clause is repeated inside the subquery rather than deduping
         over the whole table: a file that only collides *outside* the current
         filter must not lose its row here.
+
+        *merge_remote* widens the key from the path to (name, size), for the
+        views that pull in Nextcloud.
+
+        Two things produce repeats there, and neither is a duplicate *path*:
+        a photo that exists both on this device and on the server, and — far
+        more often in practice — the same photo filed into several folders on
+        the server itself. On the phone this was measured at 277 repeats in a
+        12k-picture library, almost all of them the second kind: one shot
+        sitting in Familie/2023/Grillen, in Familie/2023, and in
+        Public/20230506. Three rows, three paths, one picture.
+
+        Name plus byte size identifies them: a copy is the same bytes under the
+        same name, while an edited version has a different size and stays
+        visible as the separate file it is. Only the aggregate views pass this;
+        a category's own tab, Nextcloud's included, still shows exactly what is
+        in it — that tab's job is to mirror the server, folders and all.
+
+        Ties resolve to the local copy: it opens without the network and
+        without a download. Among server copies the lowest id wins, which is
+        arbitrary but stable, so a picture does not move between folders from
+        one render to the next.
+
+        This costs: on that 12k library the first page went from 18 ms to
+        60 ms, because the window function has to see every matching row before
+        the LIMIT applies. Only libraries with Nextcloud merged into the
+        Overview pay it.
         """
+        if not merge_remote:
+            return (
+                f"({where}) AND id IN "
+                f"(SELECT MIN(id) FROM media WHERE ({where}) GROUP BY path)",
+                args + args,
+            )
+        # ROW_NUMBER needs SQLite 3.25 (2018); every target ships far newer.
+        # ORDER BY (category = 'nextcloud') puts local rows first — false
+        # sorts before true — and id breaks any remaining tie stably, so a
+        # photo does not drift between folders from one render to the next.
+        #
+        # A correlated NOT EXISTS against the local rows measured nearly twice
+        # as fast here (19 ms vs 33 ms on 25k local + 8k remote), but it can
+        # only ask "is there a local file with this name and size" against the
+        # whole table, not against the rows this query is filtered to. Inside a
+        # folder that hides the remote copy of a picture whose local twin lives
+        # in a folder the user is not looking at — the photo disappears
+        # entirely rather than appearing twice. The window function keeps the
+        # filter, which is the same reason the where clause is repeated above.
+        # An index on (lower(name), size) does not help either way: the ORDER
+        # BY still needs its temp B-tree, and it measured slightly slower.
         return (
-            f"({where}) AND id IN (SELECT MIN(id) FROM media WHERE ({where}) GROUP BY path)",
+            f"({where}) AND id IN (SELECT id FROM ("
+            f"SELECT id, ROW_NUMBER() OVER ("
+            f"PARTITION BY lower(name), size "
+            f"ORDER BY (category = 'nextcloud'), id) AS rn "
+            f"FROM media WHERE ({where})) WHERE rn = 1)",
             args + args,
         )
 
@@ -750,7 +803,7 @@ class Database:
                 base_pic = (
                     f"({base_pic}) OR (category = 'nextcloud' AND media_type = 'image')"
                 )
-            return Database._one_row_per_file(base_pic, args_pic)
+            return Database._one_row_per_file(base_pic, args_pic, merge_remote=include_nc)
         args: list = [category]
         if media_filter == "videos":
             local = "category = ? AND media_type = 'video'"
