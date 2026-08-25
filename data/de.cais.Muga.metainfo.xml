@@ -69,6 +69,16 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.5" date="2026-08-25">
+      <description>
+        <p>The camera's flash button shows a bolt again on phones without a
+        desktop icon theme, where it had been drawn as a filled square.</p>
+        <p>The hint that a sideways swipe switches between photo and video now
+        appears next to the shutter, which is where that swipe has to happen.
+        It used to sit at the bottom of the screen, over the preview, where
+        swiping does nothing.</p>
+      </description>
+    </release>
     <release version="0.5.4" date="2026-08-25">
       <description>
         <p>A photo taken or copied into a watched folder now shows up in the
