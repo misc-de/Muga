@@ -69,6 +69,14 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.13" date="2026-08-25">
+      <description>
+        <p>Jumping to a month that is already on screen is immediate again. It
+        took about three seconds, because the gallery rebuilt itself even when
+        the month it was going to was sitting just below. Only a month that has
+        not been loaded yet still needs that.</p>
+      </description>
+    </release>
     <release version="0.5.12" date="2026-08-25">
       <description>
         <p>The month arrows in the date view now open the gallery at the month
