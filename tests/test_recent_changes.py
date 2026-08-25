@@ -1954,6 +1954,9 @@ def _jump_window(target, sort_mode="date", **extra):
         _should_merge_nc=lambda: False,
         _cancel_nc_thumb_queue=MagicMock(),
         _render=MagicMock(),
+        gallery_grid=SimpleNamespace(
+            scroll_to_loaded_month=MagicMock(return_value=False),
+        ),
     )
     win._DATE_MODES = GalleryRenderMixin._DATE_MODES
     win._date_mode = lambda m: GalleryRenderMixin._date_mode(win, m)
@@ -1974,6 +1977,51 @@ def test_a_jump_rebuilds_the_window_from_the_offset_it_is_given() -> None:
     kwargs = win.database.month_jump_target.call_args.kwargs
     assert (kwargs["year"], kwargs["month"], kwargs["direction"]) == (2026, 3, +1)
     win._render.assert_called_once_with(reset_scroll=True, start_offset=3400)
+
+
+def test_a_jump_to_a_month_already_loaded_is_a_scroll() -> None:
+    """The database still says which month and where it starts; when that
+    month is among the loaded rows, the offset is not needed — scrolling to it
+    saves the whole rebuild."""
+    from muga.gallery_render import GalleryRenderMixin
+
+    grid = SimpleNamespace(scroll_to_loaded_month=MagicMock(return_value=True))
+    win = _jump_window((3400, 2025, 11), gallery_grid=grid)
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+
+    grid.scroll_to_loaded_month.assert_called_once_with(2025, 11)
+    win._render.assert_not_called()
+
+
+def test_a_jump_to_a_month_not_loaded_rebuilds() -> None:
+    from muga.gallery_render import GalleryRenderMixin
+
+    grid = SimpleNamespace(scroll_to_loaded_month=MagicMock(return_value=False))
+    win = _jump_window((3400, 2025, 11), gallery_grid=grid)
+    GalleryRenderMixin.jump_to_month(win, 2026, 3, +1)
+
+    win._render.assert_called_once_with(reset_scroll=True, start_offset=3400)
+
+
+def test_the_grid_says_no_when_the_month_is_not_loaded() -> None:
+    from muga.gallery_grid import GalleryGrid
+
+    rows = [_header_row(2026, 3), _header_row(2026, 2)]
+    grid = SimpleNamespace(row_store=_jump_store(rows))
+    grid._find_month_header = (
+        lambda y, m: GalleryGrid._find_month_header(grid, y, m)
+    )
+    assert GalleryGrid.scroll_to_loaded_month(grid, 2025, 7) is False
+
+
+def test_the_grid_finds_the_month_it_is_asked_for() -> None:
+    from muga.gallery_grid import GalleryGrid, GalleryRow
+
+    rows = [_header_row(2026, 3), GalleryRow.from_tiles([]), _header_row(2026, 2)]
+    grid = SimpleNamespace(row_store=_jump_store(rows))
+    assert GalleryGrid._find_month_header(grid, 2026, 2) == 2
+    assert GalleryGrid._find_month_header(grid, 2026, 3) == 0
+    assert GalleryGrid._find_month_header(grid, 2026, 1) is None
 
 
 def test_a_jump_past_the_last_month_does_nothing() -> None:

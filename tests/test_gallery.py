@@ -810,6 +810,36 @@ def test_a_jump_out_of_a_long_month_opens_at_the_next_one(seeded_window, pump) -
 
 
 @requires_display
+def test_a_jump_to_a_loaded_month_does_not_rebuild_anything(seeded_window, pump) -> None:
+    """Months small enough to sit in the same page as their neighbours: the
+    one below is already on hand, so the jump is a scroll and nothing is
+    thrown away. Rebuilding the window costs a full clear and rebuild —
+    measured at ~190 ms here and several times that on a phone — which is a
+    long wait for a month that is visible just below the fold."""
+    _seed_months(seeded_window, [(m, 40) for m in range(12)])
+    seeded_window.settings.sort_modes = {"photos": "date"}
+    seeded_window._render()
+    vadj = _realised(seeded_window, pump)
+
+    store = seeded_window.gallery_grid.row_store
+    rows_before = store.get_n_items()
+    headers = [i for i in range(rows_before) if store.get_item(i).is_header]
+    assert len(headers) >= 3, "the page holds only one month — wrong fixture"
+    source = store.get_item(headers[0])
+    expected = store.get_item(headers[1])
+
+    seeded_window.jump_to_month(source.header_year, source.header_month, +1)
+    _settle(pump)
+
+    assert store.get_n_items() == rows_before, "the grid was rebuilt"
+    assert seeded_window._window_start_offset == 0, "it reloaded from an offset"
+    assert vadj.get_value() == pytest.approx(
+        seeded_window.gallery_grid._estimate_content_y(headers[1]), abs=2,
+    ), "the month it jumped to is not at the top"
+    assert expected.header_month != source.header_month
+
+
+@requires_display
 def test_jumping_back_up_returns_to_the_month_it_came_from(seeded_window, pump) -> None:
     _seed_months(seeded_window, [(0, 40), (1, 2400), (2, 60)])
     seeded_window.settings.sort_modes = {"photos": "date"}
