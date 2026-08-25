@@ -68,9 +68,12 @@ class GalleryStyleGestureMixin:
     if TYPE_CHECKING:
         # Provided by GalleryWindow; no runtime definition, so these can never
         # shadow the real methods.
-        def refresh(self, scan: bool = False, scope: str | None = None) -> None: ...
+        def refresh(self, scan: bool = False, scope: str | None = None,
+                    reset_scroll: bool = False) -> None: ...
         def _rebuild_categories(self) -> None: ...
         def _go_back_folder(self) -> None: ...
+        def _cancel_nc_thumb_queue(self) -> None: ...
+        def _reset_category_view(self) -> None: ...
 
     def _on_system_theme_changed(self, _mgr, _param) -> None:
         self._rebuild_categories()
@@ -118,14 +121,28 @@ class GalleryStyleGestureMixin:
             scale = 1_000_000 / elapsed_us
             self._on_nav_swipe(None, ox * scale, oy * scale)
             return
-        # Tap: synthesise the click on the button that was under the press
-        # point. set_active(True) emits "toggled" → _on_category_toggled,
-        # exactly the path a normal click would have followed.
-        if press_button is not None and not press_button.get_active():
-            try:
-                press_button.set_active(True)
-            except Exception:
-                LOGGER.debug("press_button.set_active failed", exc_info=True)
+        # Tap. The button never saw the click — drag-begin claimed the
+        # sequence out from under it — so every outcome has to be driven
+        # from here.
+        if press_button is None:
+            return
+        if press_button.get_active():
+            # A tap on the section you are already in. There is nothing for
+            # the button to report: it is lit, and set_active(True) on an
+            # already-active ToggleButton emits no "toggled" at all. So the
+            # branch in _on_category_toggled that handles this never ran on
+            # a device, however well it tested — the tap was swallowed whole
+            # here, one layer above it. Reported twice as "tapping the tab
+            # I'm on does nothing", and both times fixed in the handler.
+            self._cancel_nc_thumb_queue()
+            self._reset_category_view()
+            return
+        # Otherwise synthesise the click: set_active(True) emits "toggled" →
+        # _on_category_toggled, exactly the path a real click would take.
+        try:
+            press_button.set_active(True)
+        except Exception:
+            LOGGER.debug("press_button.set_active failed", exc_info=True)
 
     def _find_nav_button_at(self, x: float, y: float) -> "Gtk.ToggleButton | None":
         """Walk nav_box children and return the ToggleButton whose

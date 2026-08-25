@@ -20,6 +20,8 @@ import pytest
 
 import muga.app as app_mod
 
+from gi.repository import GLib, Gtk  # noqa: E402
+
 GalleryWindow = app_mod.GalleryWindow
 
 
@@ -151,6 +153,98 @@ def test_switching_to_another_tab_still_renders() -> None:
     assert win.category == "photos"
     assert win.current_folder is None
     win._render.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# The tap never reaches the button
+# ---------------------------------------------------------------------------
+#
+# The nav bar's drag gesture claims the event sequence in drag-begin, before
+# the ToggleButton's own click sees it — that is what makes swiping over the
+# icons work at all. The price is that _on_nav_drag_end owns every outcome,
+# taps included, and a ToggleButton that is already active has nothing to
+# report: set_active(True) on it emits no "toggled". So the re-tap branch in
+# _on_category_toggled, and every test above it, described a path a finger
+# could not take. The tap was swallowed one layer up.
+#
+# These tests are at that layer. They are the ones that would have failed
+# while the handler-level tests all passed.
+
+def _drag_window(*, on_the_active_tab: bool,
+                 orientation=Gtk.Orientation.HORIZONTAL):
+    button = MagicMock()
+    button.get_active.return_value = on_the_active_tab
+    win = SimpleNamespace(
+        nav_box=SimpleNamespace(get_orientation=lambda: orientation),
+        _NAV_SWIPE_TAP_PX=GalleryWindow._NAV_SWIPE_TAP_PX,
+        _nav_drag_start_us=GLib.get_monotonic_time(),
+        _nav_press_button=button,
+        _on_nav_swipe=MagicMock(),
+        _cancel_nc_thumb_queue=MagicMock(),
+        _reset_category_view=MagicMock(),
+    )
+    return win, button
+
+
+def test_a_tap_on_the_tab_you_are_on_reaches_the_reload() -> None:
+    """The reported behaviour, third time around: scroll down, tap the
+    section you are in, nothing moves. Both earlier fixes went into
+    _on_category_toggled, which this tap never gets to."""
+    win, button = _drag_window(on_the_active_tab=True)
+    GalleryWindow._on_nav_drag_end(win, None, 2.0, 1.0)
+    win._reset_category_view.assert_called_once()
+    button.set_active.assert_not_called()
+
+
+def test_the_reload_stops_pending_nextcloud_thumbnails_first() -> None:
+    """Same order the toggled path uses: the view being torn down must not
+    keep pulling thumbnails for rows that are about to be rebuilt."""
+    win, _button = _drag_window(on_the_active_tab=True)
+    GalleryWindow._on_nav_drag_end(win, None, 2.0, 1.0)
+    win._cancel_nc_thumb_queue.assert_called_once()
+
+
+def test_a_tap_on_another_tab_still_switches_to_it() -> None:
+    """The synthesised click: set_active(True) emits "toggled" and the
+    handler takes it from there."""
+    win, button = _drag_window(on_the_active_tab=False)
+    GalleryWindow._on_nav_drag_end(win, None, 2.0, 1.0)
+    button.set_active.assert_called_once_with(True)
+    win._reset_category_view.assert_not_called()
+
+
+def test_a_swipe_across_the_bar_is_still_a_swipe() -> None:
+    """Past the tap threshold on the primary axis it is a category swipe,
+    and must not reload anything."""
+    win, button = _drag_window(on_the_active_tab=True)
+    GalleryWindow._on_nav_drag_end(win, None, 220.0, 4.0)
+    win._on_nav_swipe.assert_called_once()
+    win._reset_category_view.assert_not_called()
+    button.set_active.assert_not_called()
+
+
+def test_a_press_that_landed_on_no_button_does_nothing() -> None:
+    win = SimpleNamespace(
+        nav_box=SimpleNamespace(get_orientation=lambda: Gtk.Orientation.HORIZONTAL),
+        _NAV_SWIPE_TAP_PX=GalleryWindow._NAV_SWIPE_TAP_PX,
+        _nav_drag_start_us=GLib.get_monotonic_time(),
+        _nav_press_button=None,
+        _on_nav_swipe=MagicMock(),
+        _cancel_nc_thumb_queue=MagicMock(),
+        _reset_category_view=MagicMock(),
+    )
+    GalleryWindow._on_nav_drag_end(win, None, 2.0, 1.0)
+    win._reset_category_view.assert_not_called()
+    win._on_nav_swipe.assert_not_called()
+
+
+def test_the_remembered_button_is_released_either_way() -> None:
+    """GTK recycles the gesture object between sequences, so a button left
+    in _nav_press_button would be tapped again by the next drag."""
+    for on_tab in (True, False):
+        win, _button = _drag_window(on_the_active_tab=on_tab)
+        GalleryWindow._on_nav_drag_end(win, None, 2.0, 1.0)
+        assert win._nav_press_button is None
 
 
 # ---------------------------------------------------------------------------
