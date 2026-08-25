@@ -58,8 +58,23 @@ _SHUTTER_LANDSCAPE_INSET = 70  # shutter edge inset in landscape — per user
                                # Also used as the portrait-NEUTRAL bottom
                                # inset (single source of truth).
 _RECORD_DOT_INSET = 16       # record-dot inset from image rect
-_SWIPE_HINT_INSET = 20       # swipe-hint inset from edge
+_SHUTTER_SIZE = 76           # shutter diameter (CSS ring is drawn to fit)
+_SWIPE_HINT_INSET = 20       # min. swipe-hint inset from the screen edge
+_SWIPE_HINT_GAP = 14         # gap between shutter rim and swipe hint
+_SWIPE_HINT_THICKNESS = 36   # fallback hint extent across its text, used
+_SWIPE_HINT_LENGTH = 150     # fallback extent along it — both only apply
+                             # when measure() can't answer yet (no window).
 _ICON_PIXEL_SIZE = 26
+
+# Which widget edge the user perceives as "down" per device orientation.
+# The compositor keeps the surface in portrait and rotates the buffer, so
+# in landscape the user's vertical axis runs along the widget's x axis.
+_USER_DOWN_EDGE = {
+    ORIENT_NORMAL: "bottom",
+    ORIENT_BOTTOM_UP: "top",
+    ORIENT_LEFT_UP: "end",
+    ORIENT_RIGHT_UP: "start",
+}
 
 # --- Halium / gst-droid quirks ------------------------------------
 # Numbers carved out of the previously-scattered magic constants in
@@ -428,7 +443,10 @@ class CameraWindow(
         # soon as the layout runs for the actual orientation.
         self._swipe_hint.set_halign(Gtk.Align.CENTER)
         self._swipe_hint.set_valign(Gtk.Align.END)
-        self._swipe_hint.set_visible(False)
+        # Hidden by opacity, not by visibility: _position_swipe_hint
+        # measures the pill to stack it against the shutter, and GTK
+        # measures an invisible widget as 0x0. can-target is off, so an
+        # always-visible-but-transparent pill still swallows no input.
         self._swipe_hint.set_can_target(False)
         self._swipe_hint.set_opacity(0.0)
         overlay.add_overlay(self._swipe_hint)
@@ -620,7 +638,7 @@ class CameraWindow(
         self._shutter = Gtk.Box()
         self._shutter.add_css_class("shutter-button")
         self._shutter.set_halign(primary_align)
-        self._shutter.set_size_request(76, 76)
+        self._shutter.set_size_request(_SHUTTER_SIZE, _SHUTTER_SIZE)
         self._shutter_icon = _RotatableIcon()
         self._shutter_icon.set_from_icon_name("camera-photo-symbolic")
         self._shutter_icon.set_halign(Gtk.Align.CENTER)
@@ -1578,10 +1596,6 @@ class CameraWindow(
             self._position_record_dot()
         except Exception:
             LOGGER.debug("record-dot reposition failed", exc_info=True)
-        try:
-            self._position_swipe_hint()
-        except Exception:
-            LOGGER.debug("swipe-hint reposition failed", exc_info=True)
 
         neutral = (self._handedness == "neutral")
         right = (self._handedness == "right")
@@ -1630,6 +1644,14 @@ class CameraWindow(
             self._layout_landscape(is_right_up=False, **kw)
         elif orientation == ORIENT_RIGHT_UP:
             self._layout_landscape(is_right_up=True, **kw)
+
+        # Last: the swipe hint is stacked against the shutter, so it can
+        # only be placed once the shutter has its placement for this
+        # orientation.
+        try:
+            self._position_swipe_hint()
+        except Exception:
+            LOGGER.debug("swipe-hint reposition failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # Layout helpers
@@ -2466,6 +2488,13 @@ class CameraWindow(
         self._swipe_hint_direction = 1
         self._swipe_hint.set_visible(True)
         self._swipe_hint.set_opacity(0.0)
+        # Re-run the placement now that the window is mapped: only then
+        # does measure() return the pill's real extents, so the initial
+        # (pre-map) placement may have used the fallback constants.
+        try:
+            self._position_swipe_hint()
+        except Exception:
+            LOGGER.debug("swipe-hint reposition failed", exc_info=True)
         self._swipe_hint_pulse_id = GLib.timeout_add(40, self._swipe_hint_tick)
 
     def _swipe_hint_tick(self) -> bool:
@@ -2480,7 +2509,9 @@ class CameraWindow(
             self._swipe_hint_direction = 1
             self._swipe_hint_cycles_left -= 1
             if self._swipe_hint_cycles_left <= 0:
-                self._swipe_hint.set_visible(False)
+                # Stays visible-but-transparent (see the ctor) so it
+                # remains measurable for later repositions.
+                self._swipe_hint.set_opacity(0.0)
                 self._swipe_hint_pulse_id = None
                 return False
         self._swipe_hint.set_opacity(self._swipe_hint_phase)
@@ -2591,38 +2622,145 @@ class CameraWindow(
             self._record_dot.set_margin_end(lb_right + inset)
             self._record_dot.set_margin_bottom(lb_bottom + inset)
 
+    @staticmethod
+    def _stack_along(
+        *,
+        align: Gtk.Align,
+        m_pos: int,
+        m_neg: int,
+        other_extent: int,
+        extent: int,
+        offset: float,
+        pos_align: Gtk.Align,
+        inset: int,
+    ) -> tuple[Gtk.Align, int, int]:
+        """Place a widget of size `extent` on one axis so its centre sits
+        `offset` px toward the positive edge from the centre of an anchor
+        widget of size `other_extent` placed as (align, m_pos, m_neg).
+
+        `pos_align` says which Gtk.Align means "positive edge" on this
+        axis (END for bottom/right, START for top/left), so the caller
+        can point the positive direction wherever the user's "down" is.
+        Returns (align, margin_pos, margin_neg) for the placed widget.
+        """
+        neg_align = (
+            Gtk.Align.START if pos_align == Gtk.Align.END else Gtk.Align.END
+        )
+        half = (other_extent - extent) / 2
+        if align == pos_align:
+            return pos_align, max(inset, int(round(m_pos + half - offset))), 0
+        if align == neg_align:
+            return neg_align, 0, max(inset, int(round(m_neg + half + offset)))
+        # Anchor is centred: a centred widget's own centre is displaced
+        # toward the positive edge by (m_neg - m_pos) / 2, so the same
+        # relation run backwards turns the wanted displacement into a
+        # single margin.
+        centre = (m_neg - m_pos) / 2 + offset
+        if centre >= 0:
+            return Gtk.Align.CENTER, 0, int(round(2 * centre))
+        return Gtk.Align.CENTER, int(round(-2 * centre)), 0
+
+    def _hint_extent(self, orientation: Gtk.Orientation, fallback: int) -> int:
+        """Natural size of the swipe pill on one widget axis. Falls back
+        to a constant while there is nothing to measure against (before
+        the window is up)."""
+        try:
+            nat = self._swipe_hint.measure(orientation, -1)[1]
+        except Exception:
+            return fallback
+        return int(nat) if nat and nat > 0 else fallback
+
     def _position_swipe_hint(self) -> None:
-        """Place the swipe hint at the user's bottom-centre. In portrait
-        that's below the shutter (which lives in the lower third);
-        in landscape the same user-bottom-centre lands between the
-        shutter (at the corner) and the image rect on the inward side.
+        """Park the swipe hint directly below the shutter — or directly
+        above it when the shutter sits too close to the user's bottom
+        edge for the pill to fit underneath.
+
+        The photo <-> video swipe is a gesture on the SHUTTER, not on the
+        preview, so a hint pinned to the screen's bottom centre pointed
+        at the wrong target: users swiped over the image, where nothing
+        listens. Everything here is derived from the shutter's own
+        applied placement (align + margins, already set for this
+        orientation by _apply_layout_for), so the pill tracks the shutter
+        through every orientation/handedness combination without
+        restating the layout rules.
         """
         hint = self._swipe_hint
+        shutter = self._shutter
+        # Clear first: GTK folds a widget's margins into its measured
+        # size, so measuring before the reset would add the previous
+        # orientation's margins to the pill's extents and make it drift
+        # further out on every reposition.
         hint.set_margin_top(0); hint.set_margin_bottom(0)
         hint.set_margin_start(0); hint.set_margin_end(0)
-        orient = self._device_orientation
-        # (halign, valign, margin-edge) per orientation. The
-        # margin-edge name picks which margin we set to push the hint
-        # ~20 px inward from the screen edge.
-        mapping = {
-            ORIENT_NORMAL:    (Gtk.Align.CENTER, Gtk.Align.END,   "bottom"),
-            ORIENT_BOTTOM_UP: (Gtk.Align.CENTER, Gtk.Align.START, "top"),
-            ORIENT_LEFT_UP:   (Gtk.Align.END,    Gtk.Align.CENTER, "end"),
-            ORIENT_RIGHT_UP:  (Gtk.Align.START,  Gtk.Align.CENTER, "start"),
-        }
-        halign, valign, edge = mapping.get(
-            orient, (Gtk.Align.CENTER, Gtk.Align.END, "bottom")
+        down = _USER_DOWN_EDGE.get(self._device_orientation, "bottom")
+        # In portrait the user's vertical axis is the widget's y axis; in
+        # landscape it is the widget's x axis (the compositor rotates the
+        # buffer, not the surface).
+        vertical = down in ("bottom", "top")
+        if vertical:
+            main_pos = Gtk.Align.END if down == "bottom" else Gtk.Align.START
+            main_align = shutter.get_valign()
+            m_pos, m_neg = shutter.get_margin_bottom(), shutter.get_margin_top()
+            if down == "top":
+                m_pos, m_neg = m_neg, m_pos
+            cross_align = shutter.get_halign()
+            c_pos, c_neg = shutter.get_margin_end(), shutter.get_margin_start()
+            main_axis, cross_axis = (
+                Gtk.Orientation.VERTICAL, Gtk.Orientation.HORIZONTAL,
+            )
+        else:
+            main_pos = Gtk.Align.END if down == "end" else Gtk.Align.START
+            main_align = shutter.get_halign()
+            m_pos, m_neg = shutter.get_margin_end(), shutter.get_margin_start()
+            if down == "start":
+                m_pos, m_neg = m_neg, m_pos
+            cross_align = shutter.get_valign()
+            c_pos, c_neg = shutter.get_margin_bottom(), shutter.get_margin_top()
+            main_axis, cross_axis = (
+                Gtk.Orientation.HORIZONTAL, Gtk.Orientation.VERTICAL,
+            )
+
+        thickness = self._hint_extent(main_axis, _SWIPE_HINT_THICKNESS)
+        length = self._hint_extent(cross_axis, _SWIPE_HINT_LENGTH)
+        # Centre-to-centre distance for a pill sitting rim-to-rim with
+        # the shutter, plus the gap.
+        step = (_SHUTTER_SIZE + thickness) / 2 + _SWIPE_HINT_GAP
+        # Below by default. Only the "shutter pinned to the user's bottom
+        # edge" case can run out of room down there; when it does, put
+        # the pill above the shutter instead of letting it slide under
+        # the shutter or off-screen.
+        below = True
+        if main_align == main_pos:
+            below = m_pos - _SWIPE_HINT_GAP - thickness >= _SWIPE_HINT_INSET
+        main_a, mp, mn = self._stack_along(
+            align=main_align, m_pos=m_pos, m_neg=m_neg,
+            other_extent=_SHUTTER_SIZE, extent=thickness,
+            offset=step if below else -step,
+            pos_align=main_pos, inset=_SWIPE_HINT_INSET,
         )
-        hint.set_halign(halign)
-        hint.set_valign(valign)
-        if edge == "bottom":
-            hint.set_margin_bottom(20)
-        elif edge == "top":
-            hint.set_margin_top(20)
-        elif edge == "end":
-            hint.set_margin_end(20)
-        elif edge == "start":
-            hint.set_margin_start(20)
+        # Across the axis the pill is simply centred on the shutter.
+        cross_a, cp, cn = self._stack_along(
+            align=cross_align, m_pos=c_pos, m_neg=c_neg,
+            other_extent=_SHUTTER_SIZE, extent=length, offset=0.0,
+            pos_align=Gtk.Align.END, inset=_SWIPE_HINT_INSET,
+        )
+
+        if vertical:
+            hint.set_valign(main_a)
+            hint.set_halign(cross_a)
+            if down == "bottom":
+                hint.set_margin_bottom(mp); hint.set_margin_top(mn)
+            else:
+                hint.set_margin_top(mp); hint.set_margin_bottom(mn)
+            hint.set_margin_end(cp); hint.set_margin_start(cn)
+        else:
+            hint.set_halign(main_a)
+            hint.set_valign(cross_a)
+            if down == "end":
+                hint.set_margin_end(mp); hint.set_margin_start(mn)
+            else:
+                hint.set_margin_start(mp); hint.set_margin_end(mn)
+            hint.set_margin_bottom(cp); hint.set_margin_top(cn)
 
     def _capture_via_image_pipeline(self) -> None:
         """Stop the preview pipeline, build a droidcamsrc mode=1 ->

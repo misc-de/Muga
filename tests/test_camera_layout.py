@@ -395,3 +395,95 @@ def test_record_dot_resets_stale_margins(monkeypatch) -> None:
     for setter in (dot.set_margin_top, dot.set_margin_bottom,
                    dot.set_margin_start, dot.set_margin_end):
         assert setter.call_args_list[0][0][0] == 0, "margins were not reset first"
+
+
+# ---------------------------------------------------------------------------
+# Stacking one widget against another (_stack_along)
+# ---------------------------------------------------------------------------
+#
+# The swipe hint is placed by stacking it against the shutter along the
+# user's vertical axis. _stack_along does that arithmetic for one axis at a
+# time: given how the anchor is placed, it returns the align + margins that
+# put the placed widget's centre `offset` px toward the positive edge of the
+# anchor's centre. Positive is END here (bottom / right); the caller passes
+# START as `pos_align` for the orientations where the user's "down" points at
+# the widget's top or left edge.
+
+def _stack(**kw):
+    defaults = dict(other_extent=76, extent=36, pos_align=Gtk.Align.END, inset=20)
+    defaults.update(kw)
+    return camera.CameraWindow._stack_along(**defaults)
+
+
+def test_stack_along_keeps_the_anchors_edge_and_walks_inward() -> None:
+    """Anchor pinned 100 px off the positive edge; the placed widget's centre
+    goes 70 px further toward that edge — i.e. 100 + 38 - 70 - 18 of margin."""
+    align, m_pos, m_neg = _stack(
+        align=Gtk.Align.END, m_pos=100, m_neg=0, offset=70,
+    )
+    assert (align, m_pos, m_neg) == (Gtk.Align.END, 50, 0)
+
+
+def test_stack_along_walks_the_other_way_for_a_negative_offset() -> None:
+    align, m_pos, m_neg = _stack(
+        align=Gtk.Align.END, m_pos=100, m_neg=0, offset=-70,
+    )
+    assert (align, m_pos, m_neg) == (Gtk.Align.END, 190, 0)
+
+
+def test_stack_along_never_pushes_past_the_edge_inset() -> None:
+    """A shutter close to the edge leaves no room on that side; the placed
+    widget stops at the inset rather than sliding off-screen."""
+    _align, m_pos, _m_neg = _stack(
+        align=Gtk.Align.END, m_pos=10, m_neg=0, offset=70, inset=20,
+    )
+    assert m_pos == 20
+
+
+def test_stack_along_measures_from_the_anchors_own_edge() -> None:
+    """Anchor pinned to the negative edge: the offset still points toward the
+    positive edge, so it adds to the negative-edge margin."""
+    align, m_pos, m_neg = _stack(
+        align=Gtk.Align.START, m_pos=0, m_neg=100, offset=70,
+    )
+    assert (align, m_pos, m_neg) == (Gtk.Align.START, 0, 190)
+
+
+def test_stack_along_turns_a_centred_anchor_into_a_single_margin() -> None:
+    """A centred widget's centre is displaced toward the positive edge by
+    (m_neg - m_pos) / 2, so a 70 px displacement needs a 140 px margin on the
+    negative side."""
+    align, m_pos, m_neg = _stack(
+        align=Gtk.Align.CENTER, m_pos=0, m_neg=0, offset=70,
+    )
+    assert (align, m_pos, m_neg) == (Gtk.Align.CENTER, 0, 140)
+
+
+def test_stack_along_centred_anchor_carries_its_own_offset() -> None:
+    """A centred anchor that already sits off-centre (asymmetric margins)
+    must not lose that displacement."""
+    align, m_pos, m_neg = _stack(
+        align=Gtk.Align.CENTER, m_pos=40, m_neg=0, offset=70,
+    )
+    assert (align, m_pos, m_neg) == (Gtk.Align.CENTER, 0, 100)
+
+
+def test_stack_along_flips_the_axis_when_positive_is_start() -> None:
+    """Upside-down portrait: the user's "down" is the widget's top edge, so
+    the same call has to walk toward START instead."""
+    align, m_pos, m_neg = _stack(
+        align=Gtk.Align.START, m_pos=100, m_neg=0, offset=70,
+        pos_align=Gtk.Align.START,
+    )
+    assert (align, m_pos, m_neg) == (Gtk.Align.START, 50, 0)
+
+
+def test_stack_along_centres_the_placed_widget_at_zero_offset() -> None:
+    """Offset 0 is how the cross axis is placed: centres of both widgets
+    line up, whatever their sizes."""
+    _align, m_pos, _m_neg = _stack(
+        align=Gtk.Align.END, m_pos=100, m_neg=0, offset=0,
+        other_extent=76, extent=150,
+    )
+    # 100 + (76 - 150) / 2 = 63
+    assert m_pos == 63
