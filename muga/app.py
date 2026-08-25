@@ -313,7 +313,7 @@ class GalleryWindow(
         # modal dialog left a stale grab in GTK's tracker. The reopened
         # dialog rendered and reacted visually but every action handler was
         # silent. Without auto-reopen the recreation works reliably; the
-        # user reopens settings via the header gear button if they want to
+        # user reopens settings via the header menu button if they want to
         # make further changes.
 
     def _(self, text: str) -> str:
@@ -484,10 +484,14 @@ class GalleryWindow(
         title = Adw.WindowTitle(title=APP_NAME, subtitle="")
         self.header.set_title_widget(title)
 
-        self.settings_button = Gtk.Button.new_from_icon_name("emblem-system-symbolic")
+        # Pack order on the end (right) edge: settings first, so the three-dot
+        # menu ends up flush against the right-hand corner of the titlebar (the
+        # first pack_end widget is the outermost one) — the same spot Emilia
+        # puts it. Sort and camera line up to its left.
+        self.settings_button = Gtk.Button.new_from_icon_name("xsi-view-more-symbolic")
         self.settings_button.set_tooltip_text(self._("Settings"))
         self.settings_button.connect("clicked", self._open_settings)
-        self.header.pack_start(self.settings_button)
+        self.header.pack_end(self.settings_button)
 
         self.sort_button = Gtk.MenuButton(icon_name="view-sort-descending-symbolic")
         self.sort_button.set_tooltip_text(self._("Sort"))
@@ -1583,7 +1587,7 @@ class GalleryWindow(
         dialog.present()
 
     def _on_settings_dialog_closed(self, _dialog) -> bool:
-        # Drop the reference so the next gear-button click creates a fresh
+        # Drop the reference so the next menu-button click creates a fresh
         # dialog. Returning False on close-request lets the close proceed.
         self._settings_dialog = None
         return False

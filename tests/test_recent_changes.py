@@ -2273,7 +2273,7 @@ def test_recreate_destroys_tracked_settings_dialog_before_self() -> None:
 
 
 def test_open_settings_is_idempotent() -> None:
-    """Clicking the gear button twice must not stack two dialogs — the
+    """Clicking the settings button twice must not stack two dialogs — the
     second click presents the existing one. Pin via source order: the
     existing-dialog branch returns before constructing a new SettingsWindow."""
     src = gallery_source()
