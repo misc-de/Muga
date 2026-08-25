@@ -32,6 +32,34 @@ def idle_once(fn: Callable[..., Any], *args: Any) -> int:
     return GLib.idle_add(_run)
 
 
+# Same threshold as the gallery's mobile breakpoint (see
+# GalleryWindow._is_mobile_width): below it a window is phone-shaped.
+_DESKTOP_MIN_EDGE = 600
+
+
+def display_is_desktop() -> bool:
+    """Is Muga running on a desktop-sized screen rather than a phone?
+
+    Measured off the monitor, not the window: this is asked while the first
+    window is still being built, when it has no size yet. The short edge is
+    what decides, so a phone held in landscape doesn't briefly count as a
+    desktop. Falls back to False — the phone-shaped answer, which keeps the
+    legacy top bar — when there is no display to ask (headless runs, tests).
+    """
+    display = Gdk.Display.get_default()
+    if display is None:
+        return False
+    try:
+        monitors = display.get_monitors()
+        monitor = monitors.get_item(0) if monitors is not None else None
+        if monitor is None:
+            return False
+        geometry = monitor.get_geometry()
+    except Exception:
+        return False
+    return min(geometry.width, geometry.height) >= _DESKTOP_MIN_EDGE
+
+
 def load_css(provider: "Gtk.CssProvider", css: str) -> None:
     """Feed *css* into *provider*, on new and old GTK alike.
 

@@ -18,9 +18,12 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import mcp_server, updater
 from .camera_torch import TORCH_SYSFS_PATHS
-from .gtk_util import idle_once
+from .gtk_util import display_is_desktop, idle_once
 from .mcp_tokens import Token, TokenStore
-from .config import CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings
+from .config import (
+    CACHE_DIR, CONFIG_DIR, DATA_DIR, DB_PATH, DEBUG_LOG_PATH, Settings,
+    resolve_nav_position,
+)
 
 if TYPE_CHECKING:
     from .app import GalleryWindow
@@ -170,6 +173,12 @@ class SettingsWindow(Adw.PreferencesWindow):
                 ("bottom", "Bottom"),
                 ("left",   "Left"),
             ],
+            # "auto" is not offered as an option — it is the not-chosen-yet
+            # state — so the row shows the position it resolves to on this
+            # display, which is what the user is looking at.
+            current=resolve_nav_position(
+                self.settings.nav_position, desktop=display_is_desktop(),
+            ),
         ))
 
         handedness_group = Adw.PreferencesGroup(
@@ -1898,10 +1907,12 @@ class SettingsWindow(Adw.PreferencesWindow):
                 self.parent_window.refresh(scan=True)
         chooser.destroy()
 
-    def _combo_row(self, attr: str, title: str, values: list[tuple[str, str]]) -> Adw.ComboRow:
+    def _combo_row(self, attr: str, title: str, values: list[tuple[str, str]],
+                   current: str | None = None) -> Adw.ComboRow:
         store = Gtk.StringList()
         active = 0
-        current = getattr(self.settings, attr)
+        if current is None:
+            current = getattr(self.settings, attr)
         for i, (value, label) in enumerate(values):
             store.append(self._(label))
             if value == current:
@@ -1919,6 +1930,11 @@ class SettingsWindow(Adw.PreferencesWindow):
             # English never second-guesses a deliberate choice.
             self.settings.language_default_migrated = True
             self.parent_window.settings.language_default_migrated = True
+        if attr == "nav_position":
+            # Same for the nav bar: picking "Top" here is a choice, not the
+            # old default, so load()'s migration to "auto" must leave it be.
+            self.settings.nav_position_default_migrated = True
+            self.parent_window.settings.nav_position_default_migrated = True
         self.parent_window.apply_settings(self.settings)
 
     def _entry_apply(self, row: Adw.EntryRow, attr: str) -> None:

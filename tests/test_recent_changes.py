@@ -35,6 +35,8 @@ import pytest
 
 from gi.repository import GLib  # noqa: F401  — ensures the binding is up
 
+from tests.conftest import requires_display
+
 
 def gallery_source() -> str:
     """The gallery window's implementation, across every module it lives in.
@@ -1474,9 +1476,109 @@ def test_selection_mode_trash_packed_start_close_packed_end() -> None:
 # 16.  Configurable nav-bar position (top / bottom / left / right)
 # ---------------------------------------------------------------------------
 
-def test_settings_nav_position_default_is_top() -> None:
+def test_settings_nav_position_default_is_auto() -> None:
+    """The stored default is "auto" — not chosen yet — which resolves per
+    display when the window is built."""
     from muga.config import Settings
-    assert Settings().nav_position == "top"
+    assert Settings().nav_position == "auto"
+
+
+def test_auto_nav_position_is_left_on_a_desktop() -> None:
+    """User asked for the nav bar to start on the left in desktop mode."""
+    from muga.config import resolve_nav_position
+    assert resolve_nav_position("auto", desktop=True) == "left"
+
+
+def test_auto_nav_position_stays_on_top_on_a_phone() -> None:
+    """A side rail costs width the grid needs on a phone-sized screen."""
+    from muga.config import resolve_nav_position
+    assert resolve_nav_position("auto", desktop=False) == "top"
+
+
+@pytest.mark.parametrize("chosen", ["top", "bottom", "left", "right"])
+def test_an_explicit_nav_position_beats_the_display(chosen) -> None:
+    from muga.config import resolve_nav_position
+    assert resolve_nav_position(chosen, desktop=True) == chosen
+    assert resolve_nav_position(chosen, desktop=False) == chosen
+
+
+def test_unknown_nav_position_falls_back_to_the_auto_behaviour() -> None:
+    """Belt and braces for a hand-edited settings.json that got past load()."""
+    from muga.config import resolve_nav_position
+    assert resolve_nav_position("diagonal", desktop=True) == "left"
+    assert resolve_nav_position(None, desktop=False) == "top"
+
+
+def test_legacy_top_default_migrates_to_auto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installs predating the change carry "top" that was never a choice."""
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
+    import json
+    from muga.config import Settings
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"nav_position": "top"}), encoding="utf-8",
+    )
+    loaded = Settings.load()
+    assert loaded.nav_position == "auto"
+    assert loaded.nav_position_default_migrated is True
+
+
+def test_a_deliberate_top_survives_the_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settings marks the flag when the user picks a position, so the
+    one-shot migration must not second-guess them."""
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
+    import json
+    from muga.config import Settings
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"nav_position": "top", "nav_position_default_migrated": True}),
+        encoding="utf-8",
+    )
+    assert Settings.load().nav_position == "top"
+
+
+def test_picking_a_nav_position_marks_it_as_deliberate() -> None:
+    """Source-level pin: _combo_changed has to set the migration flag, or the
+    next launch would migrate a chosen "Top" away again."""
+    src = Path("muga/settings_window.py").read_text(encoding="utf-8")
+    idx = src.index('if attr == "nav_position":')
+    block = src[idx:idx + 400]
+    assert "nav_position_default_migrated = True" in block
+
+
+def test_other_positions_are_left_alone_by_the_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
+    import json
+    from muga.config import Settings
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"nav_position": "bottom"}), encoding="utf-8",
+    )
+    assert Settings.load().nav_position == "bottom"
+
+
+@requires_display
+@pytest.mark.parametrize("desktop,expected", [(True, "left"), (False, "top")])
+def test_gallery_window_places_the_auto_nav_per_display(
+    gtk_app, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, desktop, expected,
+) -> None:
+    """End-to-end wiring: a fresh config must come up with the side rail on a
+    desktop screen and the legacy top bar on a phone."""
+    import muga.app as app_mod
+
+    monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(app_mod, "display_is_desktop", lambda: desktop)
+    with patch.object(app_mod.GalleryWindow, "refresh"):
+        win = app_mod.GalleryWindow(gtk_app)
+    try:
+        assert win.settings.nav_position == "auto", "test needs an unset config"
+        assert win._nav_position == expected
+    finally:
+        win._closing = True
+        win.destroy()
 
 
 def test_settings_nav_position_round_trips_through_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1495,14 +1597,14 @@ def test_settings_nav_position_rejects_invalid_values_on_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_value,
 ) -> None:
     """A typo in settings.json must not crash _build_ui — Settings.load()
-    clamps unknown values back to "top"."""
+    clamps unknown values back to "auto", which resolves per display."""
     monkeypatch.setattr("muga.config.CONFIG_DIR", tmp_path)
     import json
     (tmp_path / "settings.json").write_text(
         json.dumps({"nav_position": bad_value}), encoding="utf-8",
     )
     from muga.config import Settings
-    assert Settings.load().nav_position == "top"
+    assert Settings.load().nav_position == "auto"
 
 
 def test_app_build_ui_routes_nav_box_per_position() -> None:
