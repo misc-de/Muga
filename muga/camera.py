@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -93,6 +94,22 @@ _HALIUM_PREVIEW_CAP_W = 1280
 _HALIUM_PREVIEW_CAP_H = 720
 _HALIUM_PREVIEW_FPS = 24
 _HALIUM_IMAGE_MAX_VIA_VFSRC = 2560
+
+# How the transient image pipeline decides the HAL is ready for
+# `start-capture`. It used to be a flat 500 ms wait — long enough on any
+# device, and dead time on every one of them, which the user pays twice:
+# once as shutter lag, and once as motion blur, because the frame the HAL
+# finally takes is that much later than the one they framed.
+#
+# Counting viewfinder buffers measures the thing the delay was standing in
+# for: droidcamsrc only produces them once its Photography reconfigure has
+# gone through. Three rather than one — the first buffer can still be the
+# half-configured one the HAL emits on its way up, and three at 24-30 fps
+# is ~100 ms, so this is still well inside the old ceiling.
+_IMAGE_VF_FRAMES_BEFORE_CAPTURE = 3
+# ...and if this HAL never produces one, fall back to firing anyway. Same
+# 500 ms as before, now a ceiling rather than the normal case.
+_IMAGE_CAPTURE_CEILING_MS = 500
 
 # gst-droid `flash-mode` property values (matching the
 # GstDroidCamSrcFlashMode enum exposed by droidcamsrc). Used by the
@@ -292,6 +309,15 @@ class CameraWindow(
         self._image_signal_id: int | None = None
         self._image_bus: Any = None
         self._image_timeout_id: int | None = None
+        # Deciding when the HAL is ready for start-capture: viewfinder
+        # buffers seen so far, the probe counting them, the ceiling that
+        # fires anyway if none arrive, and the guard that keeps those two
+        # triggers to one capture.
+        self._image_vf_probe_pad: Any = None
+        self._image_vf_probe_id: int | None = None
+        self._image_vf_frames: int = 0
+        self._image_capture_delay_id: int | None = None
+        self._image_capture_emitted: bool = False
         # Video-record transient pipeline state.
         self._video_pipeline: Any = None
         self._video_src: Any = None
@@ -316,6 +342,10 @@ class CameraWindow(
         self._devices: list[dict[str, Any]] = _enumerate_devices(self._Gst)
         self._device_index = 0
         self._busy_capture = False
+        # The worker writing the last photo, if one is still in flight.
+        # _busy_capture gates the *shutter*, which is re-armed as soon as
+        # the frame is in hand; this covers the write that follows it.
+        self._save_thread: threading.Thread | None = None
         # Set once the window starts tearing down. GStreamer streaming-thread
         # callbacks (preview/capture sample) and idle_add-deferred pipeline
         # rebuilds can still fire after close; they must bail rather than touch
@@ -2223,39 +2253,52 @@ class CameraWindow(
         We keep the `thread_name` arg for call-site compatibility; it
         is unused now."""
         del thread_name  # kept for backwards-compat with callers
+        GLib.timeout_add(
+            delay_ms,
+            lambda: self._emit_start_capture(
+                get_pipeline=get_pipeline,
+                get_src=get_src,
+                log_prefix=log_prefix,
+                extra_guard=extra_guard,
+            ),
+        )
+
+    def _emit_start_capture(
+        self,
+        *,
+        get_pipeline: Callable[[], Any],
+        get_src: Callable[[Any], Any],
+        log_prefix: str,
+        extra_guard: Callable[[], bool] | None = None,
+    ) -> bool:
+        """Emit `start-capture` now, on the calling (main-loop) thread.
+
+        Returns False so it doubles as a one-shot GLib callback."""
         gst = self._Gst
-
-        def _emit() -> bool:
-            pipeline = get_pipeline()
-            if pipeline is None:
-                return False
-            if extra_guard is not None and not extra_guard():
-                return False
-            try:
-                _, state, _ = pipeline.get_state(0)
-                if state not in (gst.State.PAUSED, gst.State.PLAYING):
-                    _dlog(
-                        f"[muga.camera] {log_prefix}: skip start-capture, "
-                        f"pipeline in {state}"
-                    )
-                    return False
-            except Exception:
-                return False
-            src = get_src(pipeline)
-            if src is None:
-                return False
-            try:
-                src.emit("start-capture")
-                _dlog(
-                    f"[muga.camera] {log_prefix}: start-capture emitted"
-                )
-            except Exception as exc:
-                _dlog(
-                    f"[muga.camera] {log_prefix}: start-capture failed: {exc}"
-                )
+        pipeline = get_pipeline()
+        if pipeline is None:
             return False
-
-        GLib.timeout_add(delay_ms, _emit)
+        if extra_guard is not None and not extra_guard():
+            return False
+        try:
+            _, state, _ = pipeline.get_state(0)
+            if state not in (gst.State.PAUSED, gst.State.PLAYING):
+                _dlog(
+                    f"[muga.camera] {log_prefix}: skip start-capture, "
+                    f"pipeline in {state}"
+                )
+                return False
+        except Exception:
+            return False
+        src = get_src(pipeline)
+        if src is None:
+            return False
+        try:
+            src.emit("start-capture")
+            _dlog(f"[muga.camera] {log_prefix}: start-capture emitted")
+        except Exception as exc:
+            _dlog(f"[muga.camera] {log_prefix}: start-capture failed: {exc}")
+        return False
 
     def _capture(self) -> None:
         if self._busy_capture:
@@ -2446,9 +2489,14 @@ class CameraWindow(
         self._close_valve_and_disconnect()
         # Persist the captured frame even mid-close so a shot in flight when
         # the window closes isn't lost; skip the widget updates afterwards.
+        # Mid-close the write has to be synchronous — the worker would
+        # outlive the window it reports back to.
         if sample is not None:
             _dlog("[muga.camera] capture: writing sample")
-            self._write_sample(sample)
+            if self._closing:
+                self._write_sample(sample)
+            else:
+                self._write_sample_async(sample)
         self._busy_capture = False
         if self._closing:
             return False
@@ -2807,6 +2855,11 @@ class CameraWindow(
 
     def _image_pipeline_build(self, cam_id: int) -> bool:
         gst = self._Gst
+        # Fresh per capture: the viewfinder counter that decides when the
+        # HAL is ready, and the guard that keeps the two racing triggers
+        # (that counter and the ceiling timeout) to one start-capture.
+        self._image_vf_frames = 0
+        self._image_capture_emitted = False
 
         # Transient image-capture pipeline:
         #   droidcamsrc(mode=1) → vfsrc → fakesink   (HAL needs an
@@ -2851,6 +2904,13 @@ class CameraWindow(
                     vf_pad = None
             if vf_pad is not None:
                 vf_pad.link(vf_fakesink.get_static_pad("sink"))
+                # Buffers here are the HAL saying it is up and running —
+                # which is what we actually want to wait for before
+                # asking it to take a picture.
+                self._image_vf_probe_pad = vf_pad
+                self._image_vf_probe_id = vf_pad.add_probe(
+                    gst.PadProbeType.BUFFER, self._on_image_vf_buffer,
+                )
 
         # imgsrc → queue → appsink. Pin caps=image/jpeg on the sink so
         # negotiation completes without a downstream buffer query —
@@ -2900,22 +2960,73 @@ class CameraWindow(
         _dlog(f"[muga.camera] image-capture: pipeline PLAYING -> "
             f"{result.value_nick if result else '?'}")
 
-        # Trigger start-capture from a worker thread (gst-droid pre-PR#39
-        # deadlocks when called from the same thread that pulls preview
-        # frames). 500 ms delay so the HAL finishes its Photography
-        # reconfigure before we ask it to capture.
-        self._emit_start_capture_async(
-            get_pipeline=lambda: self._image_pipeline,
-            get_src=lambda _p: self._image_src,
-            delay_ms=500,
-            log_prefix="image-capture",
-            thread_name="muga-img-start-capture",
+        # start-capture fires from _image_start_capture, whichever of its
+        # two triggers gets there first: the viewfinder probe above (the
+        # normal case, ~100 ms) or this ceiling (a HAL that never produced
+        # a viewfinder buffer). Both land on the main loop — never on the
+        # streaming thread, which is the one gst-droid pre-PR#39 deadlocks
+        # against.
+        self._image_capture_delay_id = GLib.timeout_add(
+            _IMAGE_CAPTURE_CEILING_MS, self._image_start_capture,
         )
 
         self._image_timeout_id = GLib.timeout_add_seconds(
             15, self._on_image_capture_timeout,
         )
         return False  # one-shot idle
+
+    def _on_image_vf_buffer(self, _pad: Any, _info: Any) -> Any:
+        """Streaming thread: count viewfinder buffers on the transient
+        image pipeline and trigger the capture once the stream is clearly
+        running.
+
+        The emit itself is handed to the main loop rather than done here:
+        `droid_media_camera_take_picture` deadlocks when it is called from
+        the thread delivering frames, and this is that thread."""
+        gst = self._Gst
+        self._image_vf_frames += 1
+        if self._image_vf_frames < _IMAGE_VF_FRAMES_BEFORE_CAPTURE:
+            return gst.PadProbeReturn.OK
+        _dlog(
+            f"[muga.camera] image-capture: viewfinder live after "
+            f"{self._image_vf_frames} frames"
+        )
+        # Cleared here rather than in _remove_image_vf_probe: returning
+        # REMOVE drops the probe itself, and removing it a second time
+        # from the main loop would be removing an id that no longer exists.
+        self._image_vf_probe_id = None
+        self._image_vf_probe_pad = None
+        GLib.idle_add(self._image_start_capture)
+        return gst.PadProbeReturn.REMOVE
+
+    def _image_start_capture(self) -> bool:
+        """Fire `start-capture` on the transient image pipeline, exactly
+        once. Two triggers race for it — the viewfinder probe and the
+        ceiling timeout — and the first one through wins.
+
+        Returns False so it works as a one-shot GLib callback either way."""
+        if self._image_capture_emitted:
+            return False
+        self._image_capture_emitted = True
+        self._image_capture_delay_id = None
+        self._remove_image_vf_probe()
+        return self._emit_start_capture(
+            get_pipeline=lambda: self._image_pipeline,
+            get_src=lambda _p: self._image_src,
+            log_prefix="image-capture",
+        )
+
+    def _remove_image_vf_probe(self) -> None:
+        pad = self._image_vf_probe_pad
+        probe_id = self._image_vf_probe_id
+        self._image_vf_probe_pad = None
+        self._image_vf_probe_id = None
+        if pad is None or probe_id is None:
+            return
+        try:
+            pad.remove_probe(probe_id)
+        except Exception:
+            LOGGER.debug("image viewfinder probe removal failed", exc_info=True)
 
     def _on_image_capture_sample(self, sink: Any) -> Any:
         gst = self._Gst
@@ -2959,15 +3070,16 @@ class CameraWindow(
                 self._write_sample(sample)
             self._busy_capture = False
             return False
-        # Kick the preview-restart idle FIRST so the heavy pipeline
-        # rebuild (mode=2, HAL reconfigure, gtk4paintablesink wiring)
-        # can run in parallel with the JPEG write + EXIF below. Both
-        # cost ~hundreds of ms on Halium; serialising them doubles
-        # the perceived snap-to-preview latency.
+        # Kick the preview-restart idle FIRST, then hand the frame to a
+        # worker. Both are needed: the idle only queues the rebuild, so
+        # while the save was synchronous it still had to wait for the
+        # ~530 ms rotate-and-re-encode to return before it could run.
+        # Off the main loop the two genuinely overlap, and the preview
+        # comes back roughly a rebuild's worth sooner.
         GLib.idle_add(self._start_pipeline)
         if sample is not None:
             _dlog("[muga.camera] image-capture: writing sample")
-            self._write_sample(sample)
+            self._write_sample_async(sample)
         else:
             self._show_toast(self._("No frame available"))
         self._show_capture_spinner(False)
@@ -3011,6 +3123,13 @@ class CameraWindow(
         return False
 
     def _image_teardown(self) -> None:
+        self._remove_image_vf_probe()
+        if self._image_capture_delay_id is not None:
+            try:
+                GLib.source_remove(self._image_capture_delay_id)
+            except Exception:
+                LOGGER.debug("camera cleanup/op failed", exc_info=True)
+            self._image_capture_delay_id = None
         if self._image_bus is not None:
             try:
                 self._image_bus.remove_signal_watch()
@@ -3168,7 +3287,7 @@ class CameraWindow(
             "_toast_timer", "_countdown_source",
             "_focus_hide_source", "_record_dot_blink_id",
             "_swipe_hint_pulse_id", "_image_timeout_id",
-            "_video_finalize_source",
+            "_image_capture_delay_id", "_video_finalize_source",
         ):
             src_id = getattr(self, src_attr, None)
             if src_id is not None:

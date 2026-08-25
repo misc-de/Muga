@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.camera_fakes import FakeElement, FakeGst, gst_win
+from tests.camera_fakes import FakeElement, FakeGst, FakePad, bind, gst_win
 
 camera = pytest.importorskip("muga.camera")
 
@@ -148,14 +148,24 @@ def test_close_returns_false_so_the_window_closes() -> None:
 # Transient pipeline teardown
 # ---------------------------------------------------------------------------
 
+def _teardown_win(gst, **attrs):
+    """A ``self`` for _image_teardown, which also has to clear the
+    viewfinder probe and the ceiling timeout."""
+    attrs.setdefault("_image_vf_probe_pad", None)
+    attrs.setdefault("_image_vf_probe_id", None)
+    attrs.setdefault("_image_capture_delay_id", None)
+    return bind(gst_win(gst, **attrs), camera.CameraWindow,
+                "_remove_image_vf_probe")
+
+
 def test_image_teardown_releases_the_hal() -> None:
     gst = FakeGst()
     pipeline = gst.Pipeline.new("img")
     bus = FakeElement("bus", "bus")
     bus.removed = 0
     bus.remove_signal_watch = lambda: setattr(bus, "removed", bus.removed + 1)
-    win = gst_win(gst, _image_bus=bus, _image_pipeline=pipeline,
-                  _image_src=object(), _image_signal_id=3)
+    win = _teardown_win(gst, _image_bus=bus, _image_pipeline=pipeline,
+                        _image_src=object(), _image_signal_id=3)
 
     camera.CameraWindow._image_teardown(win)
 
@@ -168,9 +178,26 @@ def test_image_teardown_releases_the_hal() -> None:
 
 
 def test_image_teardown_is_safe_when_nothing_is_running() -> None:
-    win = gst_win(FakeGst(), _image_bus=None, _image_pipeline=None,
-                  _image_src=None, _image_signal_id=None)
+    win = _teardown_win(FakeGst(), _image_bus=None, _image_pipeline=None,
+                        _image_src=None, _image_signal_id=None)
     camera.CameraWindow._image_teardown(win)
+
+
+def test_image_teardown_drops_the_viewfinder_probe_and_the_ceiling() -> None:
+    """Both outlive the pipeline otherwise: the probe holds a pad that is
+    about to go to NULL, and the ceiling would fire start-capture at a HAL
+    that has already been released."""
+    pad = FakePad("vfsrc")
+    win = _teardown_win(FakeGst(), _image_bus=None, _image_pipeline=None,
+                        _image_src=None, _image_signal_id=None,
+                        _image_vf_probe_pad=pad, _image_vf_probe_id=7,
+                        _image_capture_delay_id=99)
+    with patch.object(camera.GLib, "source_remove") as remove:
+        camera.CameraWindow._image_teardown(win)
+    assert pad.removed_probes == [7]
+    remove.assert_called_once_with(99)
+    assert win._image_vf_probe_pad is None
+    assert win._image_capture_delay_id is None
 
 
 def test_video_teardown_cancels_the_finalize_timer() -> None:
@@ -282,7 +309,12 @@ class _StatePipeline(FakeElement):
 
 
 def _run_emit(win, **kwargs):
-    """Call _emit_start_capture_async and run the callback it scheduled."""
+    """Call _emit_start_capture_async and run the callback it scheduled.
+
+    The delay and the emit are separate methods now — the image path needs
+    the emit on its own, triggered by the viewfinder rather than a clock —
+    so the scheduled callback dispatches back into `win`."""
+    bind(win, camera.CameraWindow, "_emit_start_capture")
     captured = {}
     with patch.object(camera.GLib, "timeout_add",
                       side_effect=lambda ms, fn: captured.update(ms=ms, fn=fn)):

@@ -306,6 +306,7 @@ def _finish_win(**extra):
         _=lambda s: s,
         _close_valve_and_disconnect=MagicMock(),
         _write_sample=MagicMock(),
+        _write_sample_async=MagicMock(),
         _busy_capture=True,
         _closing=False,
         _show_toast=MagicMock(),
@@ -317,10 +318,13 @@ def _finish_win(**extra):
 
 
 def test_finish_capture_writes_and_unlocks() -> None:
+    """Off the main loop: the rotate-and-re-encode must not hold up the
+    preview rebuild that was queued just before it."""
     win = _finish_win()
     sample = object()
     assert camera.CameraWindow._finish_capture(win, sample) is False
-    win._write_sample.assert_called_once_with(sample)
+    win._write_sample_async.assert_called_once_with(sample)
+    win._write_sample.assert_not_called()
     assert win._busy_capture is False
     win._shutter.set_sensitive.assert_called_once_with(True)
 
@@ -331,7 +335,9 @@ def test_finish_capture_saves_a_shot_taken_while_closing() -> None:
     win = _finish_win(_closing=True)
     sample = object()
     camera.CameraWindow._finish_capture(win, sample)
+    # Synchronously: a worker would outlive the window it reports back to.
     win._write_sample.assert_called_once_with(sample)
+    win._write_sample_async.assert_not_called()
     win._shutter.set_sensitive.assert_not_called()
 
 
@@ -339,6 +345,7 @@ def test_finish_capture_reports_an_empty_result() -> None:
     win = _finish_win()
     camera.CameraWindow._finish_capture(win, None)
     win._write_sample.assert_not_called()
+    win._write_sample_async.assert_not_called()
     win._show_toast.assert_called_once_with("No frame available")
     assert win._busy_capture is False
 

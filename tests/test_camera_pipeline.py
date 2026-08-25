@@ -16,7 +16,7 @@ failure ladders.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -249,13 +249,20 @@ def _image_win(gst, **extra):
         _image_capture_failed=MagicMock(return_value=False),
         _on_image_capture_sample=MagicMock(),
         _on_image_pipeline_error=MagicMock(),
-        _emit_start_capture_async=MagicMock(),
+        _emit_start_capture=MagicMock(return_value=False),
         _on_image_capture_timeout=MagicMock(),
         _image_pipeline=None, _image_src=None, _image_signal_id=None,
         _image_bus=None, _image_timeout_id=None,
+        _image_vf_probe_pad=None, _image_vf_probe_id=None,
+        _image_vf_frames=0, _image_capture_delay_id=None,
+        _image_capture_emitted=False,
     )
     defaults.update(extra)
-    return _win(gst, **defaults)
+    win = _win(gst, **defaults)
+    # The two triggers and the emit they share are the thing under test
+    # here, so they are real; only the emit itself is stubbed.
+    return bind(win, camera.CameraWindow, "_on_image_vf_buffer",
+                "_image_start_capture", "_remove_image_vf_probe")
 
 
 def _droid_pads():
@@ -300,9 +307,58 @@ def test_image_pipeline_starts_and_arms_a_timeout() -> None:
     win = _image_win(gst)
     assert camera.CameraWindow._image_pipeline_build(win, 0) is False  # one-shot idle
     assert gst.pipelines[0].states == [FakeGst.State.PLAYING]
-    win._emit_start_capture_async.assert_called_once()
-    assert win._emit_start_capture_async.call_args.kwargs["delay_ms"] == 500
     assert win._image_timeout_id is not None
+
+
+def test_image_pipeline_waits_for_the_viewfinder_not_the_clock() -> None:
+    """The flat 500 ms wait was dead time the user paid twice — once as
+    shutter lag, once as motion blur, because the frame the HAL finally
+    took was that much later than the one they framed. Viewfinder buffers
+    say the same thing the delay was guessing at, and say it sooner."""
+    gst = FakeGst(element_pads=_droid_pads())
+    win = _image_win(gst)
+    camera.CameraWindow._image_pipeline_build(win, 0)
+
+    vf = gst.element_pads["droidcamsrc"]["vfsrc"]
+    assert vf.probes, "nothing was watching the viewfinder"
+    _, handler = vf.probes[0]
+    for _ in range(camera._IMAGE_VF_FRAMES_BEFORE_CAPTURE - 1):
+        assert handler(vf, None) == FakeGst.PadProbeReturn.OK
+    win._emit_start_capture.assert_not_called()
+
+    with patch.object(camera.GLib, "idle_add", side_effect=lambda fn: fn()):
+        assert handler(vf, None) == FakeGst.PadProbeReturn.REMOVE
+    win._emit_start_capture.assert_called_once()
+
+
+def test_image_pipeline_still_fires_without_a_viewfinder_buffer() -> None:
+    """A HAL that never produces one must not leave the shutter hanging —
+    the old flat delay becomes the ceiling."""
+    gst = FakeGst(element_pads=_droid_pads())
+    win = _image_win(gst)
+    scheduled = {}
+    with patch.object(camera.GLib, "timeout_add",
+                      side_effect=lambda ms, fn: scheduled.update(ms=ms, fn=fn) or 5):
+        camera.CameraWindow._image_pipeline_build(win, 0)
+    assert scheduled["ms"] == camera._IMAGE_CAPTURE_CEILING_MS
+    assert scheduled["fn"]() is False
+    win._emit_start_capture.assert_called_once()
+
+
+def test_image_pipeline_captures_once_when_both_triggers_fire() -> None:
+    """The probe and the ceiling race every capture. Two start-captures
+    against one HAL session is a duplicate photo at best."""
+    gst = FakeGst(element_pads=_droid_pads())
+    win = _image_win(gst)
+    camera.CameraWindow._image_pipeline_build(win, 0)
+
+    vf = gst.element_pads["droidcamsrc"]["vfsrc"]
+    _, handler = vf.probes[0]
+    with patch.object(camera.GLib, "idle_add", side_effect=lambda fn: fn()):
+        for _ in range(camera._IMAGE_VF_FRAMES_BEFORE_CAPTURE):
+            handler(vf, None)
+    camera.CameraWindow._image_start_capture(win)  # the ceiling, late
+    win._emit_start_capture.assert_called_once()
 
 
 def test_image_pipeline_reports_a_missing_source() -> None:

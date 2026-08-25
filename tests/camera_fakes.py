@@ -164,6 +164,9 @@ class FakeGst:
     class PadProbeType:
         BUFFER = "BUFFER"
 
+    class PadProbeReturn:
+        OK, REMOVE = "OK", "REMOVE"
+
     class MapFlags:
         READ = "READ"
 

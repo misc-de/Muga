@@ -11,8 +11,9 @@ block in one go).
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -63,14 +64,25 @@ def _win(tmp_path: Path, **attrs) -> SimpleNamespace:
         _Gst=_FakeGst(),
         _save_dir=tmp_path / "Photos",
         _show_toast=MagicMock(),
-        _orient_and_resize=lambda data: (data, 1),
+        _orient_and_resize=lambda data, orientation=None: (data, 1),
         _write_exif=MagicMock(),
         _on_captured=None,
         _geo=None,
         _current_device=lambda: None,
+        _capture_orientation="normal",
+        _closing=False,
+        _save_thread=None,
     )
     defaults.update(attrs)
-    return SimpleNamespace(**defaults)
+    win = SimpleNamespace(**defaults)
+    # The save path is three methods now — a main-loop prepare, a worker
+    # persist and a main-loop report. The tests still drive it through
+    # _write_sample as one operation, so bind whichever of the three the
+    # test isn't stubbing out itself.
+    for name in ("_prepare_capture", "_persist_capture", "_report_capture"):
+        if name not in attrs:
+            setattr(win, name, MethodType(getattr(camera.CameraWindow, name), win))
+    return win
 
 
 JPEG = b"\xff\xd8\xff\xe0jpegbytes\xff\xd9"
@@ -148,9 +160,83 @@ def test_capture_reports_an_unwritable_directory(tmp_path: Path) -> None:
 
 def test_capture_passes_the_orientation_through_to_exif(tmp_path: Path) -> None:
     """When the pixels could not be rotated, the EXIF tag has to carry it."""
-    win = _win(tmp_path, _orient_and_resize=lambda data: (data, 6))
+    win = _win(
+        tmp_path, _orient_and_resize=lambda data, orientation=None: (data, 6)
+    )
     camera.CameraWindow._write_sample(win, _Sample(_Buffer(JPEG)))
     assert win._write_exif.call_args[0][1] == 6
+
+
+# ---------------------------------------------------------------------------
+# Writing it off the main loop
+# ---------------------------------------------------------------------------
+
+def test_async_capture_writes_on_a_worker_and_reports_back(tmp_path: Path) -> None:
+    """Rotating and re-encoding a 20 MP JPEG costs ~530 ms on a phone. It used
+    to run in the same main-loop callback that had just queued the preview
+    rebuild, so the rebuild could not start until the encode was done."""
+    win = _win(tmp_path)
+    caller = threading.current_thread()
+    saw: dict = {}
+    win._orient_and_resize = lambda data, orientation=None: (
+        saw.setdefault("thread", threading.current_thread()), (data, 1)
+    )[1]
+
+    with patch.object(capture_io.GLib, "idle_add") as idle:
+        camera.CameraWindow._write_sample_async(win, _Sample(_Buffer(JPEG)))
+        win._save_thread.join(timeout=5)
+
+    assert not win._save_thread.is_alive()
+    assert saw["thread"] is not caller, "the encode still ran on the main loop"
+    assert list((tmp_path / "Photos").glob("*.jpg"))
+    # The toast and the gallery hook are widgets' business — main loop only.
+    idle.assert_called_once()
+    assert idle.call_args[0][0] == win._report_capture
+    win._show_toast.assert_not_called()
+
+
+def test_async_capture_latches_the_orientation_against_the_next_shot(
+    tmp_path: Path,
+) -> None:
+    """The shutter is re-armed as soon as the frame is in hand, so a second
+    press can move _capture_orientation while the first photo is still being
+    encoded. The worker has to use the lay the shot was framed at."""
+    win = _win(tmp_path, _capture_orientation="left-up")
+    seen: list[str | None] = []
+    gate = threading.Event()
+
+    def _slow_orient(data, orientation=None):
+        gate.wait(timeout=5)
+        seen.append(orientation)
+        return data, 1
+
+    win._orient_and_resize = _slow_orient
+    with patch.object(capture_io.GLib, "idle_add"):
+        camera.CameraWindow._write_sample_async(win, _Sample(_Buffer(JPEG)))
+        win._capture_orientation = "bottom-up"  # the next shutter press
+        gate.set()
+        win._save_thread.join(timeout=5)
+
+    assert seen == ["left-up"]
+
+
+def test_async_capture_reports_a_missing_frame_without_a_worker(
+    tmp_path: Path,
+) -> None:
+    win = _win(tmp_path)
+    camera.CameraWindow._write_sample_async(win, _Sample(None))
+    win._show_toast.assert_called_once_with("No frame available")
+    assert win._save_thread is None
+
+
+def test_capture_stays_quiet_about_the_save_while_closing(tmp_path: Path) -> None:
+    """The toast belongs to a window that is going away; the photo still
+    belongs in the gallery."""
+    on_captured = MagicMock()
+    win = _win(tmp_path, _closing=True, _on_captured=on_captured)
+    camera.CameraWindow._write_sample(win, _Sample(_Buffer(JPEG)))
+    win._show_toast.assert_not_called()
+    on_captured.assert_called_once()
 
 
 def test_capture_survives_a_raising_callback(tmp_path: Path) -> None:
