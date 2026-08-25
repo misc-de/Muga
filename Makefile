@@ -21,6 +21,10 @@
 APPID       = de.cais.Muga
 FP_MANIFEST = $(APPID).yml
 VERSION     = $(shell sed -n 's/^VERSION = "\(.*\)"/\1/p' muga/__init__.py)
+# Read out of the manifest rather than written here as well: this used to be
+# hard-coded in three places in flatpak-cross-setup, so a runtime bump told
+# people to install one branch while the build asked for another.
+FP_RUNTIME  = $(shell sed -n "s/^runtime-version: *'\(.*\)'/\1/p" $(FP_MANIFEST))
 
 FP_REPO     ?= repo
 # The architecture to build. Defaults to this machine's; set FP_ARCH=aarch64 to
@@ -123,9 +127,9 @@ flatpak-cross-setup:
 		echo "          qemu-user-static-binfmt (Arch), or the distribution's"; \
 		echo "          equivalent, then restart systemd-binfmt."; \
 	fi
-	@flatpak info org.gnome.Sdk/$(FP_ARCH)/49 >/dev/null 2>&1 \
-		&& echo "  runtime: org.gnome.Sdk/$(FP_ARCH)/49 installed" \
-		|| echo "  runtime: missing — flatpak install --user flathub org.gnome.Platform/$(FP_ARCH)/49 org.gnome.Sdk/$(FP_ARCH)/49"
+	@flatpak info org.gnome.Sdk/$(FP_ARCH)/$(FP_RUNTIME) >/dev/null 2>&1 \
+		&& echo "  runtime: org.gnome.Sdk/$(FP_ARCH)/$(FP_RUNTIME) installed" \
+		|| echo "  runtime: missing — flatpak install --user flathub org.gnome.Platform/$(FP_ARCH)/$(FP_RUNTIME) org.gnome.Sdk/$(FP_ARCH)/$(FP_RUNTIME)"
 
 # Shows which app refs (architectures) are currently in the repo.
 flatpak-repo-info:

@@ -1038,3 +1038,65 @@ def test_the_setuptools_floor_clears_its_known_advisories() -> None:
     major = int(re.search(r">=\s*(\d+)", floor).group(1))
     assert major >= 83, f"{floor} still admits versions with known advisories"
 
+# ---------------------------------------------------------------------------
+# 12.  The two Flatpak manifests describe the same build
+# ---------------------------------------------------------------------------
+#
+# de.cais.Muga.flathub.yml says of itself that everything but the source —
+# runtime, modules, permissions — is "deliberately identical" to the repository
+# manifest. Nothing checked that. A runtime bump or a permission change applied
+# to one of them would ship a Flathub build that is not the one anyone tested,
+# and it would look right in both files read on their own.
+
+def _manifest_lines(name: str) -> list[str]:
+    root = Path(__file__).resolve().parent.parent
+    return (root / name).read_text(encoding="utf-8").split("\n")
+
+
+def _from_id_to_muga_module(lines: list[str]) -> list[str]:
+    """Everything the two manifests promise to share: the header, finish-args,
+    cleanup and every module up to (not including) muga's own, which is where
+    the documented difference — working tree vs tagged git state — lives."""
+    return lines[lines.index("id: de.cais.Muga"):lines.index("  - name: muga")]
+
+
+def test_the_two_manifests_agree_on_everything_but_the_source() -> None:
+    repo = _from_id_to_muga_module(_manifest_lines("de.cais.Muga.yml"))
+    flathub = _from_id_to_muga_module(_manifest_lines("de.cais.Muga.flathub.yml"))
+    if repo != flathub:
+        import difflib
+
+        diff = "\n".join(difflib.unified_diff(repo, flathub, "repo", "flathub", lineterm=""))
+        raise AssertionError(f"the manifests have drifted apart:\n{diff}")
+
+
+def test_the_muga_module_is_built_the_same_way_in_both() -> None:
+    """Only the sources differ. The build commands — what actually lands in
+    /app — must not."""
+    def build_commands(name: str) -> list[str]:
+        lines = _manifest_lines(name)
+        start = lines.index("  - name: muga")
+        return lines[start:lines.index("    sources:", start)]
+
+    assert build_commands("de.cais.Muga.yml") == build_commands("de.cais.Muga.flathub.yml")
+
+
+def test_the_documented_runtime_matches_the_one_that_is_built() -> None:
+    """The README's install line and the Makefile's cross-build check both name
+    a branch by hand. Following either one while the manifest asks for another
+    is a download that does not help."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    manifest = (root / "de.cais.Muga.yml").read_text(encoding="utf-8")
+    version = re.search(r"^runtime-version: '([^']+)'", manifest, re.M).group(1)
+
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert f"org.gnome.Platform//{version}" in readme, (
+        f"README does not tell people to install runtime {version}"
+    )
+
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    assert "$(FP_RUNTIME)" in makefile and "/49" not in makefile, (
+        "the Makefile still names a runtime branch of its own"
+    )

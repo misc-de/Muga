@@ -85,7 +85,7 @@ Updates from then on with `flatpak update`.
 
 To build it yourself instead:
 ```bash
-flatpak install -y flathub org.gnome.Platform//49 org.gnome.Sdk//49
+flatpak install -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
 flatpak-builder --user --install --force-clean build-dir de.cais.Muga.yml
 flatpak run de.cais.Muga
 ```
