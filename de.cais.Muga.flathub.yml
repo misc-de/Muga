@@ -105,7 +105,7 @@ modules:
     sources:
       - type: git
         url: https://github.com/misc-de/Muga.git
-        tag: v0.5.13
+        tag: v0.5.14
         # commit: pinned to the tag's SHA on release
         x-checker-data:
           type: git
