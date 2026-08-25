@@ -247,6 +247,7 @@ class GalleryGrid(Gtk.Overlay):
     def append_folder(self, folder: str, count: int, thumbs: list[str]) -> None:
         media_row = MediaRow.from_folder(folder, count, thumbs)
         self._folder_index[folder] = media_row
+        self._resume_partial_row()
         self._building_row.append(media_row)
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
@@ -254,9 +255,35 @@ class GalleryGrid(Gtk.Overlay):
     def append_media(self, item: MediaItem) -> None:
         media_row = MediaRow.from_media(item)
         self._item_index[item.path] = media_row
+        self._resume_partial_row()
         self._building_row.append(media_row)
         if len(self._building_row) >= self._cols:
             self._flush_tile_row()
+
+    def _resume_partial_row(self) -> None:
+        """Take the trailing row back off the store when it is a tile row
+        that never filled up, so the next tile continues it.
+
+        finish() runs at the end of every page, not just at the end of the
+        render, and it flushes whatever half-row is in hand. Without this the
+        next page starts a fresh row and the gallery carries a hole at every
+        page boundary — the empty cells the user sees as black boxes in the
+        middle of the grid, with no month break to explain them.
+
+        A row that ends a date group is not affected: that group's flush is
+        immediately followed by its header, so the trailing row is the header
+        and there is nothing here to resume.
+        """
+        if self._building_row:
+            return
+        last = self.row_store.get_n_items() - 1
+        if last < 0:
+            return
+        row = self.row_store.get_item(last)
+        if row is None or row.is_header or len(row.tiles) >= self._cols:
+            return
+        self._building_row = list(row.tiles)
+        self.row_store.remove(last)
 
     def evict_front_rows(self, rows_to_drop: int) -> None:
         """Remove the first *rows_to_drop* rows (sliding-window front

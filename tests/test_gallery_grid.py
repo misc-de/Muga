@@ -164,6 +164,61 @@ def test_grid_flushes_a_partial_row_on_finish(grid) -> None:
 
 
 @requires_display
+def test_a_page_boundary_leaves_no_hole_in_the_grid(grid) -> None:
+    """finish() runs at the end of every page, not only at the end of the
+    render, and it flushes whatever half-row is in hand. Left alone, the next
+    page starts a fresh row and the gallery carries a gap of empty cells at
+    every page boundary — black boxes in the middle of the grid with no month
+    break to explain them."""
+    grid.clear()
+    grid.set_columns(6)
+    for i in range(8):                       # page one: 6 + 2
+        grid.append_media(_item(name=f"a{i}.jpg", path=f"/x/a{i}.jpg"))
+    grid.finish()
+    for i in range(4):                       # page two continues the 2-row
+        grid.append_media(_item(name=f"b{i}.jpg", path=f"/x/b{i}.jpg"))
+    grid.finish()
+
+    counts = [len(grid.row_store.get_item(i).tiles)
+              for i in range(grid.row_store.get_n_items())]
+    assert counts == [6, 6], f"gap at the page boundary: {counts}"
+
+
+@requires_display
+def test_the_resumed_row_keeps_its_tiles_findable(grid) -> None:
+    """The half-row is taken back off the store to be continued; its tiles
+    have to survive that, or a thumbnail arriving later updates nothing."""
+    grid.clear()
+    grid.set_columns(6)
+    grid.append_media(_item(name="a.jpg", path="/x/a.jpg"))
+    grid.finish()
+    grid.append_media(_item(name="b.jpg", path="/x/b.jpg"))
+    grid.finish()
+
+    assert grid.row_store.get_n_items() == 1
+    row = grid.row_store.get_item(0)
+    assert [t.media_item.path for t in row.tiles] == ["/x/a.jpg", "/x/b.jpg"]
+    assert grid._item_index["/x/a.jpg"] in row.tiles
+
+
+@requires_display
+def test_a_month_break_still_breaks_the_row(grid) -> None:
+    """The page-boundary repair must not paper over a real group boundary:
+    a month's last row stays short, because the next month starts its own."""
+    grid.clear()
+    grid.set_columns(6)
+    grid.append_media(_item(name="a.jpg", path="/x/a.jpg"))
+    grid.append_media(_item(name="b.jpg", path="/x/b.jpg"))
+    grid.finish()
+    grid.append_header("April", year=2026, month=4)
+    grid.append_media(_item(name="c.jpg", path="/x/c.jpg"))
+    grid.finish()
+
+    rows = [grid.row_store.get_item(i) for i in range(grid.row_store.get_n_items())]
+    assert [len(r.tiles) if not r.is_header else "header" for r in rows] == [2, "header", 1]
+
+
+@requires_display
 def test_grid_header_closes_the_open_row(grid) -> None:
     """A month header must not appear in the middle of the previous month's
     tiles."""
@@ -228,8 +283,13 @@ def test_grid_eviction_keeps_a_re_added_folder(grid) -> None:
     """A later page may re-add the same folder; forgetting it blindly would
     break the newer tile's updates."""
     grid.clear()
-    grid.set_columns(1)
+    # Two columns, and the first row is filled before the page ends: a row
+    # left half-open is picked back up by the next page (that is what keeps
+    # page boundaries from leaving gaps), and both tiles would then sit in
+    # one row with nothing to evict between them.
+    grid.set_columns(2)
     grid.append_folder("/x/holiday", 3, [])
+    grid.append_folder("/x/other", 1, [])
     grid.finish()
     first_tile = grid._folder_index["/x/holiday"]
 

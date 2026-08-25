@@ -484,18 +484,30 @@ class GalleryRenderMixin:
             if row is None or row.is_header:
                 continue
             items_dropped += len(getattr(row, "tiles", []) or [])
-        # Align the cut to the next header so the new first row is
-        # always a header — otherwise the topmost tile row would be
-        # orphaned without its month context.
-        while rows_to_drop < n_rows:
-            row = store.get_item(rows_to_drop)
-            if row is None:
-                rows_to_drop += 1
-                continue
-            if row.is_header:
+        # Prefer a cut that leaves a header as the new first row, so the
+        # topmost tile row isn't orphaned from its month. Look BACKWARDS for
+        # it, never forwards: inside a long month the next header can be
+        # hundreds of rows away, and walking forward to it evicts that whole
+        # month. Measured on a 1500-photo month, a cut asked to free 1050
+        # items freed 1675 — everything the user was looking at, the row
+        # ListView anchors on included, which is what left the gallery
+        # somewhere else entirely after a jump through a long month.
+        # Where there is no header to fall back to, cut unaligned rather
+        # than overshoot: a tile row at the top is cosmetic, evicting the
+        # viewport is not.
+        probe = rows_to_drop
+        while probe > 0:
+            row = store.get_item(probe)
+            if row is not None and row.is_header:
+                rows_to_drop = probe
                 break
+            probe -= 1
+        items_dropped = 0
+        for i in range(rows_to_drop):
+            row = store.get_item(i)
+            if row is None or row.is_header:
+                continue
             items_dropped += len(getattr(row, "tiles", []) or [])
-            rows_to_drop += 1
         if rows_to_drop <= 0 or items_dropped <= 0:
             return
         # evict_front_rows splices the front AND prunes the grid's path/folder

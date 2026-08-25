@@ -2012,6 +2012,81 @@ def test_front_eviction_still_trims_when_no_jump_is_running() -> None:
     win.gallery_grid.evict_front_rows.assert_called_once()
 
 
+def _long_month_store(rows_in_month: int, tiles_per_row: int = 6):
+    """A store that opens with a short month and then runs a very long one —
+    the shape where walking forward to the next header goes badly wrong."""
+    from muga.gallery_grid import GalleryRow
+
+    rows = [GalleryRow.header("Mar")]
+    for _ in range(20):
+        row = GalleryRow.from_tiles([])
+        row.tiles = [object()] * tiles_per_row
+        rows.append(row)
+    rows.append(GalleryRow.header("Feb"))
+    for _ in range(rows_in_month):
+        row = GalleryRow.from_tiles([])
+        row.tiles = [object()] * tiles_per_row
+        rows.append(row)
+    return rows
+
+
+def test_eviction_never_walks_forward_into_a_long_month() -> None:
+    """It used to align the cut to the NEXT header so the new first row would
+    be a header. Inside a long month that header is hundreds of rows away, and
+    walking to it evicts the whole month — measured on a 1500-photo month, a
+    cut asked to free 1050 items freed 1675, which is everything the user was
+    looking at. Freeing less than asked is a cost; freeing the viewport is a
+    bug."""
+    from muga.gallery_render import GalleryRenderMixin
+
+    rows = _long_month_store(400)
+    dropped = []
+    win = SimpleNamespace(
+        _suppress_front_eviction=False,
+        current_items=list(range(2600)),
+        _MAX_LOADED_ITEMS=1500,
+        _page_size=200,
+        _window_start_offset=0,
+        gallery_grid=SimpleNamespace(
+            row_store=_jump_store(rows),
+            evict_front_rows=lambda n: dropped.append(n),
+        ),
+    )
+    target_evict = 2600 - 750
+    GalleryRenderMixin._evict_window_front_if_needed(win)
+
+    assert dropped, "nothing was evicted at all"
+    freed = 2600 - len(win.current_items)
+    assert freed <= target_evict, (
+        f"freed {freed} items when {target_evict} were asked for"
+    )
+    assert win._window_start_offset == freed
+
+
+def test_eviction_still_prefers_to_leave_a_header_on_top() -> None:
+    """When a header sits inside the region being freed, the cut moves back
+    onto it — the new first row keeps its month context, and the cut only
+    ever gets smaller."""
+    from muga.gallery_render import GalleryRenderMixin
+
+    rows = _long_month_store(400)          # header at row 0, header at row 21
+    dropped = []
+    win = SimpleNamespace(
+        _suppress_front_eviction=False,
+        current_items=list(range(2600)),
+        _MAX_LOADED_ITEMS=1500,
+        _page_size=200,
+        _window_start_offset=0,
+        gallery_grid=SimpleNamespace(
+            row_store=_jump_store(rows),
+            evict_front_rows=lambda n: dropped.append(n),
+        ),
+    )
+    GalleryRenderMixin._evict_window_front_if_needed(win)
+    assert dropped == [21], f"cut at {dropped}, not back onto the header at 21"
+    assert rows[21].is_header
+
+
 def test_a_jump_re_reads_its_positions_after_pulling_pages() -> None:
     """Belt to the hold's braces: whatever else may splice the front, the
     source and target positions are both re-read from the live store before
