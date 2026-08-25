@@ -517,165 +517,36 @@ class GalleryGrid(Gtk.Overlay):
             self._building_row = []
 
     def _on_header_nav(self, header_box: Gtk.Box, direction: int) -> None:
-        """Jump to the next/previous header from *header_box*'s row in a
-        single, predictable vadjustment write.
+        """Jump to the month next to this header's.
 
-        direction = -1 (up arrow) → previous header in row store
-        direction = +1 (down arrow) → next header in row store
+        direction = -1 (up arrow) → the way the list came from
+        direction = +1 (down arrow) → the way it continues
 
-        Strategy: row heights are measured from currently-bound widgets
-        (source header is always rendered; tile-row height is read from any
-        bound tile-row in the viewport). Multiplying those measured heights
-        by the count of intervening rows in row_store gives the target's
-        content_y to within ListView's internal per-row padding (which is
-        zero in our configuration). We then write the vadjustment exactly
-        once so the target appears at the same screen Y the source was at —
-        no scroll_to, no retry loop, no two-stage flicker.
+        The header row carries its own year and month, so the jump needs
+        nothing from the row store and nothing from the widgets: it hands
+        those two numbers to the window, which asks the database where that
+        month begins and rebuilds from there.
+
+        Every earlier version of this measured a pixel distance to a header
+        it had found in the loaded rows. Both halves were unsound. The next
+        month is often not loaded — inside a long month it is thousands of
+        photos away — and loading it changes the store under the widgets
+        whose geometry the measurement comes from. That is what left the jump
+        stranded mid-collection, in three different ways.
         """
         list_item: Gtk.ListItem | None = getattr(header_box, "_list_item", None)
         if list_item is None:
             return
-        current_pos = list_item.get_position()
-        target_pos = self._find_adjacent_header_pos(current_pos, direction)
-        # Going forward and we ran off the end of the currently-loaded
-        # rows: pull the next page(s) until another month header appears
-        # or there's nothing left in the database. Capped so a pathological
-        # "every file is the same month" dataset can't lock up the UI.
-        if target_pos is None and direction > 0:
-            if self._load_more_until_next_header(current_pos) is None:
-                return
-            # Re-derive both positions from the live store rather than trust
-            # the ones captured before the load. Anything that splices the
-            # front renumbers every row, and a target read in one index space
-            # against a source read in another is how a jump ends up
-            # thousands of pixels away from any header at all.
-            current_pos = list_item.get_position()
-            if current_pos >= self.row_store.get_n_items():
-                return  # the source row itself was evicted — nothing to measure from
-            target_pos = self._find_adjacent_header_pos(current_pos, +1)
-        if target_pos is None:
+        row = list_item.get_item()
+        if row is None or not getattr(row, "is_header", False):
             return
-        src_widget = list_item.get_child()
-        if src_widget is None:
+        year, month = row.header_year, row.header_month
+        if year is None or month is None:
             return
-        src_y = self._content_y_of(src_widget)
-        if src_y is None:
+        jump = getattr(getattr(self, "owner", None), "jump_to_month", None)
+        if jump is None:
             return
-
-        vadj = self.scroller.get_vadjustment()
-        target_screen_y = src_y - vadj.get_value()
-
-        header_h, tile_h = self._measure_row_heights(src_widget)
-        delta = 0.0
-        start = min(current_pos, target_pos)
-        end   = max(current_pos, target_pos)
-        for i in range(start, end):
-            row = self.row_store.get_item(i)
-            if row is None:
-                continue
-            delta += header_h if row.is_header else tile_h
-        if target_pos < current_pos:
-            delta = -delta
-
-        target_content_y = src_y + delta
-        self._set_vadj_clamped(vadj, target_content_y - target_screen_y)
-
-    def _evict_after_jump(self) -> bool:
-        owner = getattr(self, "owner", None)
-        evict = getattr(owner, "_evict_window_front_if_needed", None)
-        if evict is not None:
-            try:
-                evict()
-            except Exception:
-                LOGGER.debug("post-jump eviction failed", exc_info=True)
-        return GLib.SOURCE_REMOVE
-
-    def _measure_row_heights(self, src_widget: Gtk.Widget) -> tuple[float, float]:
-        """Return measured (header_h, tile_h) from currently-bound widgets.
-
-        The source header is guaranteed to be rendered (the click just
-        landed on it) so its allocation gives us the exact header row
-        height. Tile row height is read from any tile-row list_item that's
-        currently bound; if none happens to be bound (e.g. user clicked an
-        arrow while no tiles were on screen), fall back to the CSS cell_size
-        estimate. The fallback is rare and never compounds with header
-        measurement, so the residual error stays inside a single tile-row
-        height — small enough that the user's eye doesn't catch it."""
-        header_h = float(src_widget.get_allocated_height() or 152)
-        tile_h: float | None = None
-        for li in list(self._bound_list_items):
-            try:
-                row = li.get_item()
-                if row is None or row.is_header:
-                    continue
-                widget = li.get_child()
-                if widget is None:
-                    continue
-                h = widget.get_allocated_height()
-                if h > 0:
-                    tile_h = float(h)
-                    break
-            except Exception:
-                continue
-        if tile_h is None:
-            scroller_width = self.scroller.get_width() or 800
-            cols = self._cols or 4
-            tile_h = float(max(32, scroller_width // cols))
-        return header_h, tile_h
-
-    def _set_vadj_clamped(self, vadj: Gtk.Adjustment, value: float) -> None:
-        upper = max(0.0, vadj.get_upper() - vadj.get_page_size())
-        vadj.set_value(max(0.0, min(value, upper)))
-
-    def _load_more_until_next_header(self, current_pos: int) -> int | None:
-        """Drive the owner's paginated loader forward until a row with
-        is_header=True shows up *after* current_pos, or the loader signals
-        end-of-data. Returns the new header's row_store index, or None.
-
-        The loader synchronously appends rows to row_store on each call,
-        so polling the store after each step is safe. Capped at 32 pages
-        — long enough to chew through "100 photos a month for years" but
-        bounded against any edge case where pages somehow never contain
-        a header."""
-        owner = getattr(self, "owner", None)
-        loader = getattr(owner, "_load_more_items", None)
-        if loader is None:
-            return None
-        # Hold the sliding window's front-eviction for the whole loop. It
-        # splices rows off the FRONT of the store, so every position after it
-        # means something different — including current_pos, which was read
-        # before the first page was pulled, and the position this returns.
-        # Appends on their own never move an existing row, so with eviction
-        # held the two stay comparable. Measured before this: one jump that
-        # happened to cross the cap moved the view 41,000 px the wrong way.
-        max_pages = 32
-        had_suppression = getattr(owner, "_suppress_front_eviction", False)
-        setattr(owner, "_suppress_front_eviction", True)
-        try:
-            for _ in range(max_pages):
-                if not getattr(owner, "_has_more_items", False):
-                    return None
-                before = self.row_store.get_n_items()
-                loader()
-                after = self.row_store.get_n_items()
-                if after == before:
-                    # Loader bailed (in-flight guard, empty page, …) — give up
-                    # rather than spin.
-                    return None
-                found = self._find_adjacent_header_pos(current_pos, +1)
-                if found is not None:
-                    return found
-            return None
-        finally:
-            setattr(owner, "_suppress_front_eviction", had_suppression)
-            if not had_suppression:
-                # Pay back the eviction we held off. On an idle, and only
-                # once the caller's single vadjustment write has landed:
-                # splicing rows out from under a position that has not been
-                # through an allocation yet would race ListView's own
-                # anchoring, which is what keeps the visible row steady
-                # across a front-eviction in the first place.
-                GLib.idle_add(self._evict_after_jump, priority=GLib.PRIORITY_LOW)
+        jump(year, month, direction)
 
     def _find_adjacent_header_pos(self, current_pos: int, direction: int) -> int | None:
         """Walk row_store from *current_pos* in *direction* until a header
@@ -702,7 +573,14 @@ class GalleryGrid(Gtk.Overlay):
             pos = list_item.get_position()
         except Exception:
             return
-        stack._nav_up.set_visible(self._find_adjacent_header_pos(pos, -1) is not None)
+        owner_for_up = getattr(self, "owner", None)
+        # There is a way back whenever a header sits above this one, or the
+        # window starts part-way into the library — which is exactly what a
+        # month jump leaves behind, and the arrow is how the user returns.
+        stack._nav_up.set_visible(
+            self._find_adjacent_header_pos(pos, -1) is not None
+            or bool(getattr(owner_for_up, "_window_start_offset", 0))
+        )
         # Show the down arrow whenever there is *or could be* a next
         # header — i.e. an already-loaded one further down, or more
         # paginated items still waiting in the database. The handler
@@ -740,19 +618,6 @@ class GalleryGrid(Gtk.Overlay):
             except Exception:
                 continue
         return GLib.SOURCE_REMOVE
-
-    def _content_y_of(self, widget: Gtk.Widget) -> float | None:
-        """Y of *widget* within the listview's scrollable content coord
-        space. Independent of current scroll value — that's exactly what we
-        need to translate back into a vadjustment offset."""
-        ok, bounds = widget.compute_bounds(self.grid_view)
-        if not ok:
-            return None
-        return bounds.get_y()
-
-    # ------------------------------------------------------------------
-    # Factory callbacks
-    # ------------------------------------------------------------------
 
     def _on_item_setup(self, _factory: Gtk.SignalListItemFactory, list_item: Gtk.ListItem) -> None:
         # ── Header widget ────────────────────────────────────────────

@@ -755,6 +755,84 @@ def _settle(pump, rounds: int = 10) -> None:
     pump()
 
 
+def _seed_months(window, plan) -> None:
+    """plan: [(months_back, count), ...] — a library spread over real months,
+    which is what makes the date view build headers to jump between."""
+    import datetime
+
+    base = datetime.datetime(2026, 1, 20)
+    rows = []
+    for months_back, count in plan:
+        for i in range(count):
+            when = base - datetime.timedelta(days=30 * months_back, seconds=i * 60)
+            ts = when.timestamp()
+            rows.append((f"/x/M{months_back:03d}_{i:05d}.jpg", "photos", "image",
+                         "/x", f"M{months_back}_{i}.jpg", ts, 1000, None, ts))
+    window.database.wconn.executemany(
+        "INSERT OR REPLACE INTO media"
+        "(path,category,media_type,folder,name,mtime,size,thumb_path,seen_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?)", rows)
+    window.database.commit()
+
+
+@requires_display
+def test_a_jump_out_of_a_long_month_opens_at_the_next_one(seeded_window, pump) -> None:
+    """The case that kept coming back: the next month is 2400 photos away, so
+    it is nowhere near loaded when the arrow is pressed.
+
+    Note what this can assert now, and could not while the jump was a scroll:
+    the answer is the content of the window, not a pixel position. Row 0 is
+    the month that was jumped to, and the view is at the top of it. There is
+    no geometry left to be wrong about."""
+    _seed_months(seeded_window, [(0, 40), (1, 2400), (2, 60)])
+    seeded_window.settings.sort_modes = {"photos": "date"}
+    seeded_window._render()
+    vadj = _realised(seeded_window, pump)
+
+    store = seeded_window.gallery_grid.row_store
+    headers = [i for i in range(store.get_n_items()) if store.get_item(i).is_header]
+    assert len(headers) >= 2, "the long month's header never rendered"
+    long_month = store.get_item(headers[-1])
+
+    vadj.set_value(1500.0)                      # scrolled into the long month
+    seeded_window.jump_to_month(
+        long_month.header_year, long_month.header_month, +1)
+    _settle(pump)
+
+    first = store.get_item(0)
+    assert first.is_header, "the window does not start on a month"
+    assert (first.header_year, first.header_month) != (
+        long_month.header_year, long_month.header_month), "it never left the month"
+    assert vadj.get_value() == 0.0, "it opened somewhere other than the top"
+    assert seeded_window._window_start_offset == 2440, (
+        "the window opened at the wrong place in the library"
+    )
+
+
+@requires_display
+def test_jumping_back_up_returns_to_the_month_it_came_from(seeded_window, pump) -> None:
+    _seed_months(seeded_window, [(0, 40), (1, 2400), (2, 60)])
+    seeded_window.settings.sort_modes = {"photos": "date"}
+    seeded_window._render()
+    vadj = _realised(seeded_window, pump)
+
+    store = seeded_window.gallery_grid.row_store
+    headers = [i for i in range(store.get_n_items()) if store.get_item(i).is_header]
+    long_month = store.get_item(headers[-1])
+    seeded_window.jump_to_month(long_month.header_year, long_month.header_month, +1)
+    _settle(pump)
+
+    landed = store.get_item(0)
+    seeded_window.jump_to_month(landed.header_year, landed.header_month, -1)
+    _settle(pump)
+
+    back = store.get_item(0)
+    assert (back.header_year, back.header_month) == (
+        long_month.header_year, long_month.header_month)
+    assert seeded_window._window_start_offset == 40
+    assert vadj.get_value() == 0.0
+
+
 @requires_display
 def test_a_reset_render_really_lands_at_the_top(seeded_window, pump) -> None:
     """Measured on a realised window, because this is where it went wrong.

@@ -94,8 +94,9 @@ class GalleryRenderMixin:
         def _should_merge_nc(self) -> bool: ...
         def _sync_sort_controls(self) -> None: ...
         def _sync_new_folder_button(self) -> None: ...
+        def _cancel_nc_thumb_queue(self) -> None: ...
 
-    def _render(self, reset_scroll: bool = False) -> None:
+    def _render(self, reset_scroll: bool = False, start_offset: int = 0) -> None:
         # Preserve scroll position when refreshing the same view (e.g. after
         # scan). reset_scroll overrides that for the one caller that means
         # "start this view over" — re-tapping the tab you are already on,
@@ -137,7 +138,7 @@ class GalleryRenderMixin:
         elif sort_mode in ("folder", "folder_desc"):
             self._render_folders()
         elif self._date_mode(sort_mode) is not None:
-            self._render_date_groups(sort_mode)
+            self._render_date_groups(sort_mode, start_offset)
         else:
             self._render_flat(sort_mode)
         self.gallery_grid.finish()
@@ -206,25 +207,69 @@ class GalleryRenderMixin:
 
     def _load_first_page(
         self, sort_mode: str, folder: str | None, *,
-        include_nc: bool, media_filter: str | None,
+        include_nc: bool, media_filter: str | None, offset: int = 0,
     ) -> list[MediaItem]:
         """Fetch the first page for (category, folder, sort_mode) and reset the
         pagination bookkeeping (_total_count / current_items / _current_offset /
         _has_more_items). Returns the page so callers can append the items in
-        whatever layout (flat / date-grouped) they need."""
+        whatever layout (flat / date-grouped) they need.
+
+        *offset* opens the window somewhere other than the newest item — that
+        is how a month jump works: the month it lands on becomes the top of
+        the list rather than something to scroll to."""
         self._total_count = self.database.count_media(
             self.category, folder, include_nc=include_nc,
             media_filter=media_filter,
         )
         page = self.database.list_media_paginated(
             self.category, sort_mode, folder,
-            self._page_size, 0, include_nc=include_nc,
+            self._page_size, offset, include_nc=include_nc,
             media_filter=media_filter,
         )
         self.current_items = list(page)
-        self._current_offset = len(page)
+        self._window_start_offset = offset
+        self._current_offset = offset + len(page)
         self._has_more_items = self._current_offset < self._total_count
         return page
+
+    def jump_to_month(self, year: int, month: int, direction: int) -> None:
+        """Rebuild the view starting at the month next to (year, month).
+
+        The month arrows call this. It is a load, not a scroll: the database
+        says which month comes next and how many items sort ahead of it, the
+        window is rebuilt from that offset, and the month lands at the top of
+        the list. Nothing here depends on which rows happen to be loaded, on
+        pixel geometry GTK has not produced yet, or on the sliding window —
+        the three things that made every scroll-based version of this land
+        somewhere in the middle of a long month.
+        """
+        sort_mode = self.settings.get_sort_mode(self.category, self.current_folder)
+        mode = self._date_mode(sort_mode)
+        if mode is None:
+            return  # only the date views have months to jump between
+        order, _use_taken = mode
+        target = self.database.month_jump_target(
+            self.category, order, self.current_folder,
+            year=year, month=month, direction=direction,
+            include_nc=self._should_merge_nc(),
+            media_filter=self.settings.media_filter_for(self.category),
+        )
+        if target is None:
+            LOGGER.info(
+                "Monatssprung: von %04d-%02d Richtung %+d — kein weiterer Monat",
+                year, month, direction,
+            )
+            return
+        offset, target_year, target_month = target
+        # Logged at info so a report from a device can be checked against what
+        # the jump actually decided, rather than against a guess.
+        LOGGER.info(
+            "Monatssprung: %04d-%02d %+d → %04d-%02d bei Offset %d von %d",
+            year, month, direction, target_year, target_month,
+            offset, self._total_count,
+        )
+        self._cancel_nc_thumb_queue()
+        self._render(reset_scroll=True, start_offset=offset)
 
     def _render_flat(self, sort_mode: str) -> None:
         include_nc = self._should_merge_nc()
@@ -260,13 +305,14 @@ class GalleryRenderMixin:
         self._set_empty_state(visible=total == 0)
         self._set_status("")
 
-    def _render_date_groups(self, sort_mode: str = "date_taken") -> None:
+    def _render_date_groups(self, sort_mode: str = "date_taken",
+                            start_offset: int = 0) -> None:
         order, use_taken = self._DATE_MODES.get(sort_mode, ("newest", True))
         include_nc = self._should_merge_nc()
         media_filter = self.settings.media_filter_for(self.category)
         page = self._load_first_page(
             order, self.current_folder,
-            include_nc=include_nc, media_filter=media_filter,
+            include_nc=include_nc, media_filter=media_filter, offset=start_offset,
         )
         self._date_last_key = None
         for item in page:
