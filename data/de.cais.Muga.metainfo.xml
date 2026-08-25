@@ -69,6 +69,17 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.8" date="2026-08-25">
+      <description>
+        <p>Tapping the section you are already in now goes back to the top.
+        Since 0.5.7 the tap arrived, but the gallery jumped to the end of the
+        list instead of the start, so it took a second tap to get there.</p>
+        <p>Jumping from month to month in the date view keeps working however
+        far you go. After enough hops through a large library a jump could
+        land nowhere near a month, leaving you mid-list with no arrow to
+        carry on from.</p>
+      </description>
+    </release>
     <release version="0.5.7" date="2026-08-25">
       <description>
         <p>Tapping the section you are already in now really does reload it
