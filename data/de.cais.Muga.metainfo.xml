@@ -69,6 +69,19 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.4" date="2026-08-25">
+      <description>
+        <p>A photo taken or copied into a watched folder now shows up in the
+        gallery on its own, without a refresh.</p>
+        <p>Settings has moved to the three-dot menu at the top right.</p>
+        <p>The optional MCP server turns away requests that come from a web
+        page, so a site open in a browser cannot reach the media index through
+        the local port. A request whose body is refused as too large now ends
+        the connection instead of leaving the rest of it to be read as a
+        further request.</p>
+        <p>The Flatpak is built on the GNOME 50 runtime.</p>
+      </description>
+    </release>
     <release version="0.5.3" date="2026-08-25">
       <description>
         <p>Scanning a Nextcloud login code no longer risks taking the phone
