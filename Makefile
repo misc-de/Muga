@@ -4,10 +4,16 @@
 #
 #   make flatpak-gpg-key                  # once: create the signing key
 #   make flatpak-build FP_GPG=... FP_GPGHOME=...
-#   scripts/build-arch.sh on the phone, copy its .repo/ back
-#   make flatpak-merge ARM_REPO=<path>
+#   make flatpak-build FP_ARCH=aarch64 FP_GPG=... FP_GPGHOME=...
 #   make flatpak-publish FP_GPG=... FP_GPGHOME=...
 #   make flatpak-pages PUSH=1
+#
+# The aarch64 build runs here under qemu — `make flatpak-cross-setup` says what
+# that needs. Building on the phone instead still works and is the fallback
+# when the emulated build is not trusted for a release:
+#
+#   scripts/build-arch.sh on the phone, copy its .repo/ back
+#   make flatpak-merge ARM_REPO=<path>
 #
 # Everything about the app itself — tests, linting, installing from source —
 # lives in pyproject.toml and install.sh; this file is only about packaging.
@@ -17,7 +23,9 @@ FP_MANIFEST = $(APPID).yml
 VERSION     = $(shell sed -n 's/^VERSION = "\(.*\)"/\1/p' muga/__init__.py)
 
 FP_REPO     ?= repo
-FP_ARCH      = $(shell flatpak --default-arch)
+# The architecture to build. Defaults to this machine's; set FP_ARCH=aarch64 to
+# cross-build under qemu — see flatpak-cross-setup for what that needs.
+FP_ARCH     ?= $(shell flatpak --default-arch)
 FP_BUILDDIR ?= .flatpak-build/$(FP_ARCH)
 FP_GPG      ?=
 FP_GPGHOME  ?=
@@ -27,12 +35,13 @@ FP_BUILDER   = $(shell command -v flatpak-builder >/dev/null 2>&1 \
 		&& echo flatpak-builder || echo flatpak run org.flatpak.Builder)
 
 .PHONY: help flatpak-build flatpak-install flatpak-merge flatpak-publish \
-	flatpak-pages flatpak-repo-info flatpak-gpg-key flatpak-check
+	flatpak-pages flatpak-repo-info flatpak-gpg-key flatpak-check \
+	flatpak-cross-setup
 
 help:
 	@echo "Muga $(VERSION) — packaging targets"
 	@echo
-	@echo "  flatpak-build      build this machine's architecture into $(FP_REPO)/"
+	@echo "  flatpak-build      build $(FP_ARCH) into $(FP_REPO)/ (FP_ARCH=aarch64 to cross-build)"
 	@echo "  flatpak-install    build and install for the current user (to try it out)"
 	@echo "  flatpak-merge      pull in a repo built elsewhere (ARM_REPO=<path>)"
 	@echo "  flatpak-publish    sign every architecture, write summary and deltas"
@@ -40,10 +49,13 @@ help:
 	@echo "  flatpak-repo-info  show which app refs are in the repo"
 	@echo "  flatpak-gpg-key    create the project's own signing key"
 	@echo "  flatpak-check      run appstream and desktop-file validation"
+	@echo "  flatpak-cross-setup  check what a cross-build for FP_ARCH still needs"
 
-# Builds the current host architecture into $(FP_REPO).
+# Builds $(FP_ARCH) — this machine's architecture unless overridden — into
+# $(FP_REPO). Passing --arch explicitly is what makes FP_ARCH=aarch64 build
+# aarch64 rather than just naming the build directory after it.
 flatpak-build:
-	$(FP_BUILDER) --force-clean --repo=$(FP_REPO) $(FP_GPGARGS) \
+	$(FP_BUILDER) --force-clean --arch=$(FP_ARCH) --repo=$(FP_REPO) $(FP_GPGARGS) \
 		$(FP_BUILDDIR) $(FP_MANIFEST)
 	@echo "$(FP_ARCH) is now in $(FP_REPO)/. Refs: make flatpak-repo-info"
 
@@ -87,6 +99,33 @@ endif
 # where GitHub Pages serves them. Only pushes with `make flatpak-pages PUSH=1`.
 flatpak-pages:
 	scripts/publish-pages.sh $(if $(PUSH),--push,)
+
+# Checks whether this machine can cross-build for FP_ARCH, and says what is
+# missing if not. The aarch64 side used to mean building on the phone
+# (scripts/build-arch.sh); with qemu-user registered in binfmt_misc it can be
+# built here instead.
+#
+# The F flag on the binfmt registration is the part that matters: it pins the
+# interpreter into the kernel, so it is still reachable inside the build
+# sandbox, where /usr/bin/qemu-*-static is not mounted. Without it the build
+# fails with "exec format error" the moment it runs its first command.
+flatpak-cross-setup:
+	@echo "Cross-build check for $(FP_ARCH):"
+	@test "$(FP_ARCH)" != "$(shell flatpak --default-arch)" \
+		|| { echo "  $(FP_ARCH) is this machine's own architecture — nothing to emulate."; exit 0; }
+	@if [ -e /proc/sys/fs/binfmt_misc/qemu-$(FP_ARCH) ]; then \
+		echo "  binfmt: registered"; \
+		grep -q 'flags:.*F' /proc/sys/fs/binfmt_misc/qemu-$(FP_ARCH) \
+			&& echo "  binfmt: F flag set (works inside the sandbox)" \
+			|| echo "  binfmt: MISSING the F flag — the build will fail inside the sandbox"; \
+	else \
+		echo "  binfmt: not registered. Install qemu-user-static and"; \
+		echo "          qemu-user-static-binfmt (Arch), or the distribution's"; \
+		echo "          equivalent, then restart systemd-binfmt."; \
+	fi
+	@flatpak info org.gnome.Sdk/$(FP_ARCH)/49 >/dev/null 2>&1 \
+		&& echo "  runtime: org.gnome.Sdk/$(FP_ARCH)/49 installed" \
+		|| echo "  runtime: missing — flatpak install --user flathub org.gnome.Platform/$(FP_ARCH)/49 org.gnome.Sdk/$(FP_ARCH)/49"
 
 # Shows which app refs (architectures) are currently in the repo.
 flatpak-repo-info:
