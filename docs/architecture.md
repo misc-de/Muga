@@ -78,6 +78,28 @@ are created in `_MIGRATION_V10` and deliberately *not* in `SCHEMA_V1`: that
 script runs against pre-`taken_at` databases, where naming the column raises
 "no such column" — an error the constructor answers by discarding the index.
 
+## Spotting the same photo twice
+
+The aggregate views collapse repeats, and what counts as "the same photo"
+depends on what the source can tell us:
+
+* **name + size** is the baseline and all a local file offers — hashing those
+  would mean reading every byte of the library on every scan.
+* **a content checksum** is used on top where Nextcloud reports one
+  (`<oc:checksums>` in the PROPFIND; present only for files uploaded with a
+  checksum). It catches a copy that was renamed on the server, which name and
+  size cannot.
+
+The two are separate windows in `_one_row_per_file`, and a row must lead both.
+That makes the checksum purely additive: a row without one sits alone in its
+partition and always ranks first, so keying on the checksum can never split a
+pair that name+size had joined — which matters, because a synced photo has a
+checksum on the server side only.
+
+The second window is skipped entirely when `Database.has_checksums()` is false.
+It is not free — 32 ms of a 91 ms page on a 12k-picture phone library — and
+with no checksums anywhere it could only rank every row 1.
+
 ## Why mixins
 
 They are honest about what this is: one window object whose methods were

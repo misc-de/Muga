@@ -32,7 +32,7 @@ Muga follows the XDG base-dir spec
 |---|---|
 | `~/.config/muga/settings.json` | UI preferences, last-opened folder, Nextcloud URL and username (plaintext). |
 | `~/.config/muga/nc_password` | Nextcloud app-password, `0600`, **only** used when the system keyring is unavailable (see *Credentials* below). |
-| `~/.local/share/muga/muga.sqlite3` | Local media index: file paths, sizes, mtimes, capture dates, camera make/model and GPS coordinates read from EXIF, full-text search index over filenames and that EXIF. No image content. |
+| `~/.local/share/muga/muga.sqlite3` | Local media index: file paths, sizes, mtimes, capture dates, camera make/model and GPS coordinates read from EXIF, content checksums where a Nextcloud server reports them, full-text search index over filenames and that EXIF. No image content. |
 | `~/.cache/muga/thumbnails/` | Generated thumbnail JPEGs of your local photos. |
 | `~/.cache/muga/nextcloud/` | Cached thumbnails (and on-demand downloads) of Nextcloud photos. Cleared when you disconnect. |
 | `~/.cache/muga/debug.log`, `trace.log` | Diagnostic logs (off by default; opt-in via settings). |
