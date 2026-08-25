@@ -225,6 +225,21 @@ class MediaScanner:
                         LOGGER.debug("Skipping symlink: %s", entry.path)
                         continue
                     if entry.is_dir():
+                        # Hidden directories hold tooling, not photos. On a
+                        # phone the checkout sits in the same home the gallery
+                        # scans, and .flatpak-build alone carries a dozen
+                        # packaged app icons — they showed up as pictures. The
+                        # same applies to a location pointed at $HOME, where
+                        # .cache and .local hold every thumbnail and icon the
+                        # desktop ever generated.
+                        #
+                        # A root the user chose is unaffected even when it is
+                        # itself hidden: the walk seeds the stack with it
+                        # directly, so it never passes this check. Only
+                        # descending into one is refused.
+                        if entry.name.startswith("."):
+                            LOGGER.debug("Skipping hidden directory: %s", entry.path)
+                            continue
                         dpath = Path(entry.path)
                         # Don't descend into a no-inherit subtree — it's scanned
                         # under its own category elsewhere.

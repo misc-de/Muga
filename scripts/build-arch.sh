@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Muga for the architecture of the machine it runs on, into ./repo.
+# Builds Muga for the architecture of the machine it runs on, into ./.repo.
 #
 # Meant for the aarch64 side: the FuriPhone FLX1 has only the flatpaked
 # org.flatpak.Builder, whose build-finish/build-export step fails with
@@ -9,7 +9,13 @@
 #
 #   scripts/build-arch.sh [manifest]
 #
-# Result: ./repo carrying the ref app/de.cais.Muga/<arch>/master.
+# Result: ./.repo carrying the ref app/de.cais.Muga/<arch>/master.
+#
+# Dot-prefixed, like .flatpak-build and .flatpak-builder next to it. This runs
+# on a phone, where the checkout sits in the same home directory the file
+# manager and the gallery show — a few hundred MB of OSTree objects called
+# "repo" is clutter in every folder view on the device. Override with
+# FP_REPO=<path> if you want it somewhere else.
 set -euo pipefail
 
 manifest="${1:-de.cais.Muga.yml}"
@@ -17,7 +23,7 @@ appid="$(basename "$manifest" .yml)"
 appid="${appid%.flathub}"
 arch="$(flatpak --default-arch)"
 builddir=".flatpak-build/$arch"
-repo="${FP_REPO:-repo}"
+repo="${FP_REPO:-.repo}"
 
 if command -v flatpak-builder >/dev/null 2>&1; then
     builder=(flatpak-builder)
@@ -63,5 +69,14 @@ echo "==> Exporting to $repo"
 flatpak build-export "$repo" "$builddir" master
 
 echo
-echo "Done. The repo now holds:"
+echo "Done. $repo now holds:"
 find "$repo/refs/heads/app" -type f 2>/dev/null | sed "s|$repo/refs/heads/|  |"
+
+# The export directory used to be ./repo. One left over from then still looks
+# like a finished build — copying that one back to the desktop would merge a
+# stale architecture into the release without any warning.
+if [[ "$repo" != "repo" && -d repo/refs ]]; then
+    echo
+    echo "Note: an older ./repo is still here from before this script moved to"
+    echo "$repo. Copy back $repo, not repo/ — and delete repo/ once you have."
+fi

@@ -20,9 +20,12 @@ build-dir/
 
 # The OSTree repositories the Flatpaks are exported into. They are a cache,
 # not history: repo/ is published to the gh-pages branch instead, and repo-arm/
-# is what scripts/build-arch.sh produced on the phone.
+# is what scripts/build-arch.sh produced on the phone. .repo/ is where that
+# script writes on the phone itself — dot-prefixed so it stays out of the
+# folder views on a device whose home directory is also the user's.
 repo/
 repo-arm/
+.repo/
 
 # Compiled translation catalogues — po/*.po is the source of truth,
 # tools/i18n.py compile regenerates these.
