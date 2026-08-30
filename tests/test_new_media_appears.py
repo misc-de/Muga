@@ -447,32 +447,3 @@ def test_the_window_forgets_a_reported_path_that_is_gone(library) -> None:
     GalleryWindow._index_paths(win, [str(shot)])
 
     assert library.database.count_media("pictures") == 0
-
-
-def test_a_capture_is_indexed_whatever_category_is_open(library) -> None:
-    """The reported bug: the callback used to trigger a rescan scoped to the
-    category on screen, so a shot taken while Videos or Nextcloud was open was
-    never indexed. Nothing here says which category is open, because the
-    capture no longer cares."""
-    from muga.app import GalleryWindow
-
-    shot = _jpeg(library.root / "20260825_101530.jpg")
-    win = _window(library)
-    started: list = []
-    win._index_paths = lambda paths: started.append(paths)
-
-    GalleryWindow._on_camera_captured(win, shot)
-    for _ in range(200):
-        if started:
-            break
-        time.sleep(0.01)
-
-    assert started == [[str(shot)]]
-
-
-def test_the_camera_no_longer_asks_for_a_scoped_rescan() -> None:
-    source = Path(__file__).resolve().parent.parent / "muga" / "app.py"
-    text = source.read_text(encoding="utf-8")
-
-    assert "on_captured=self._on_camera_captured," in text
-    assert 'on_captured=lambda _p: self.refresh(scan=True, scope="current")' not in text

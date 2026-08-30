@@ -117,7 +117,6 @@ class GallerySelectionMixin:
     _sel_move_btn: Gtk.Button
     _sel_share_btn: Gtk.Button
     back_button: Gtk.Button
-    camera_button: Gtk.Button
     new_folder_button: Gtk.Button
     refresh_button: Gtk.Button
     search_button: Gtk.ToggleButton
@@ -180,7 +179,6 @@ class GallerySelectionMixin:
         self.refresh_button.set_visible(False)
         self.settings_button.set_visible(False)
         self.sort_button.set_visible(False)
-        self.camera_button.set_visible(False)
         self._sel_cancel_btn.set_visible(True)
         self._sel_delete_btn.set_visible(True)
         self._sel_move_btn.set_visible(True)
@@ -210,7 +208,6 @@ class GallerySelectionMixin:
         self.refresh_button.set_visible(True)
         self.settings_button.set_visible(True)
         self.sort_button.set_visible(True)
-        self.camera_button.set_visible(True)
         # Splice every visible row back so check-mark overlays disappear,
         # without re-querying the database or losing the scroll position.
         self.gallery_grid.refresh_selection_state()
