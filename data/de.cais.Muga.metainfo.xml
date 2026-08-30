@@ -69,6 +69,20 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.16" date="2026-08-30">
+      <description>
+        <p>The built-in camera is no longer offered. Its handling stayed a long
+        way behind the camera FuriOS ships, and a shutter button that takes a
+        worse picture than the one already on the phone is not worth the space
+        in the header bar. Everything else about photos is unchanged: shots
+        taken with any other camera app still appear in the grid on their own,
+        without a refresh.</p>
+        <p>Photos also keep their details outside Muga again. The block holding
+        capture date, camera model and GPS was written with a doubled header,
+        which Muga's own gallery read back without complaint while stricter
+        tools declared it malformed and dropped all of it.</p>
+      </description>
+    </release>
     <release version="0.5.15" date="2026-08-25">
       <description>
         <p>Photos taken by hand in a dim room are sharp instead of smeared. The
