@@ -152,18 +152,11 @@ flatpak-repo-info:
 	@ostree --repo=$(FP_REPO) refs 2>/dev/null | grep -E "^app/" | sort \
 		|| echo "(no $(FP_REPO) built yet)"
 
-# What Flathub's CI checks. The metainfo and desktop entry validate with host
-# tools; the manifest needs flatpak-builder-lint, which ships inside
-# org.flatpak.Builder (flatpak install -y --user flathub org.flatpak.Builder).
-#
-# Known findings on the Flathub manifest, both explained in docs/flathub.md:
-# appid-url-not-reachable (the ID names a GitHub account that is not ours) and
-# appid-filename-mismatch (expected — the file is renamed on submission).
+# The metainfo and desktop entry are what every store front and the desktop
+# shell read; both validate with host tools.
 flatpak-check:
 	appstreamcli validate --explain data/$(APPID).metainfo.xml || true
 	desktop-file-validate data/$(APPID).desktop || true
-	@flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
-		manifest $(APPID).flathub.yml || true
 
 # Creates the project's own signing key in a project-local GnuPG directory
 # (not in the personal keyring) and writes it into the .flatpakrepo.

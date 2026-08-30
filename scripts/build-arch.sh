@@ -20,7 +20,6 @@ set -euo pipefail
 
 manifest="${1:-de.cais.Muga.yml}"
 appid="$(basename "$manifest" .yml)"
-appid="${appid%.flathub}"
 arch="$(flatpak --default-arch)"
 builddir=".flatpak-build/$arch"
 repo="${FP_REPO:-.repo}"

@@ -95,8 +95,7 @@ sandbox cannot reach — on those phones use `install.sh` above. See
 [docs/compatibility.md](docs/compatibility.md).
 
 Packaging the repository yourself — both architectures, signing, gh-pages —
-is in the [Makefile](Makefile) (`make help`); the Flathub submission is
-described in [docs/flathub.md](docs/flathub.md).
+is in the [Makefile](Makefile) (`make help`).
 
 For camera release checks on phones and desktops, see
 [docs/camera-validation.md](docs/camera-validation.md).
