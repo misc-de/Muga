@@ -12,13 +12,12 @@
     <p>
       Muga is a GTK 4 and libadwaita photo gallery for Linux desktops and
       phones. It indexes local media folders, shows cached thumbnails, plays
-      videos, edits photos, connects to Nextcloud Photos, and includes a
-      camera for photo and video capture.
+      videos, edits photos, and connects to Nextcloud Photos.
     </p>
     <p>
-      On Halium and gst-droid based phones such as FuriOS devices, Muga can
-      use the device camera HAL directly for flash, video light, orientation,
-      and geotagging workflows.
+      Shots taken with the phone's own camera app appear in the grid on their
+      own, without a manual refresh, and are sorted by the date the camera
+      recorded rather than the day the file was written.
     </p>
   </description>
   <launchable type="desktop-id">de.cais.Muga.desktop</launchable>

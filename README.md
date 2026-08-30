@@ -1,4 +1,4 @@
-# Muga — Photo Gallery & Camera
+# Muga — Photo Gallery
 
 A fast, clean photo and video gallery for Linux desktops and Linux phones (Phosh / FuriOS), built with GTK 4 and libadwaita.  
   
@@ -10,7 +10,7 @@ A fast, clean photo and video gallery for Linux desktops and Linux phones (Phosh
 
 ## What is Muga?
 
-Muga is a gallery app that feels right at home on a modern GNOME desktop and adapts to Linux phones running Phosh (FuriOS, Droidian, UBports). It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. It now also includes a built-in **Camera** that captures photos and video — on phones running Halium / gst-droid the camera taps directly into the hardware (flash, torch, sensors). In addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
+Muga is a gallery app that feels right at home on a modern GNOME desktop and adapts to Linux phones running Phosh (FuriOS, Droidian, UBports). It scans your media folders, ensures consistently smooth performance thanks to a thumbnail cache and an SQLite index, and stays out of your way while doing so. Shots taken with the phone's own camera app appear in the grid on their own, without a manual refresh. In addition to several editing features, it allows you to effortlessly integrate your Nextcloud Photos.
 
 ---
 
@@ -30,17 +30,14 @@ Muga is a gallery app that feels right at home on a modern GNOME desktop and ada
 
 - **Multiple libraries**  
 separate tabs for Photos, Pictures, Videos, Screenshots, and any extra folders you add
-- **Built-in camera**  
-capture photos and record video without leaving the app; swipe the shutter between photo and video modes. On Halium / gst-droid phones (FuriOS, Droidian, …) the camera drives the HAL directly:
-  - optional geotagging via GeoClue2, with EXIF written in place — no JPEG re-encode
-  - self-timer (3 / 10 s), pinch-to-zoom, tap-to-focus, flash for photos, video light / torch for recording, JPEG quality presets, video quality presets
-  - handedness toggle (right / left / neutral) so the shutter button sits under your thumb
+- **New photos appear on their own**  
+a shot from any camera app, a screenshot, a file manager copy or a sync client shows up in the grid without a manual refresh
 - **Mobile-adaptive UI**  
 narrow-window breakpoints hide / re-order desktop-only chrome on phones; pull-to-refresh replaces the title-bar refresh icon
 - **Nextcloud sync**  
 browse your Nextcloud photo library directly, no FUSE or GVFS mount needed; thumbnails load on demand
 - **QR code scanner**  
-scan Nextcloud app-password QR codes straight from the camera to connect your account instantly
+scan Nextcloud app-password QR codes with the device camera to connect your account instantly
 - **Date grouping**  
 sort by date and photos are grouped under clear section headers (day / week / month / year). Two date sorts, because a photo has two dates: **Date (recorded)** uses the EXIF capture date, **Date (file)** the file's own timestamp — a shoot copied off a card today lands under the year it was taken, not under today. Long galleries use a sliding window: only the visible months stay in memory so jumping forward through years stays fast.
 - **Built-in editor**  
@@ -89,16 +86,10 @@ flatpak install -y flathub org.gnome.Platform//50 org.gnome.Sdk//50
 flatpak-builder --user --install --force-clean build-dir de.cais.Muga.yml
 flatpak run de.cais.Muga
 ```
-The Flatpak covers desktops and v4l2 webcams. The Halium / gst-droid camera
-path (FuriOS, Droidian) needs the Android HAL and sysfs torch nodes, which a
-sandbox cannot reach — on those phones use `install.sh` above. See
-[docs/compatibility.md](docs/compatibility.md).
 
 Packaging the repository yourself — both architectures, signing, gh-pages —
 is in the [Makefile](Makefile) (`make help`).
 
-For camera release checks on phones and desktops, see
-[docs/camera-validation.md](docs/camera-validation.md).
 For the module layout, see [docs/architecture.md](docs/architecture.md); for
 the GTK/libadwaita versions Muga targets, [docs/compatibility.md](docs/compatibility.md).
 
