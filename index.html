@@ -7,7 +7,7 @@ code,pre{background:#f4f4f4;border-radius:4px}pre{padding:1rem;overflow:auto}cod
 </head><body>
 <h1>Muga</h1>
 <p>A GTK 4 and libadwaita photo and video gallery for Linux desktops and phones —
-with thumbnails, an editor, Nextcloud Photos and a built-in camera.
+with thumbnails, an editor and Nextcloud Photos.
 Signed Flatpak repository for <b>x86_64</b> and <b>aarch64</b>.</p>
 <h2>Install</h2>
 <pre>flatpak remote-add --if-not-exists muga https://misc-de.github.io/Muga/de.cais.Muga.flatpakrepo
@@ -22,9 +22,5 @@ remote above again — a Flatpak's data lives under its ID, so the gallery
 rebuilds its index on first start:</p>
 <pre>flatpak uninstall --delete-data io.github.miscde.Muga
 flatpak remote-delete muga</pre>
-<h2>Cameras</h2>
-<p>v4l2 webcams work in the sandbox. The Halium / gst-droid path (FuriOS,
-Droidian) does not — it needs the Android HAL and sysfs torch nodes a sandbox
-cannot reach. On those phones install from source with <code>install.sh</code>.</p>
 <p>Source: <a href="https://github.com/misc-de/Muga">github.com/misc-de/Muga</a>.</p>
 </body></html>
