@@ -15,14 +15,7 @@ Muga is a gallery app that feels right at home on a modern GNOME desktop and ada
 ---
 
 ## Screenshots
-<img width="270" alt="Overview — every library in one grid" src="data/screenshots/overview.jpg" />
-<img width="270" alt="Photos grouped by month and year" src="data/screenshots/date-grouping.jpg" />
-<img width="270" alt="Full-screen viewer" src="data/screenshots/viewer.jpg" />
-<img width="270" alt="Editor — filters" src="data/screenshots/editor-filters.jpg" />
-<img width="270" alt="Editor — brightness, contrast and colour channels" src="data/screenshots/editor-adjust.jpg" />
-<img width="270" alt="Settings — media folders" src="data/screenshots/settings-folders.jpg" />
-<img width="270" alt="Settings — appearance and cache" src="data/screenshots/settings-appearance.jpg" />
-<img width="270" alt="Settings — Nextcloud" src="data/screenshots/settings-nextcloud.jpg" />
+<img width="270" alt="Overview — every library in one grid" src="data/screenshots/overview.jpg" /> <img width="270" alt="Photos grouped by month and year" src="data/screenshots/date-grouping.jpg" /> <img width="270" alt="Full-screen viewer" src="data/screenshots/viewer.jpg" /> <img width="270" alt="Editor — filters" src="data/screenshots/editor-filters.jpg" /> <img width="270" alt="Editor — brightness, contrast and colour channels" src="data/screenshots/editor-adjust.jpg" /> <img width="270" alt="Settings — media folders" src="data/screenshots/settings-folders.jpg" /> <img width="270" alt="Settings — appearance and cache" src="data/screenshots/settings-appearance.jpg" /> <img width="270" alt="Settings — Nextcloud" src="data/screenshots/settings-nextcloud.jpg" />
 
 ---
 
