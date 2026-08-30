@@ -530,6 +530,33 @@ def test_exif_patch_ignores_an_empty_file(tmp_path: Path) -> None:
     assert path.read_bytes() == b""
 
 
+def test_exif_patch_does_not_double_the_exif_header(tmp_path: Path) -> None:
+    """Pillow 12 returns the "Exif" header inside tobytes(); older versions
+    returned bare TIFF. Prefixing it a second time leaves every TIFF offset
+    in the block pointing six bytes past its data. Pillow still reads that
+    back — it re-finds the header — so it stayed invisible in Muga's own
+    gallery, while exiftool called the segment malformed and dropped it."""
+    PILImage = pytest.importorskip("PIL.Image")
+
+    exif = PILImage.Exif()
+    exif[0x010F] = "Muga"
+    path = tmp_path / "shot.jpg"
+    PILImage.new("RGB", (8, 8)).save(path)
+    capture_io._write_exif_app1_inplace(path, exif.tobytes())
+
+    raw = path.read_bytes()
+    payload = raw[6:4 + int.from_bytes(raw[4:6], "big")]
+    header = b"Exif\x00\x00"
+    assert payload.startswith(header)
+    assert not payload[6:].startswith(header), "the EXIF header was written twice"
+
+    # ...and the offset the block opens with still lands inside it.
+    tiff = payload[6:]
+    order = "little" if tiff[:2] == b"II" else "big"
+    ifd0 = int.from_bytes(tiff[4:8], order)
+    assert 0 < ifd0 < len(tiff), f"IFD0 offset {ifd0} outside a {len(tiff)}-byte block"
+
+
 def test_exif_patch_refuses_an_oversized_payload(tmp_path: Path) -> None:
     """APP1's length field is a uint16; anything bigger needs Extended EXIF."""
     path = tmp_path / "photo.jpg"

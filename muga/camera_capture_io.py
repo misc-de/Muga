@@ -59,11 +59,16 @@ except (ValueError, ImportError):
     GExiv2 = None  # type: ignore
     _HAS_GEXIV2 = False
 
+# The APP1 segment header that precedes the TIFF block proper.
+_EXIF_HEADER = b"Exif\x00\x00"
+
+
 def _write_exif_app1_inplace(path: Path, exif_tiff: bytes) -> None:
     """Patch a JPEG's APP1 (EXIF) segment in place — no decode / re-
-    encode of the pixel data. `exif_tiff` is the raw TIFF blob that
-    PIL.Image.Exif().tobytes() returns (no marker, no length, no
-    "Exif\\0\\0" prefix — we add those here).
+    encode of the pixel data. `exif_tiff` is what
+    PIL.Image.Exif().tobytes() returns — with or without the leading
+    "Exif\\0\\0" (Pillow 12 includes it, older versions did not).
+    The marker and length are added here either way.
 
     JPEG layout we care about::
 
@@ -85,7 +90,17 @@ def _write_exif_app1_inplace(path: Path, exif_tiff: bytes) -> None:
         # Not a JPEG (or empty) — nothing to patch.
         return
     # Build the new APP1 (EXIF) segment.
-    body = b"Exif\x00\x00" + exif_tiff
+    #
+    # Pillow 12 returns the header as part of Exif.tobytes(); older
+    # versions returned bare TIFF, which is what this was written
+    # against. Prefixing unconditionally wrote the header twice, and
+    # the TIFF offsets inside then pointed six bytes past their data.
+    # Pillow reads that back regardless — it re-finds the header — so
+    # Muga's own gallery never noticed, while exiftool and anything
+    # stricter reported a malformed APP1 and dropped the lot.
+    body = exif_tiff
+    if not body.startswith(_EXIF_HEADER):
+        body = _EXIF_HEADER + body
     if len(body) > 0xFFFD:
         # APP1 length field is uint16 and includes itself (2 bytes).
         # Anything bigger needs the Extended-EXIF spec we don't support.
