@@ -41,7 +41,6 @@ from .scanner import MediaScanner
 from .thumbnails import Thumbnailer, pillow_version_warning
 from .viewer import ViewerWindow
 from .watcher import MediaWatcher
-from .camera import CameraWindow, camera_supported
 
 LOGGER = logging.getLogger(__name__)
 
@@ -491,7 +490,7 @@ class GalleryWindow(
         # Pack order on the end (right) edge: settings first, so the three-dot
         # menu ends up flush against the right-hand corner of the titlebar (the
         # first pack_end widget is the outermost one) — the same spot Emilia
-        # puts it. Sort and camera line up to its left.
+        # puts it. Sort lines up to its left.
         self.settings_button = Gtk.Button.new_from_icon_name("xsi-view-more-symbolic")
         self.settings_button.set_tooltip_text(self._("Settings"))
         self.settings_button.connect("clicked", self._open_settings)
@@ -504,12 +503,6 @@ class GalleryWindow(
         self._sort_popover.set_child(self._build_sort_controls())
         self.sort_button.set_popover(self._sort_popover)
         self.header.pack_end(self.sort_button)
-
-        self.camera_button = Gtk.Button.new_from_icon_name("camera-photo-symbolic")
-        self.camera_button.set_tooltip_text(self._("Open camera"))
-        self.camera_button.connect("clicked", self._open_camera)
-        self.camera_button.set_sensitive(camera_supported())
-        self.header.pack_end(self.camera_button)
 
         # ── Selection-mode header widgets (hidden until long-press activates) ──
         # Swapped layout: trash sits on the LEFT (start), close on the RIGHT
@@ -1204,23 +1197,6 @@ class GalleryWindow(
             # of photo-taking leaks one file descriptor per capture.
             self.database.close_thread_connection()
 
-    def _on_camera_captured(self, path: Path) -> None:
-        """A shot from the built-in camera just hit disk.
-
-        Indexed directly instead of through a scoped rescan: the rescan this
-        used to trigger only covered the category being *viewed*, so a photo
-        taken while Videos or Nextcloud was open never reached the index at
-        all, and even on Overview the picture only appeared after a walk of
-        the whole library. The watcher would catch this file too — this path
-        just gets it on screen at once, and still works when the library is
-        too deep to watch.
-        """
-        if self._closing:
-            return
-        threading.Thread(
-            target=self._index_paths, args=([str(path)],), daemon=True,
-        ).start()
-
     def _nc_error_reason(self, error: Exception) -> str:
         """A short, human tooltip for the broken badge."""
         if isinstance(error, PermissionError):
@@ -1615,20 +1591,6 @@ class GalleryWindow(
         # dialog. Returning False on close-request lets the close proceed.
         self._settings_dialog = None
         return False
-
-    def _open_camera(self, _button: Gtk.Button) -> None:
-        save_dir = Path(self.settings.photos_dir)
-        video_dir = Path(self.settings.videos_dir) if self.settings.videos_dir else save_dir
-        win = CameraWindow(
-            self,
-            save_dir=save_dir,
-            video_dir=video_dir,
-            translator=self._,
-            on_captured=self._on_camera_captured,
-            handedness=self.settings.handedness,
-            settings=self.settings,
-        )
-        win.present()
 
     def _show_privacy_info(self, _button: Gtk.Button) -> None:
         """Show privacy and help information dialog."""

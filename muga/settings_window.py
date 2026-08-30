@@ -181,22 +181,6 @@ class SettingsWindow(Adw.PreferencesWindow):
             ),
         ))
 
-        handedness_group = Adw.PreferencesGroup(
-            title=self._("Handedness"),
-            description=self._(
-                "Which side thumb-reachable camera controls sit on."
-            ),
-        )
-        app.add(handedness_group)
-        handedness_group.add(self._combo_row(
-            "handedness", "Camera buttons",
-            [
-                ("right",   "Right-handed"),
-                ("left",    "Left-handed"),
-                ("neutral", "Neutral (centred)"),
-            ],
-        ))
-
         video_group = Adw.PreferencesGroup(
             title=self._("Video"),
             description=self._("Leave empty to use built-in playback"),
