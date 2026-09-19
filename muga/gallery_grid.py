@@ -862,8 +862,9 @@ class GalleryGrid(Gtk.Overlay):
         right_click.connect("pressed", self._on_tile_right_click, list_item, tile_index)
         button.add_controller(right_click)
 
-        # 2-second long-press → enter selection mode. GtkGestureLongPress is
-        # hard-capped at delay_factor 2.0 (≤ 1 s on a 500 ms system default),
+        # Long-press → enter selection mode. GtkGestureLongPress is
+        # hard-capped at delay_factor 2.0 (≤ 1 s on a 500 ms system default)
+        # and not tunable per widget,
         # so we roll our own with a GLib timeout. The press detector runs in
         # CAPTURE phase so set_state(CLAIMED) on fire propagates to the
         # button's built-in click gesture and suppresses the trailing
@@ -1120,16 +1121,16 @@ class GalleryGrid(Gtk.Overlay):
         widget = gesture.get_widget()
         self.owner._show_context_menu(gesture, 1, x, y, row.media_item, widget)
 
-    # ── Custom 2-second long-press ───────────────────────────────────
-    # GtkGestureLongPress maxes out around 1 s; we want a slower, more
-    # deliberate hold before entering selection mode (the user explicitly
-    # asked for "after holding two seconds"). Per-press state lives on the
-    # gesture object so multiple touch sequences across tiles don't
+    # ── Custom long-press ────────────────────────────────────────────
+    # GtkGestureLongPress maxes out around 1 s; we want a slightly slower,
+    # deliberate hold before entering selection mode. Per-press state lives
+    # on the gesture object so multiple touch sequences across tiles don't
     # clobber each other.
 
-    # 2000 ms feels like ~3 s in practice (event-routing latency on top of
-    # the timer); 1300 ms lands at the user's "two-ish seconds" mark.
-    _LONG_PRESS_HOLD_MS = 1300
+    # Event-routing latency stacks on top of the timer, so the hold feels
+    # roughly 1.5x longer than the constant: 2000 ms felt like ~3 s, 1300 ms
+    # like ~2 s. 1000 ms lands at the user's "one and a half seconds" mark.
+    _LONG_PRESS_HOLD_MS = 1000
     _LONG_PRESS_MOVE_THRESHOLD_SQ = 16.0 * 16.0  # ~16 px before we abort
 
     def _on_tile_press(

@@ -143,7 +143,7 @@ def test_thumb_exists_evicts_when_cache_is_full(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2.  Custom 1.3 s long-press: timer constants, motion abort, fire path
+# 2.  Custom 1 s long-press: timer constants, motion abort, fire path
 # ---------------------------------------------------------------------------
 
 class _StubGesture:
@@ -161,16 +161,17 @@ def _long_press_self():
     """Carrier for unbound long-press method calls."""
     return SimpleNamespace(
         _last_long_press_at=0.0,
-        _LONG_PRESS_HOLD_MS=1300,
+        _LONG_PRESS_HOLD_MS=1000,
         _LONG_PRESS_MOVE_THRESHOLD_SQ=16.0 * 16.0,
     )
 
 
 def test_long_press_timer_threshold_is_close_to_one_and_a_half_seconds() -> None:
     from muga.gallery_grid import GalleryGrid
-    # Audit said 2000 ms felt like 3 s; we tuned to 1300 ms. Keep it
-    # bracketed so future tweaks don't accidentally land on 0.3 s or 5 s.
-    assert 800 <= GalleryGrid._LONG_PRESS_HOLD_MS <= 1500
+    # Routing latency makes the hold feel ~1.5x the constant: 2000 ms felt
+    # like 3 s, 1300 ms like 2 s, so 1000 ms is the 1.5 s the user asked for.
+    # Keep it bracketed so future tweaks don't land on 0.3 s or 5 s.
+    assert 700 <= GalleryGrid._LONG_PRESS_HOLD_MS <= 1300
 
 
 def test_motion_inside_threshold_does_not_abort() -> None:
