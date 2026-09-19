@@ -38,6 +38,12 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
+# Zoom step per wheel notch (Ctrl + wheel) and per Ctrl +/- keypress. The
+# keyboard step is the coarser of the two: a keypress is a deliberate act,
+# a wheel notch is often one of many.
+_WHEEL_ZOOM_STEP = 1.15
+_KEY_ZOOM_STEP = 1.25
+
 
 def _write_in_place_atomic(path: str, write) -> None:
     """Run ``write(tmp_path)`` and only then replace *path* with the result.
@@ -367,6 +373,21 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_gesture.connect("end", lambda *_: setattr(self, "_zoom_committed", False))
         self.stack.add_controller(self.zoom_gesture)
         self._zoom_committed: bool = False
+        # Desktop counterpart to the pinch gesture: Ctrl + mouse wheel zooms
+        # towards the pointer. Runs in the capture phase so it still fires
+        # once the image is zoomed in and the ScrolledWindow below would
+        # otherwise swallow the wheel event for panning.
+        self.scroll_controller = Gtk.EventControllerScroll()
+        self.scroll_controller.set_flags(Gtk.EventControllerScrollFlags.BOTH_AXES)
+        self.scroll_controller.connect("scroll", self._on_scroll)
+        self.stack.add_controller(self.scroll_controller)
+        # Track the pointer so wheel and keyboard zoom know what to zoom in on.
+        self.motion_controller = Gtk.EventControllerMotion()
+        self.motion_controller.connect("motion", self._on_pointer_motion)
+        self.motion_controller.connect("leave", self._on_pointer_leave)
+        self.stack.add_controller(self.motion_controller)
+        self._pointer_x: float | None = None
+        self._pointer_y: float | None = None
         self.click_gesture = Gtk.GestureClick()
         # set_exclusive: only fire when exactly one touch/button is involved,
         # so a two-finger pinch never registers as a click.
@@ -535,6 +556,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.drag_gesture.set_propagation_phase(phase)
         self.zoom_gesture.set_propagation_phase(phase)
         self.click_gesture.set_propagation_phase(phase)
+        self.scroll_controller.set_propagation_phase(phase)
 
     def _show_nc_blocked(self, item: MediaItem) -> None:
         """Render a placeholder for an NC item when the NC connection is
@@ -1228,6 +1250,18 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self._on_editor_redo()
                 return True
             return False
+        if state & Gdk.ModifierType.CONTROL_MASK and not self._current_is_video:
+            # Ctrl +/- and Ctrl+0, the shortcuts every other viewer uses.
+            # KEY_equal covers layouts where + sits behind Shift.
+            if keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add, Gdk.KEY_ZoomIn):
+                self._zoom_towards(self.zoom_scale * _KEY_ZOOM_STEP)
+                return True
+            if keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract, Gdk.KEY_ZoomOut):
+                self._zoom_towards(self.zoom_scale / _KEY_ZOOM_STEP)
+                return True
+            if keyval in (Gdk.KEY_0, Gdk.KEY_KP_0):
+                self._reset_zoom()
+                return True
         if keyval in (Gdk.KEY_Left, Gdk.KEY_Up):
             self.previous()
             return True
@@ -1307,6 +1341,27 @@ class ViewerWindow(Adw.ApplicationWindow):
 
             GLib.idle_add(_apply)
 
+    def _on_pointer_motion(self, _controller: Gtk.EventControllerMotion, x: float, y: float) -> None:
+        self._pointer_x = x
+        self._pointer_y = y
+
+    def _on_pointer_leave(self, _controller: Gtk.EventControllerMotion) -> None:
+        self._pointer_x = None
+        self._pointer_y = None
+
+    def _on_scroll(self, controller: Gtk.EventControllerScroll, _dx: float, dy: float) -> bool:
+        """Ctrl + wheel zooms towards the pointer; a plain wheel keeps
+        scrolling the zoomed image, so we let that one through untouched."""
+        if self._editor is not None or self._current_is_video:
+            return False
+        state = controller.get_current_event_state()
+        if not (state & Gdk.ModifierType.CONTROL_MASK) or not dy:
+            return False
+        # One wheel notch is dy = ±1; a touchpad sends finer deltas, so the
+        # exponent keeps both feeling proportional. Wheel up (dy < 0) zooms in.
+        self._zoom_towards(self.zoom_scale * (_WHEEL_ZOOM_STEP ** -dy), self._pointer_x, self._pointer_y)
+        return True
+
     def _on_viewer_press_begin(self, _gesture, _n_press: int, x: float, y: float) -> None:
         """Stash press coordinates so the released handler can tell a real
         tap apart from a swipe."""
@@ -1331,6 +1386,36 @@ class ViewerWindow(Adw.ApplicationWindow):
             self._set_chrome_visible(not self._chrome_visible)
         elif not self._current_is_video and n_press == 2:
             self._reset_zoom()
+
+    def _zoom_towards(self, scale: float, focus_x: float | None = None, focus_y: float | None = None) -> None:
+        """Zoom to *scale* while keeping the content under (focus_x, focus_y)
+        in place. Without a focus point the viewport centre stays put."""
+        scroller = self.zoom_scroller
+        if scroller is None:
+            self._set_zoom(scale)
+            return
+        if focus_x is None or focus_y is None:
+            focus_x = scroller.get_width() / 2
+            focus_y = scroller.get_height() / 2
+        hadj = scroller.get_hadjustment()
+        vadj = scroller.get_vadjustment()
+        previous = max(self.zoom_scale, 0.01)
+        cx = (hadj.get_value() + focus_x) / previous
+        cy = (vadj.get_value() + focus_y) / previous
+        self._set_zoom(scale)
+        if self.zoom_scale <= 1.01:
+            return
+        target = self.zoom_scale
+        fx, fy = focus_x, focus_y
+
+        def _apply() -> bool:
+            # The size request from _apply_zoom only reaches the adjustments
+            # after the next layout pass, so re-anchor once that has run.
+            self._set_adjustment_for_focus(scroller.get_hadjustment(), cx, target, fx)
+            self._set_adjustment_for_focus(scroller.get_vadjustment(), cy, target, fy)
+            return GLib.SOURCE_REMOVE
+
+        GLib.idle_add(_apply)
 
     def _set_zoom(self, scale: float) -> None:
         self.zoom_scale = min(max(scale, 1.0), 6.0)

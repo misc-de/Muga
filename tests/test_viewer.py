@@ -359,6 +359,113 @@ def test_apply_zoom_without_a_mounted_view() -> None:
     viewer.ViewerWindow._apply_zoom(win)
 
 
+
+# ---------------------------------------------------------------------------
+# Zoom from the wheel and the keyboard
+# ---------------------------------------------------------------------------
+
+def _scroll_controller(ctrl: bool):
+    from gi.repository import Gdk
+    controller = MagicMock()
+    controller.get_current_event_state.return_value = (
+        Gdk.ModifierType.CONTROL_MASK if ctrl else Gdk.ModifierType(0)
+    )
+    return controller
+
+
+def _wheel_win(**extra):
+    defaults = dict(_editor=None, _current_is_video=False, zoom_scale=1.0,
+                    _pointer_x=100.0, _pointer_y=50.0, _zoom_towards=MagicMock())
+    defaults.update(extra)
+    return SimpleNamespace(**defaults)
+
+
+def test_ctrl_wheel_up_zooms_in() -> None:
+    win = _wheel_win()
+    handled = viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, -1.0)
+    assert handled is True
+    scale, x, y = win._zoom_towards.call_args.args
+    assert scale > 1.0, "wheel up did not magnify"
+    assert (x, y) == (100.0, 50.0), "zoom ignored the pointer"
+
+
+def test_ctrl_wheel_down_zooms_out() -> None:
+    win = _wheel_win(zoom_scale=3.0)
+    viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, 1.0)
+    assert win._zoom_towards.call_args.args[0] < 3.0
+
+
+def test_plain_wheel_still_scrolls_the_zoomed_photo() -> None:
+    """Without Ctrl the wheel belongs to the ScrolledWindow, so we pass."""
+    win = _wheel_win(zoom_scale=3.0)
+    handled = viewer.ViewerWindow._on_scroll(win, _scroll_controller(False), 0.0, -1.0)
+    assert handled is False
+    win._zoom_towards.assert_not_called()
+
+
+def test_ctrl_wheel_is_ignored_on_videos_and_in_the_editor() -> None:
+    for win in (_wheel_win(_current_is_video=True), _wheel_win(_editor=object())):
+        assert viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, -1.0) is False
+        win._zoom_towards.assert_not_called()
+
+
+def _towards_win(scale=1.0, h=0.0, v=0.0):
+    hadj, vadj = MagicMock(), MagicMock()
+    hadj.get_value.return_value = h
+    vadj.get_value.return_value = v
+    scroller = MagicMock()
+    scroller.get_hadjustment.return_value = hadj
+    scroller.get_vadjustment.return_value = vadj
+    scroller.get_width.return_value = 800
+    scroller.get_height.return_value = 600
+    return SimpleNamespace(
+        zoom_scale=scale, zoom_scroller=scroller, _set_zoom=MagicMock(),
+        _set_adjustment_for_focus=MagicMock(),
+    ), scroller
+
+
+def _run_idle(win, *args, **kwargs):
+    """Call _zoom_towards and run the re-anchoring that it defers to idle."""
+    with patch.object(viewer.GLib, "idle_add") as idle_add:
+        viewer.ViewerWindow._zoom_towards(win, *args, **kwargs)
+        for call in idle_add.call_args_list:
+            call.args[0]()
+
+
+def test_wheel_zoom_keeps_the_pointer_over_the_same_pixel() -> None:
+    win, _ = _towards_win(scale=1.0)
+    # _set_zoom is mocked, so play the clamped result back by hand.
+    win._set_zoom.side_effect = lambda s: setattr(win, "zoom_scale", s)
+    _run_idle(win, 2.0, 400.0, 300.0)
+    (_, content_pos, scale, focus_pos) = win._set_adjustment_for_focus.call_args_list[0].args
+    assert (content_pos, scale, focus_pos) == (400.0, 2.0, 400.0)
+
+
+def test_keyboard_zoom_anchors_on_the_viewport_centre() -> None:
+    """Without a pointer the centre of the photo is what the user is looking at."""
+    win, _ = _towards_win(scale=1.0)
+    win._set_zoom.side_effect = lambda s: setattr(win, "zoom_scale", s)
+    _run_idle(win, 2.0)
+    focus_x = win._set_adjustment_for_focus.call_args_list[0].args[3]
+    focus_y = win._set_adjustment_for_focus.call_args_list[1].args[3]
+    assert (focus_x, focus_y) == (400.0, 300.0)
+
+
+def test_zoom_towards_fit_skips_the_anchoring() -> None:
+    """At fit there is nothing to scroll, so re-anchoring would only fight
+    the ScrolledWindow."""
+    win, _ = _towards_win(scale=3.0)
+    win._set_zoom.side_effect = lambda s: setattr(win, "zoom_scale", max(s, 1.0))
+    _run_idle(win, 0.5, 400.0, 300.0)
+    win._set_adjustment_for_focus.assert_not_called()
+
+
+def test_zoom_towards_without_a_mounted_scroller() -> None:
+    win = SimpleNamespace(zoom_scale=1.0, zoom_scroller=None, _set_zoom=MagicMock())
+    viewer.ViewerWindow._zoom_towards(win, 2.0, 10.0, 10.0)
+    win._set_zoom.assert_called_once_with(2.0)
+
+
 # ---------------------------------------------------------------------------
 # Tap handling
 # ---------------------------------------------------------------------------
@@ -480,6 +587,18 @@ def test_viewer_builds(viewer_window) -> None:
     assert win.index == 0
     assert len(win.items) == 3
     assert win.zoom_scale == 1.0
+
+
+@requires_display
+def test_wheel_zoom_runs_ahead_of_the_scrolled_window(viewer_window) -> None:
+    """In the bubble phase the ScrolledWindow would eat the wheel event as
+    soon as the photo is zoomed in, and Ctrl + wheel would stop working."""
+    from gi.repository import Gtk
+
+    win = viewer_window()
+    assert win.scroll_controller.get_propagation_phase() == Gtk.PropagationPhase.CAPTURE
+    win._set_view_gestures_enabled(False)
+    assert win.scroll_controller.get_propagation_phase() == Gtk.PropagationPhase.NONE
 
 
 @requires_display
@@ -628,7 +747,8 @@ def _key_win(**extra):
         _editor=None, previous=MagicMock(), next=MagicMock(),
         _toggle_fullscreen=MagicMock(), close=MagicMock(),
         _exit_edit_mode=MagicMock(), _on_editor_undo=MagicMock(),
-        _on_editor_redo=MagicMock(),
+        _on_editor_redo=MagicMock(), _current_is_video=False,
+        zoom_scale=2.0, _zoom_towards=MagicMock(), _reset_zoom=MagicMock(),
         props=SimpleNamespace(fullscreened=False),
     )
     defaults.update(extra)
@@ -715,6 +835,46 @@ def test_plain_z_is_not_an_undo() -> None:
     win, Gdk = _key_win(_editor=MagicMock())
     assert viewer.ViewerWindow._on_key(win, None, Gdk.KEY_z, 0, 0) is False
     win._on_editor_undo.assert_not_called()
+
+
+@pytest.mark.parametrize("key", ["KEY_plus", "KEY_equal", "KEY_KP_Add", "KEY_ZoomIn"])
+def test_ctrl_plus_zooms_in(key) -> None:
+    """KEY_equal covers the layouts where + sits behind Shift."""
+    win, Gdk = _key_win()
+    handled = viewer.ViewerWindow._on_key(
+        win, None, getattr(Gdk, key), 0, Gdk.ModifierType.CONTROL_MASK)
+    assert handled is True
+    assert win._zoom_towards.call_args.args[0] > 2.0
+
+
+@pytest.mark.parametrize("key", ["KEY_minus", "KEY_KP_Subtract", "KEY_ZoomOut"])
+def test_ctrl_minus_zooms_out(key) -> None:
+    win, Gdk = _key_win()
+    handled = viewer.ViewerWindow._on_key(
+        win, None, getattr(Gdk, key), 0, Gdk.ModifierType.CONTROL_MASK)
+    assert handled is True
+    assert win._zoom_towards.call_args.args[0] < 2.0
+
+
+def test_ctrl_zero_returns_to_fit() -> None:
+    win, Gdk = _key_win()
+    assert viewer.ViewerWindow._on_key(
+        win, None, Gdk.KEY_0, 0, Gdk.ModifierType.CONTROL_MASK) is True
+    win._reset_zoom.assert_called_once()
+
+
+def test_ctrl_zoom_keys_do_nothing_on_a_video() -> None:
+    win, Gdk = _key_win(_current_is_video=True)
+    viewer.ViewerWindow._on_key(
+        win, None, Gdk.KEY_plus, 0, Gdk.ModifierType.CONTROL_MASK)
+    win._zoom_towards.assert_not_called()
+
+
+def test_plain_minus_is_not_a_zoom() -> None:
+    """Zoom is a deliberate Ctrl chord, like in every other viewer."""
+    win, Gdk = _key_win()
+    assert viewer.ViewerWindow._on_key(win, None, Gdk.KEY_minus, 0, 0) is False
+    win._zoom_towards.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
