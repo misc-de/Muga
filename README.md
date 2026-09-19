@@ -1,9 +1,12 @@
 # Muga — Photo Gallery
 
-A fast, clean photo and video gallery for Linux desktops and Linux phones (Phosh / FuriOS), built with GTK 4 and libadwaita.  
-  
+A fast, clean photo and video gallery for Linux desktops and Linux phones (Phosh / FuriOS), built with GTK 4 and libadwaita.
+
+---
 ⚠️ **AI-assisted project**  
-  
+
+---
+
 ![Muga](muga.png)
 
 ---
