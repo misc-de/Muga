@@ -68,6 +68,20 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.17" date="2026-09-19">
+      <description>
+        <p>A photo can be zoomed with a mouse and a keyboard. Ctrl and the
+        wheel magnify what the pointer is over, Ctrl +/- work from the
+        keyboard, and Ctrl+0 fits the photo back into the window. Pinching on
+        a touchscreen and the double-tap that resets it are unchanged.</p>
+        <p>Selecting several photos takes a shorter hold. Entering multi-select
+        needed a finger held still long enough that the attempt often ended in
+        an opened photo instead.</p>
+        <p>The app's own description no longer offers a camera. The feature
+        went in 0.5.16; the texts in the software centre, on the website and in
+        the README had kept advertising it.</p>
+      </description>
+    </release>
     <release version="0.5.16" date="2026-08-30">
       <description>
         <p>The built-in camera is no longer offered. Its handling stayed a long
