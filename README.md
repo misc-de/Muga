@@ -206,6 +206,11 @@ to networks you trust and never forward the port from a router.
 
 ---
 
+## Credits
+
+Muga builds on GTK 4, libadwaita, GStreamer, Pillow and many other open-source
+projects — see **[CREDITS.md](CREDITS.md)** for the full list with licences.
+
 ## Privacy & License
 
 - **Privacy:** local-first, no telemetry. See [PRIVACY.md](PRIVACY.md) for what is stored where and how to wipe it.
