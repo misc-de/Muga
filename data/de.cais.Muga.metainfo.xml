@@ -68,6 +68,15 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.18" date="2026-10-24">
+      <description>
+        <p>Zooming into a photo is calmer. The photo no longer jolts on
+        every step, the wheel and Ctrl +/- glide to the new size instead of
+        snapping, and a pinch follows the fingers a little more gently.</p>
+        <p>Zooming with Ctrl and two fingers on a touchpad no longer leaps
+        straight to the largest size.</p>
+      </description>
+    </release>
     <release version="0.5.17" date="2026-09-19">
       <description>
         <p>A photo can be zoomed with a mouse and a keyboard. Ctrl and the
