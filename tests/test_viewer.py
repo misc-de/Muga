@@ -267,7 +267,8 @@ def test_rotated_swipe_still_needs_to_be_clearly_along_the_horizon() -> None:
 
 def _zoom_win(**extra):
     defaults = dict(zoom_scale=1.0, zoom_start_scale=1.0,
-                    zoom_view=None, zoom_scroller=None, _apply_zoom=MagicMock())
+                    zoom_view=None, zoom_scroller=None, _apply_zoom=MagicMock(),
+                    _stop_zoom_animation=MagicMock())
     defaults.update(extra)
     return SimpleNamespace(**defaults)
 
@@ -289,6 +290,8 @@ def test_reset_zoom_returns_to_fit() -> None:
     viewer.ViewerWindow._reset_zoom(win)
     assert win.zoom_scale == 1.0
     assert win.zoom_start_scale == 1.0
+    # A glide still under way would otherwise zoom straight back in.
+    win._stop_zoom_animation.assert_called_once()
 
 
 def test_pinch_below_one_percent_is_not_a_zoom() -> None:
@@ -303,7 +306,16 @@ def test_pinch_past_the_threshold_commits() -> None:
     win = _zoom_win(_zoom_committed=False, _set_zoom=MagicMock(), _zoom_anchor=None)
     viewer.ViewerWindow._on_zoom_scale_changed(win, None, 1.5)
     assert win._zoom_committed is True
-    win._set_zoom.assert_called_once_with(1.5)
+    win._set_zoom.assert_called_once()
+
+
+def test_pinch_is_damped() -> None:
+    """Fingers spreading to twice their distance must not double the photo
+    at once — with the fingers starting close together that is a leap."""
+    win = _zoom_win(_zoom_committed=True, _set_zoom=MagicMock(), _zoom_anchor=None)
+    viewer.ViewerWindow._on_zoom_scale_changed(win, None, 2.0)
+    scale = win._set_zoom.call_args.args[0]
+    assert 1.4 < scale < 1.8
 
 
 def test_adjustment_focus_keeps_the_pinch_centre_still() -> None:
@@ -350,6 +362,7 @@ def test_apply_zoom_scales_the_request() -> None:
     scroller.get_height.return_value = 600
     win = _zoom_win(zoom_scale=2.0, zoom_view=view_widget, zoom_scroller=scroller,
                     _apply_zoom=None, get_width=lambda: 800, get_height=lambda: 600)
+    win._zoom_base_size = lambda: viewer.ViewerWindow._zoom_base_size(win)
     viewer.ViewerWindow._apply_zoom(win)
     view_widget.set_size_request.assert_called_once_with(1600, 1200)
 
@@ -364,18 +377,22 @@ def test_apply_zoom_without_a_mounted_view() -> None:
 # Zoom from the wheel and the keyboard
 # ---------------------------------------------------------------------------
 
-def _scroll_controller(ctrl: bool):
+def _scroll_controller(ctrl: bool, touchpad: bool = False):
     from gi.repository import Gdk
     controller = MagicMock()
     controller.get_current_event_state.return_value = (
         Gdk.ModifierType.CONTROL_MASK if ctrl else Gdk.ModifierType(0)
+    )
+    controller.get_unit.return_value = (
+        Gdk.ScrollUnit.SURFACE if touchpad else Gdk.ScrollUnit.WHEEL
     )
     return controller
 
 
 def _wheel_win(**extra):
     defaults = dict(_editor=None, _current_is_video=False, zoom_scale=1.0,
-                    _pointer_x=100.0, _pointer_y=50.0, _zoom_towards=MagicMock())
+                    _pointer_x=100.0, _pointer_y=50.0, _zoom_towards=MagicMock(),
+                    _glide_zoom=MagicMock())
     defaults.update(extra)
     return SimpleNamespace(**defaults)
 
@@ -384,15 +401,32 @@ def test_ctrl_wheel_up_zooms_in() -> None:
     win = _wheel_win()
     handled = viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, -1.0)
     assert handled is True
-    scale, x, y = win._zoom_towards.call_args.args
-    assert scale > 1.0, "wheel up did not magnify"
+    factor, x, y = win._glide_zoom.call_args.args
+    assert factor > 1.0, "wheel up did not magnify"
     assert (x, y) == (100.0, 50.0), "zoom ignored the pointer"
 
 
 def test_ctrl_wheel_down_zooms_out() -> None:
     win = _wheel_win(zoom_scale=3.0)
     viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, 1.0)
-    assert win._zoom_towards.call_args.args[0] < 3.0
+    assert win._glide_zoom.call_args.args[0] < 1.0
+
+
+def test_a_wheel_notch_is_a_gentle_step() -> None:
+    win = _wheel_win()
+    viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, -1.0)
+    assert win._glide_zoom.call_args.args[0] <= 1.12
+
+
+def test_touchpad_pixels_are_not_wheel_notches() -> None:
+    """A touchpad sends a dozen surface pixels per event; read as notches
+    that would fling the photo to the 6x clamp in one go."""
+    win = _wheel_win()
+    viewer.ViewerWindow._on_scroll(win, _scroll_controller(True, touchpad=True), 0.0, -12.0)
+    win._glide_zoom.assert_not_called()
+    scale, x, y = win._zoom_towards.call_args.args
+    assert 1.0 < scale < 1.1
+    assert (x, y) == (100.0, 50.0)
 
 
 def test_plain_wheel_still_scrolls_the_zoomed_photo() -> None:
@@ -401,12 +435,13 @@ def test_plain_wheel_still_scrolls_the_zoomed_photo() -> None:
     handled = viewer.ViewerWindow._on_scroll(win, _scroll_controller(False), 0.0, -1.0)
     assert handled is False
     win._zoom_towards.assert_not_called()
+    win._glide_zoom.assert_not_called()
 
 
 def test_ctrl_wheel_is_ignored_on_videos_and_in_the_editor() -> None:
     for win in (_wheel_win(_current_is_video=True), _wheel_win(_editor=object())):
         assert viewer.ViewerWindow._on_scroll(win, _scroll_controller(True), 0.0, -1.0) is False
-        win._zoom_towards.assert_not_called()
+        win._glide_zoom.assert_not_called()
 
 
 def _towards_win(scale=1.0, h=0.0, v=0.0):
@@ -418,46 +453,152 @@ def _towards_win(scale=1.0, h=0.0, v=0.0):
     scroller.get_vadjustment.return_value = vadj
     scroller.get_width.return_value = 800
     scroller.get_height.return_value = 600
-    return SimpleNamespace(
+    win = SimpleNamespace(
         zoom_scale=scale, zoom_scroller=scroller, _set_zoom=MagicMock(),
-        _set_adjustment_for_focus=MagicMock(),
-    ), scroller
-
-
-def _run_idle(win, *args, **kwargs):
-    """Call _zoom_towards and run the re-anchoring that it defers to idle."""
-    with patch.object(viewer.GLib, "idle_add") as idle_add:
-        viewer.ViewerWindow._zoom_towards(win, *args, **kwargs)
-        for call in idle_add.call_args_list:
-            call.args[0]()
+        _anchor_zoom=MagicMock(),
+    )
+    win._zoom_focus = lambda *a: viewer.ViewerWindow._zoom_focus(win, *a)
+    return win, scroller
 
 
 def test_wheel_zoom_keeps_the_pointer_over_the_same_pixel() -> None:
     win, _ = _towards_win(scale=1.0)
-    # _set_zoom is mocked, so play the clamped result back by hand.
-    win._set_zoom.side_effect = lambda s: setattr(win, "zoom_scale", s)
-    _run_idle(win, 2.0, 400.0, 300.0)
-    (_, content_pos, scale, focus_pos) = win._set_adjustment_for_focus.call_args_list[0].args
-    assert (content_pos, scale, focus_pos) == (400.0, 2.0, 400.0)
+    viewer.ViewerWindow._zoom_towards(win, 2.0, 400.0, 300.0)
+    win._set_zoom.assert_called_once_with(2.0)
+    win._anchor_zoom.assert_called_once_with(400.0, 300.0, 400.0, 300.0)
 
 
 def test_keyboard_zoom_anchors_on_the_viewport_centre() -> None:
     """Without a pointer the centre of the photo is what the user is looking at."""
     win, _ = _towards_win(scale=1.0)
-    win._set_zoom.side_effect = lambda s: setattr(win, "zoom_scale", s)
-    _run_idle(win, 2.0)
-    focus_x = win._set_adjustment_for_focus.call_args_list[0].args[3]
-    focus_y = win._set_adjustment_for_focus.call_args_list[1].args[3]
+    viewer.ViewerWindow._zoom_towards(win, 2.0)
+    _, _, focus_x, focus_y = win._anchor_zoom.call_args.args
     assert (focus_x, focus_y) == (400.0, 300.0)
+
+
+class _Adjustment:
+    """Just enough Gtk.Adjustment to watch the value get clamped."""
+
+    def __init__(self, upper: float, page_size: float) -> None:
+        self.value, self.lower, self.upper, self.page_size = 0.0, 0.0, upper, page_size
+
+    def get_value(self): return self.value
+    def get_lower(self): return self.lower
+    def get_upper(self): return self.upper
+    def get_page_size(self): return self.page_size
+    def get_step_increment(self): return 1.0
+    def get_page_increment(self): return 1.0
+
+    def set_value(self, value):
+        self.value = min(max(value, self.lower), self.upper - self.page_size)
+
+    def configure(self, value, lower, upper, _step, _page, page_size):
+        self.lower, self.upper, self.page_size = lower, upper, page_size
+        self.set_value(value)
+
+
+def _anchor_win(scale: float):
+    hadj, vadj = _Adjustment(800.0, 800.0), _Adjustment(600.0, 600.0)
+    scroller = MagicMock()
+    scroller.get_hadjustment.return_value = hadj
+    scroller.get_vadjustment.return_value = vadj
+    win = SimpleNamespace(zoom_scale=scale, zoom_scroller=scroller,
+                          _zoom_base_size=lambda: (800, 600))
+    win._set_adjustment_for_focus = (
+        lambda *a: viewer.ViewerWindow._set_adjustment_for_focus(win, *a))
+    return win, hadj, vadj
+
+
+def test_anchoring_lands_in_the_same_frame() -> None:
+    """The layout pass has not grown the adjustments yet when the zoom
+    step runs. Scrolling against the old range clamps to 0, and the photo
+    would flash grown from its top-left corner before the idle pass fixes it."""
+    win, hadj, vadj = _anchor_win(scale=2.0)
+    with patch.object(viewer.GLib, "idle_add") as idle_add:
+        viewer.ViewerWindow._anchor_zoom(win, 400.0, 300.0, 400.0, 300.0)
+    idle_add.assert_called_once()
+    assert (hadj.value, vadj.value) == (400.0, 300.0)
+    assert (hadj.upper, vadj.upper) == (1600.0, 1200.0)
+
+
+def test_a_stale_idle_anchor_leaves_a_newer_step_alone() -> None:
+    win, hadj, _ = _anchor_win(scale=2.0)
+    with patch.object(viewer.GLib, "idle_add") as idle_add:
+        viewer.ViewerWindow._anchor_zoom(win, 400.0, 300.0, 400.0, 300.0)
+    win.zoom_scale = 2.5
+    hadj.value = 123.0
+    idle_add.call_args.args[0]()
+    assert hadj.value == 123.0
 
 
 def test_zoom_towards_fit_skips_the_anchoring() -> None:
     """At fit there is nothing to scroll, so re-anchoring would only fight
     the ScrolledWindow."""
-    win, _ = _towards_win(scale=3.0)
-    win._set_zoom.side_effect = lambda s: setattr(win, "zoom_scale", max(s, 1.0))
-    _run_idle(win, 0.5, 400.0, 300.0)
-    win._set_adjustment_for_focus.assert_not_called()
+    win, hadj, vadj = _anchor_win(scale=1.0)
+    with patch.object(viewer.GLib, "idle_add") as idle_add:
+        viewer.ViewerWindow._anchor_zoom(win, 400.0, 300.0, 400.0, 300.0)
+    idle_add.assert_not_called()
+    assert (hadj.upper, vadj.upper) == (800.0, 600.0)
+
+
+def _glide_win(scale=2.0, animation=None, target=1.0):
+    hadj, vadj = MagicMock(), MagicMock()
+    hadj.get_value.return_value = 0.0
+    vadj.get_value.return_value = 0.0
+    scroller = MagicMock()
+    scroller.get_hadjustment.return_value = hadj
+    scroller.get_vadjustment.return_value = vadj
+    scroller.get_width.return_value = 800
+    scroller.get_height.return_value = 600
+    win = SimpleNamespace(
+        zoom_scale=scale, zoom_scroller=scroller, stack=None,
+        _zoom_animation=animation, _zoom_animation_target=target,
+        _set_zoom=MagicMock(), _anchor_zoom=MagicMock(),
+        _on_zoom_animation_done=MagicMock(),
+    )
+    win._zoom_focus = lambda *a: viewer.ViewerWindow._zoom_focus(win, *a)
+    win._stop_zoom_animation = lambda: viewer.ViewerWindow._stop_zoom_animation(win)
+    return win
+
+
+def _glide(win, factor):
+    """Run _glide_zoom and hand back the per-frame callback it animates."""
+    with patch.object(viewer.Adw, "TimedAnimation") as timed, \
+            patch.object(viewer.Adw, "CallbackAnimationTarget") as target:
+        viewer.ViewerWindow._glide_zoom(win, factor)
+    timed.new.return_value.play.assert_called_once()
+    return target.new.call_args.args[0]
+
+
+def test_glide_eases_from_the_current_scale_to_the_target() -> None:
+    win = _glide_win(scale=2.0)
+    step = _glide(win, 1.5)
+    assert win._zoom_animation_target == pytest.approx(3.0)
+    step(0.0)
+    assert win._set_zoom.call_args.args[0] == pytest.approx(2.0)
+    step(1.0)
+    assert win._set_zoom.call_args.args[0] == pytest.approx(3.0)
+    # Scroll at 0 and 2x: the viewport centre shows fit-size point (200, 150).
+    win._anchor_zoom.assert_called_with(200.0, 150.0, 400.0, 300.0)
+
+
+def test_glide_steps_build_on_a_running_glide() -> None:
+    """Three quick wheel notches should land three notches in, not one
+    notch past wherever the second glide happened to be."""
+    running = MagicMock()
+    win = _glide_win(scale=2.2, animation=running, target=2.5)
+    step = _glide(win, 1.2)
+    running.pause.assert_called_once()
+    running.reset.assert_not_called()
+    step(1.0)
+    assert win._set_zoom.call_args.args[0] == pytest.approx(3.0)
+
+
+def test_glide_stays_inside_the_clamp() -> None:
+    win = _glide_win(scale=5.8)
+    step = _glide(win, 2.0)
+    step(1.0)
+    assert win._set_zoom.call_args.args[0] == pytest.approx(6.0)
 
 
 def test_zoom_towards_without_a_mounted_scroller() -> None:
@@ -748,7 +889,7 @@ def _key_win(**extra):
         _toggle_fullscreen=MagicMock(), close=MagicMock(),
         _exit_edit_mode=MagicMock(), _on_editor_undo=MagicMock(),
         _on_editor_redo=MagicMock(), _current_is_video=False,
-        zoom_scale=2.0, _zoom_towards=MagicMock(), _reset_zoom=MagicMock(),
+        zoom_scale=2.0, _glide_zoom=MagicMock(), _reset_zoom=MagicMock(),
         props=SimpleNamespace(fullscreened=False),
     )
     defaults.update(extra)
@@ -844,7 +985,7 @@ def test_ctrl_plus_zooms_in(key) -> None:
     handled = viewer.ViewerWindow._on_key(
         win, None, getattr(Gdk, key), 0, Gdk.ModifierType.CONTROL_MASK)
     assert handled is True
-    assert win._zoom_towards.call_args.args[0] > 2.0
+    assert win._glide_zoom.call_args.args[0] > 1.0
 
 
 @pytest.mark.parametrize("key", ["KEY_minus", "KEY_KP_Subtract", "KEY_ZoomOut"])
@@ -853,7 +994,7 @@ def test_ctrl_minus_zooms_out(key) -> None:
     handled = viewer.ViewerWindow._on_key(
         win, None, getattr(Gdk, key), 0, Gdk.ModifierType.CONTROL_MASK)
     assert handled is True
-    assert win._zoom_towards.call_args.args[0] < 2.0
+    assert win._glide_zoom.call_args.args[0] < 1.0
 
 
 def test_ctrl_zero_returns_to_fit() -> None:
@@ -867,14 +1008,14 @@ def test_ctrl_zoom_keys_do_nothing_on_a_video() -> None:
     win, Gdk = _key_win(_current_is_video=True)
     viewer.ViewerWindow._on_key(
         win, None, Gdk.KEY_plus, 0, Gdk.ModifierType.CONTROL_MASK)
-    win._zoom_towards.assert_not_called()
+    win._glide_zoom.assert_not_called()
 
 
 def test_plain_minus_is_not_a_zoom() -> None:
     """Zoom is a deliberate Ctrl chord, like in every other viewer."""
     win, Gdk = _key_win()
     assert viewer.ViewerWindow._on_key(win, None, Gdk.KEY_minus, 0, 0) is False
-    win._zoom_towards.assert_not_called()
+    win._glide_zoom.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

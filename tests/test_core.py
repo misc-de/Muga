@@ -608,10 +608,10 @@ def test_viewer_supports_pinch_zoom_and_double_tap_reset() -> None:
     assert "self.zoom_start_scale = 1.0" in viewer_source
     assert "self.zoom_view.set_size_request(int(width * self.zoom_scale), int(height * self.zoom_scale))" in viewer_source
     assert "self.zoom_view.set_size_request(-1, -1)" in viewer_source
-    assert "self._set_zoom(self.zoom_start_scale * scale_delta)" in viewer_source
+    assert "self._set_zoom(self.zoom_start_scale * scale_delta ** _PINCH_DAMPING)" in viewer_source
     assert "gesture.get_bounding_box_center()" in viewer_source
     assert "self._zoom_anchor" in viewer_source
-    assert "self._set_adjustment_for_focus(scroller.get_hadjustment(), cx, scale, vp_x)" in viewer_source
+    assert "self._anchor_zoom(cx, cy, vp_x, vp_y)" in viewer_source
     assert "n_press == 2" in viewer_source
     assert "self._reset_zoom()" in viewer_source
     assert "if self.zoom_scale > 1.05:" in viewer_source

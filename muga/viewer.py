@@ -3,6 +3,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import logging
+import math
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -41,8 +42,19 @@ LOGGER = logging.getLogger(__name__)
 # Zoom step per wheel notch (Ctrl + wheel) and per Ctrl +/- keypress. The
 # keyboard step is the coarser of the two: a keypress is a deliberate act,
 # a wheel notch is often one of many.
-_WHEEL_ZOOM_STEP = 1.15
-_KEY_ZOOM_STEP = 1.25
+_WHEEL_ZOOM_STEP = 1.1
+_KEY_ZOOM_STEP = 1.2
+# A touchpad reports its scroll in surface pixels, not notches, and one
+# event easily carries ten or more of them; treated as notches that would
+# fling the photo straight to the 6x clamp.
+_TOUCHPAD_PX_PER_NOTCH = 40.0
+# Wheel and keyboard steps glide to their target instead of snapping, so the
+# eye can follow where the photo went.
+_ZOOM_ANIMATION_MS = 180
+# A pinch follows the fingers at a damped rate: fingers spreading to twice
+# their distance give 1.6x rather than 2x, which keeps a quick pinch that
+# starts with the fingers close together from leaping into the photo.
+_PINCH_DAMPING = 0.7
 
 
 def _write_in_place_atomic(path: str, write) -> None:
@@ -189,6 +201,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_start_scale = 1.0
         self.zoom_view: Gtk.Picture | None = None
         self.zoom_scroller: Gtk.ScrolledWindow | None = None
+        self._zoom_animation: Adw.TimedAnimation | None = None
+        self._zoom_animation_target: float = 1.0
         self._rotation: int = 0
         # Deferred close/navigate action handed to the rotation worker.
         self._pending_rotation_action = None
@@ -1254,10 +1268,10 @@ class ViewerWindow(Adw.ApplicationWindow):
             # Ctrl +/- and Ctrl+0, the shortcuts every other viewer uses.
             # KEY_equal covers layouts where + sits behind Shift.
             if keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add, Gdk.KEY_ZoomIn):
-                self._zoom_towards(self.zoom_scale * _KEY_ZOOM_STEP)
+                self._glide_zoom(_KEY_ZOOM_STEP)
                 return True
             if keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract, Gdk.KEY_ZoomOut):
-                self._zoom_towards(self.zoom_scale / _KEY_ZOOM_STEP)
+                self._glide_zoom(1 / _KEY_ZOOM_STEP)
                 return True
             if keyval in (Gdk.KEY_0, Gdk.KEY_KP_0):
                 self._reset_zoom()
@@ -1309,6 +1323,7 @@ class ViewerWindow(Adw.ApplicationWindow):
             self.next()
 
     def _on_zoom_begin(self, gesture: Gtk.GestureZoom, _sequence) -> None:
+        self._stop_zoom_animation()
         self.zoom_start_scale = self.zoom_scale
         self._zoom_committed = False
         self._zoom_anchor: tuple[float, float, float, float] | None = None
@@ -1327,19 +1342,11 @@ class ViewerWindow(Adw.ApplicationWindow):
             if 0.99 <= scale_delta <= 1.01:
                 return
             self._zoom_committed = True
-        self._set_zoom(self.zoom_start_scale * scale_delta)
+        self._set_zoom(self.zoom_start_scale * scale_delta ** _PINCH_DAMPING)
         anchor = getattr(self, "_zoom_anchor", None)
-        if self.zoom_scroller and anchor and self.zoom_scale > 1.01:
+        if anchor:
             vp_x, vp_y, cx, cy = anchor
-            scale = self.zoom_scale
-            scroller = self.zoom_scroller
-
-            def _apply() -> bool:
-                self._set_adjustment_for_focus(scroller.get_hadjustment(), cx, scale, vp_x)
-                self._set_adjustment_for_focus(scroller.get_vadjustment(), cy, scale, vp_y)
-                return GLib.SOURCE_REMOVE
-
-            GLib.idle_add(_apply)
+            self._anchor_zoom(cx, cy, vp_x, vp_y)
 
     def _on_pointer_motion(self, _controller: Gtk.EventControllerMotion, x: float, y: float) -> None:
         self._pointer_x = x
@@ -1357,9 +1364,15 @@ class ViewerWindow(Adw.ApplicationWindow):
         state = controller.get_current_event_state()
         if not (state & Gdk.ModifierType.CONTROL_MASK) or not dy:
             return False
-        # One wheel notch is dy = ±1; a touchpad sends finer deltas, so the
-        # exponent keeps both feeling proportional. Wheel up (dy < 0) zooms in.
-        self._zoom_towards(self.zoom_scale * (_WHEEL_ZOOM_STEP ** -dy), self._pointer_x, self._pointer_y)
+        # Wheel up (dy < 0) zooms in. A touchpad streams pixel deltas every
+        # few milliseconds, so those apply directly — a glide on top would
+        # only trail behind the fingers. Wheel notches (dy = ±1, or fractions
+        # of it on a high-resolution wheel) glide.
+        if controller.get_unit() == Gdk.ScrollUnit.SURFACE:
+            notches = dy / _TOUCHPAD_PX_PER_NOTCH
+            self._zoom_towards(self.zoom_scale * (_WHEEL_ZOOM_STEP ** -notches), self._pointer_x, self._pointer_y)
+        else:
+            self._glide_zoom(_WHEEL_ZOOM_STEP ** -dy, self._pointer_x, self._pointer_y)
         return True
 
     def _on_viewer_press_begin(self, _gesture, _n_press: int, x: float, y: float) -> None:
@@ -1394,25 +1407,97 @@ class ViewerWindow(Adw.ApplicationWindow):
         if scroller is None:
             self._set_zoom(scale)
             return
+        focus_x, focus_y, cx, cy = self._zoom_focus(scroller, focus_x, focus_y)
+        self._set_zoom(scale)
+        self._anchor_zoom(cx, cy, focus_x, focus_y)
+
+    def _glide_zoom(self, factor: float, focus_x: float | None = None, focus_y: float | None = None) -> None:
+        """Ease towards *factor* times the current target, keeping the content
+        under (focus_x, focus_y) in place. Steps that arrive while a glide is
+        still running build on its target, so a quick run of wheel notches
+        adds up instead of each one restarting from a half-finished frame."""
+        start = self.zoom_scale
+        base = self._zoom_animation_target if self._zoom_animation is not None else start
+        end = min(max(base * factor, 1.0), 6.0)
+        self._stop_zoom_animation()
+        scroller = self.zoom_scroller
+        if scroller is None:
+            self._set_zoom(end)
+            return
+        if abs(end - start) < 1e-3:
+            return
+        focus_x, focus_y, cx, cy = self._zoom_focus(scroller, focus_x, focus_y)
+        log_start, log_end = math.log(start), math.log(end)
+
+        def _step(progress: float) -> None:
+            # Interpolate in log space: every frame then magnifies by the
+            # same ratio, which reads as an even speed.
+            self._set_zoom(math.exp(log_start + (log_end - log_start) * progress))
+            self._anchor_zoom(cx, cy, focus_x, focus_y)
+
+        animation = Adw.TimedAnimation.new(
+            self.stack, 0.0, 1.0, _ZOOM_ANIMATION_MS, Adw.CallbackAnimationTarget.new(_step),
+        )
+        animation.set_easing(Adw.Easing.EASE_OUT_CUBIC)
+        animation.connect("done", self._on_zoom_animation_done)
+        self._zoom_animation = animation
+        self._zoom_animation_target = end
+        animation.play()
+
+    def _on_zoom_animation_done(self, animation: Adw.TimedAnimation) -> None:
+        if self._zoom_animation is animation:
+            self._zoom_animation = None
+
+    def _stop_zoom_animation(self) -> None:
+        # pause(), not reset(): reset() would rewind the value and drag the
+        # photo back to where the glide started.
+        if self._zoom_animation is not None:
+            self._zoom_animation.pause()
+            self._zoom_animation = None
+
+    def _zoom_focus(self, scroller: Gtk.ScrolledWindow, focus_x: float | None, focus_y: float | None) -> tuple[float, float, float, float]:
+        """Resolve the focus point (the viewport centre when there is none)
+        and the content point under it, in units of the fit-size photo."""
         if focus_x is None or focus_y is None:
             focus_x = scroller.get_width() / 2
             focus_y = scroller.get_height() / 2
-        hadj = scroller.get_hadjustment()
-        vadj = scroller.get_vadjustment()
         previous = max(self.zoom_scale, 0.01)
-        cx = (hadj.get_value() + focus_x) / previous
-        cy = (vadj.get_value() + focus_y) / previous
-        self._set_zoom(scale)
-        if self.zoom_scale <= 1.01:
+        cx = (scroller.get_hadjustment().get_value() + focus_x) / previous
+        cy = (scroller.get_vadjustment().get_value() + focus_y) / previous
+        return focus_x, focus_y, cx, cy
+
+    def _anchor_zoom(self, cx: float, cy: float, focus_x: float, focus_y: float) -> None:
+        """Scroll so the content point (cx, cy) sits under (focus_x, focus_y)
+        at the current scale.
+
+        The new size request only reaches the adjustments after the next
+        layout pass. Scrolling only then lets one frame through with the
+        photo grown from its top-left corner, a visible jolt on every step.
+        So the adjustments are stretched right away to the size the layout
+        is about to give them; the idle pass afterwards only corrects what
+        that prediction got wrong."""
+        scroller = self.zoom_scroller
+        if scroller is None or self.zoom_scale <= 1.01:
             return
-        target = self.zoom_scale
-        fx, fy = focus_x, focus_y
+        scale = self.zoom_scale
+        width, height = self._zoom_base_size()
+        for adjustment, content_pos, focus_pos, length in (
+            (scroller.get_hadjustment(), cx, focus_x, width),
+            (scroller.get_vadjustment(), cy, focus_y, height),
+        ):
+            page_size = adjustment.get_page_size()
+            adjustment.configure(
+                adjustment.get_value(), adjustment.get_lower(),
+                max(page_size, float(int(length * scale))),
+                adjustment.get_step_increment(), adjustment.get_page_increment(), page_size,
+            )
+            self._set_adjustment_for_focus(adjustment, content_pos, scale, focus_pos)
 
         def _apply() -> bool:
-            # The size request from _apply_zoom only reaches the adjustments
-            # after the next layout pass, so re-anchor once that has run.
-            self._set_adjustment_for_focus(scroller.get_hadjustment(), cx, target, fx)
-            self._set_adjustment_for_focus(scroller.get_vadjustment(), cy, target, fy)
+            # A newer step or another photo owns the scroll position by now.
+            if self.zoom_scroller is scroller and self.zoom_scale == scale:
+                self._set_adjustment_for_focus(scroller.get_hadjustment(), cx, scale, focus_x)
+                self._set_adjustment_for_focus(scroller.get_vadjustment(), cy, scale, focus_y)
             return GLib.SOURCE_REMOVE
 
         GLib.idle_add(_apply)
@@ -1422,9 +1507,16 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._apply_zoom()
 
     def _reset_zoom(self) -> None:
+        self._stop_zoom_animation()
         self.zoom_scale = 1.0
         self.zoom_start_scale = 1.0
         self._apply_zoom()
+
+    def _zoom_base_size(self) -> tuple[int, int]:
+        """The size the photo is scaled from: what the scroller shows at fit."""
+        width = max(self.zoom_scroller.get_width(), self.get_width(), 1)
+        height = max(self.zoom_scroller.get_height(), self.get_height(), 1)
+        return width, height
 
     def _apply_zoom(self) -> None:
         if not self.zoom_view or not self.zoom_scroller:
@@ -1432,8 +1524,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         if self.zoom_scale <= 1.01:
             self.zoom_view.set_size_request(-1, -1)
             return
-        width = max(self.zoom_scroller.get_width(), self.get_width(), 1)
-        height = max(self.zoom_scroller.get_height(), self.get_height(), 1)
+        width, height = self._zoom_base_size()
         self.zoom_view.set_size_request(int(width * self.zoom_scale), int(height * self.zoom_scale))
 
     def _set_adjustment_for_focus(self, adjustment: Gtk.Adjustment, content_pos: float, scale: float, focus_pos: float) -> None:
