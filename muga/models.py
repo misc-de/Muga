@@ -8,6 +8,25 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".
 RAW_EXTENSIONS = {".raw", ".dng", ".cr2", ".nef", ".arw", ".raf", ".rw2", ".orf", ".x3f", ".dcr", ".crw"}
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".3gp", ".mpeg", ".mpg"}
 
+# How a Nextcloud file is spelled in the index. These live here rather than in
+# nextcloud.py because the grid and the viewer ask on every tile, and importing
+# that module to ask would load the whole HTTP stack before the first frame.
+NC_PATH_PREFIX = "nextcloud://"
+
+
+def nc_path(dav_path: str) -> str:
+    """Encode a WebDAV path as a DB-safe string."""
+    return NC_PATH_PREFIX + dav_path.lstrip("/")
+
+
+def dav_path_from_nc(nc: str) -> str:
+    """Reverse nc_path()."""
+    return "/" + nc.removeprefix(NC_PATH_PREFIX)
+
+
+def is_nc_path(path: str) -> bool:
+    return path.startswith(NC_PATH_PREFIX)
+
 
 @dataclass(frozen=True)
 class MediaItem:

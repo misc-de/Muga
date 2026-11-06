@@ -17,8 +17,7 @@ from gi.repository import Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk, Pango
 
 LOGGER = logging.getLogger(__name__)
 
-from .models import MediaItem
-from .nextcloud import is_nc_path
+from .models import MediaItem, is_nc_path
 from .gtk_util import texture_from_pixbuf
 
 if TYPE_CHECKING:

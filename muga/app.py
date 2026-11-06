@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import faulthandler
+import glob
 import logging
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
+import os
 import signal
 import shlex
 import subprocess
@@ -22,7 +24,7 @@ gi.require_version("GdkPixbuf", "2.0")
 
 from gi.repository import Adw, Gdk, GdkPixbuf, Gio, GLib, GObject, Gtk
 
-from . import APP_ID, APP_NAME, mcp_server
+from . import APP_ID, APP_NAME
 from .config import DEBUG_LOG_PATH, Settings, migrate_legacy_dirs, resolve_nav_position
 from .database import Database
 from .gtk_util import display_is_desktop, idle_once
@@ -33,13 +35,17 @@ from .gallery_style import GalleryStyleGestureMixin
 from .gallery_thumbnails import GalleryWindowThumbnailsMixin
 from .i18n import Translator
 from .models import MediaItem
-from .settings_window import SettingsWindow
+from .opened_files import items_for_paths
 
+# Not imported here on purpose: the settings window, the viewer (Pillow, the
+# editor) and the MCP server (http.server) were a second of a cold start on a
+# phone, spent on windows nobody had opened yet. Each is imported where it is
+# first used.
 if TYPE_CHECKING:
     from .nextcloud import NextcloudClient
+    from .settings_window import SettingsWindow
 from .scanner import MediaScanner
 from .thumbnails import Thumbnailer, pillow_version_warning
-from .viewer import ViewerWindow
 from .watcher import MediaWatcher
 
 LOGGER = logging.getLogger(__name__)
@@ -69,6 +75,44 @@ def _enable_thread_dump_signal() -> None:
             faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
         except RuntimeError:
             LOGGER.debug("Could not register SIGUSR1 thread dump handler", exc_info=True)
+
+
+def _sync_mcp_server(settings: Settings, database: Database, on_change) -> None:
+    """Bring the MCP server in line with *settings*, importing it only if needed.
+
+    With the switch off and the module never loaded there cannot be a server
+    to stop, so there is nothing to do and no reason to load http.server.
+    """
+    if not getattr(settings, "mcp_enabled", False) and "muga.mcp_server" not in sys.modules:
+        return
+    from . import mcp_server
+    mcp_server.sync_with_settings(settings, database, on_change=on_change)
+
+
+def _shutdown_mcp_server(_app: Adw.Application) -> None:
+    module = sys.modules.get("muga.mcp_server")
+    if module is not None:
+        module.shutdown()
+
+
+def _go_straight_to_software_gl() -> None:
+    """Skip GTK's and Mesa's search for a GPU a sandbox cannot have.
+
+    Without a render node everything ends up on llvmpipe anyway, but only after
+    the default renderer and Mesa have tried their way through the hardware
+    paths, Zink included: about a second of a cold start on a phone, for the
+    same result. Measured on a phone: first frame cold 5.9 -> 4.8 s, warm 1.14 ->
+    0.91 s, scrolling and zooming unchanged. Cairo would start faster still, but
+    scrolled at 19 instead of 30 frames per second in the same test.
+
+    Limited to Flatpak: an installation from source on a Halium phone has no
+    render node either, but does have working GL through libhybris, which the
+    sandbox cannot reach. Anything set explicitly in the environment wins.
+    """
+    if not os.path.exists("/.flatpak-info") or glob.glob("/dev/dri/renderD*"):
+        return
+    os.environ.setdefault("GSK_RENDERER", "ngl")
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
 
 def _cleanup_abandoned_temp_files() -> None:
@@ -102,16 +146,18 @@ def _cleanup_abandoned_temp_files() -> None:
 
 class GalleryApplication(Adw.Application):
     def __init__(self) -> None:
-        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.DEFAULT_FLAGS)
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.HANDLES_OPEN)
         _configure_debug_logging()
         _enable_thread_dump_signal()
         GLib.set_application_name(APP_NAME)
         self.connect("activate", self.on_activate)
+        self.connect("open", self.on_open)
+        self.connect("window-removed", self.on_window_removed)
         # Release the MCP port on the way out. Its worker threads are daemons
         # and would not hold the process open, but the listening socket lives
         # until the process actually exits — long enough for a relaunch to hit
         # "address already in use".
-        self.connect("shutdown", lambda _app: mcp_server.shutdown())
+        self.connect("shutdown", _shutdown_mcp_server)
 
     def on_activate(self, _app: Adw.Application) -> None:
         # If --trace is active, prove the main loop is alive via a 1 Hz heartbeat
@@ -119,14 +165,40 @@ class GalleryApplication(Adw.Application):
         if "muga.tracer" in sys.modules:
             sys.modules["muga.tracer"].start_heartbeat()
 
+        self._gallery_window().present()
+
+    def on_open(self, _app: Adw.Application, files: list[Gio.File], _n_files: int, _hint: str) -> None:
+        """The desktop hands over files to show: a tap on a photo elsewhere."""
+        if "muga.tracer" in sys.modules:
+            sys.modules["muga.tracer"].start_heartbeat()
+        window = self._gallery_window()
+        paths = [path for path in (file.get_path() for file in files) if path]
+        window.open_files(paths)
+
+    def on_window_removed(self, _app: Adw.Application, window: Gtk.Window) -> None:
+        """The last viewer of a file from elsewhere takes the hidden gallery along."""
+        if not getattr(window, "standalone", False):
+            return
+        remaining = self.get_windows()
+        if any(getattr(other, "standalone", False) for other in remaining):
+            return
+        for other in remaining:
+            if isinstance(other, GalleryWindow) and not other.get_visible():
+                other.close_hidden()
+
+    def _gallery_window(self) -> "GalleryWindow":
+        """The running gallery, or a new one, which the caller decides to show."""
+        for window in self.get_windows():
+            if isinstance(window, GalleryWindow) and not window._closing:
+                return window
+
         icons_dir = Path(__file__).parent / "data" / "icons"
         Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(str(icons_dir))
 
         # Cleanup leftover temp files from previous sessions
         _cleanup_abandoned_temp_files()
 
-        window = GalleryWindow(self)
-        window.present()
+        return GalleryWindow(self)
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +245,7 @@ class GalleryWindow(
         # before destroying the old one, and a window-owned server would still
         # be holding the port at that moment.
         try:
-            mcp_server.sync_with_settings(
-                self.settings, self.database, on_change=self._on_mcp_change,
-            )
+            _sync_mcp_server(self.settings, self.database, self._on_mcp_change)
         except Exception:
             LOGGER.exception("Could not bring up the MCP server")
         self.category = self._first_existing_category()
@@ -1494,7 +1564,36 @@ class GalleryWindow(
         if index < 0:
             items = [item]
             index = 0
+        from .viewer import ViewerWindow
         ViewerWindow(self, items, index, self.settings.external_video_player).present()
+
+    def open_files(self, paths: list[str]) -> None:
+        """Show files handed over by the desktop, from wherever they are.
+
+        Someone who taps a photo in another app wants that photo, and wants to
+        be back where they were when they close it. So the gallery stays hidden
+        unless it was already open, and closing the last viewer ends the app.
+        """
+        items, index = items_for_paths(paths)
+        if not items:
+            self.present()
+            self._handle_file_error(FileNotFoundError(), paths[0] if paths else "")
+            return
+        from .viewer import ViewerWindow
+        viewer = ViewerWindow(self, items, index, self.settings.external_video_player)
+        if not self.get_visible():
+            viewer.standalone = True
+        viewer.present()
+
+    def close_hidden(self) -> None:
+        """End a gallery that was never shown, which ends the app with it.
+
+        destroy, not close: GTK ignores close() on a window that was never
+        shown, and the app would live on with nothing on screen.
+        """
+        self._closing = True
+        self._stop_watching()
+        self.destroy()
 
 
     # ------------------------------------------------------------------
@@ -1580,6 +1679,7 @@ class GalleryWindow(
                 # Stale reference (rare race after destroy) — fall through
                 # and create a fresh one.
                 self._settings_dialog = None
+        from .settings_window import SettingsWindow
         dialog = SettingsWindow(self)
         self._settings_dialog = dialog
         dialog.connect("close-request", self._on_settings_dialog_closed)
@@ -1714,9 +1814,7 @@ class GalleryWindow(
         # is now stale — resync rather than leaving its tools reading a copy
         # that no longer reflects what the user just changed.
         try:
-            mcp_server.sync_with_settings(
-                self.settings, self.database, on_change=self._on_mcp_change,
-            )
+            _sync_mcp_server(self.settings, self.database, self._on_mcp_change)
         except Exception:
             LOGGER.exception("Could not apply MCP settings")
         # Invalidate the shared NC client — credentials/URL may have changed.
@@ -1898,5 +1996,8 @@ def main() -> int:
     # app left behind under its previous name.
     migrate_legacy_dirs()
 
+    _go_straight_to_software_gl()
+
     app = GalleryApplication()
-    return app.run()
+    # Passed explicitly: without argv, Gio would never see the files to open.
+    return app.run(sys.argv)

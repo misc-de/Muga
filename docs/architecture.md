@@ -13,6 +13,7 @@ each file holds one concern and can be read on its own.
 | `gallery_selection.py` | Selection mode and the file actions it drives (delete, move, share) |
 | `gallery_style.py` | CSS, theme, tile sizing, and the pull/swipe gestures |
 | `gallery_thumbnails.py` | Thumbnail workers (local and Nextcloud) and the disk-cache budget |
+| `opened_files.py` | Files handed over by the desktop (a tap on a photo elsewhere), turned into viewer items with the rest of their folder |
 | `gallery_grid.py` | The `GridView` itself — predates this split |
 
 ## Camera

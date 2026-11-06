@@ -28,8 +28,7 @@ from .camera_orientation import (
 )
 from . import exif as exif_module
 from .editor import EditorView, PILImage, _PIL_OK
-from .models import MediaItem
-from .nextcloud import is_nc_path
+from .models import MediaItem, is_nc_path
 from .rotated_container import RotatedContainer
 from .gtk_util import idle_once, texture_from_pixbuf
 from .thumbnails import image_within_pixel_budget
@@ -193,6 +192,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         super().__init__(application=parent.get_application(), transient_for=parent, title=items[index].name)
         self.set_default_size(1000, 720)
         self.parent_window = parent
+        # Set when this viewer was opened for a file from elsewhere: the gallery
+        # behind it was never shown and closing must not reveal it.
+        self.standalone = False
         self.items = items
         self.index = index
         self.external_player = external_player
@@ -1040,8 +1042,8 @@ class ViewerWindow(Adw.ApplicationWindow):
             return True
         if self.props.fullscreened:
             self.unfullscreen()
-        parent = self.parent_window
-        idle_once(parent.present)
+        if not self.standalone:
+            idle_once(self.parent_window.present)
         return False
 
     def _check_rotation_before_action(self, action) -> None:
