@@ -68,6 +68,12 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.20" date="2026-11-06">
+      <description>
+        <p>A photo no longer opens with the Delete button highlighted, and
+        Enter is no longer one step from deleting it.</p>
+      </description>
+    </release>
     <release version="0.5.19" date="2026-11-06">
       <description>
         <p>Muga can be the app that opens your pictures. Tapping a photo in
