@@ -731,6 +731,15 @@ def test_viewer_builds(viewer_window) -> None:
 
 
 @requires_display
+def test_a_new_viewer_is_not_focused_on_delete(viewer_window) -> None:
+    """GTK would focus the first button, and that one deletes the photo."""
+    win = viewer_window()
+    assert win.get_focus() is win.close_button
+    win._hide_focus_ring()
+    assert win.get_focus_visible() is False
+
+
+@requires_display
 def test_wheel_zoom_runs_ahead_of_the_scrolled_window(viewer_window) -> None:
     """In the bubble phase the ScrolledWindow would eat the wheel event as
     soon as the photo is zoomed in, and Ctrl + wheel would stop working."""
