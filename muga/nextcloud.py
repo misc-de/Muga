@@ -27,6 +27,7 @@ except ImportError:
 
 from . import VERSION
 from .config import CACHE_DIR, THUMB_DIR
+from .models import NC_PATH_PREFIX, dav_path_from_nc, is_nc_path, nc_path  # noqa: F401
 
 USER_AGENT = f"Muga/{VERSION}"
 LOGGER = logging.getLogger(__name__)
@@ -54,7 +55,6 @@ _MAX_PROPFIND_BYTES = 64 * 1024 * 1024
 _MTIME_EPS = 1e-6
 
 # Prefix stored in DB to identify nextcloud paths
-NC_PATH_PREFIX = "nextcloud://"
 
 
 class NextcloudConnectionError(ConnectionError):
@@ -66,20 +66,6 @@ class NextcloudConnectionError(ConnectionError):
     silently retrying every thumbnail forever. Subclasses ConnectionError so
     the app's generic Nextcloud-error handler maps it to a connection message.
     """
-
-
-def nc_path(dav_path: str) -> str:
-    """Encode a WebDAV path as a DB-safe string."""
-    return NC_PATH_PREFIX + dav_path.lstrip("/")
-
-
-def dav_path_from_nc(nc: str) -> str:
-    """Reverse nc_path()."""
-    return "/" + nc.removeprefix(NC_PATH_PREFIX)
-
-
-def is_nc_path(path: str) -> bool:
-    return path.startswith(NC_PATH_PREFIX)
 
 
 class NextcloudResponseTooLarge(OSError):
