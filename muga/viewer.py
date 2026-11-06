@@ -415,6 +415,12 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.stack.add_controller(self.click_gesture)
         self._set_view_gestures_enabled(True)
         self.connect("close-request", self._on_close_request)
+        # Left alone, GTK focuses the first button in the window, which is
+        # Delete: a ring around it on every photo, and Enter one step from a
+        # deletion. No ring until the keyboard is actually used. GTK turns the
+        # ring on again while showing the window, so it goes off after that.
+        self.set_focus(self.close_button)
+        self.connect("map", lambda _window: idle_once(self._hide_focus_ring))
         # Set once the window is torn down. Background workers (NC download,
         # rotation, edit-save) finish on their own thread and bounce results
         # back via GLib.idle_add; if the user closed the viewer meanwhile, the
@@ -1032,6 +1038,10 @@ class ViewerWindow(Adw.ApplicationWindow):
             pool.shutdown(wait=False)
         self._image_cache.clear()
 
+    def _hide_focus_ring(self) -> None:
+        if not self._closing:
+            self.set_focus_visible(False)
+
     def _on_close_request(self, _window) -> bool:
         # Stop slideshow before closing
         if self._slideshow_active:
@@ -1483,9 +1493,10 @@ class ViewerWindow(Adw.ApplicationWindow):
             return
         scale = self.zoom_scale
         width, height = self._zoom_base_size()
+        hadjustment, vadjustment = scroller.get_hadjustment(), scroller.get_vadjustment()
         for adjustment, content_pos, focus_pos, length in (
-            (scroller.get_hadjustment(), cx, focus_x, width),
-            (scroller.get_vadjustment(), cy, focus_y, height),
+            (hadjustment, cx, focus_x, width),
+            (vadjustment, cy, focus_y, height),
         ):
             page_size = adjustment.get_page_size()
             adjustment.configure(
@@ -1498,8 +1509,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         def _apply() -> bool:
             # A newer step or another photo owns the scroll position by now.
             if self.zoom_scroller is scroller and self.zoom_scale == scale:
-                self._set_adjustment_for_focus(scroller.get_hadjustment(), cx, scale, focus_x)
-                self._set_adjustment_for_focus(scroller.get_vadjustment(), cy, scale, focus_y)
+                self._set_adjustment_for_focus(hadjustment, cx, scale, focus_x)
+                self._set_adjustment_for_focus(vadjustment, cy, scale, focus_y)
             return GLib.SOURCE_REMOVE
 
         GLib.idle_add(_apply)
@@ -1516,9 +1527,10 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _zoom_base_size(self) -> tuple[int, int]:
         """The size the photo is scaled from: what the scroller shows at fit."""
-        width = max(self.zoom_scroller.get_width(), self.get_width(), 1)
-        height = max(self.zoom_scroller.get_height(), self.get_height(), 1)
-        return width, height
+        scroller = self.zoom_scroller
+        scroller_width = scroller.get_width() if scroller is not None else 0
+        scroller_height = scroller.get_height() if scroller is not None else 0
+        return max(scroller_width, self.get_width(), 1), max(scroller_height, self.get_height(), 1)
 
     def _apply_zoom(self) -> None:
         if not self.zoom_view or not self.zoom_scroller:
