@@ -68,6 +68,16 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.19" date="2026-11-06">
+      <description>
+        <p>Muga can be the app that opens your pictures. Tapping a photo in
+        another app shows it straight away, with the rest of its folder a swipe
+        away, and closing it takes you back to where you were.</p>
+        <p>Starting is faster, most of all on phones: windows you have not
+        opened yet are no longer loaded, and the Flatpak no longer searches for
+        a graphics chip it cannot reach.</p>
+      </description>
+    </release>
     <release version="0.5.18" date="2026-10-24">
       <description>
         <p>Zooming into a photo is calmer. The photo no longer jolts on
