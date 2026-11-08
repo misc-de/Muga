@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  360° view toggle in the viewer: a globe with an orbit and an arrow going round it.
+
+  Hand-written on the 16x16 grid, filled shapes only (GTK recolours a symbolic
+  icon through `fill`; strokes and bounding boxes would not follow the theme,
+  see flash-on-symbolic.svg). The rings are even-odd paths: an outer and an
+  inner ellipse in one path, the space between them filled.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill-rule="evenodd" d="M 8 2 A 5 5 0 1 0 8 12 A 5 5 0 1 0 8 2 Z M 8 3.2 A 3.8 3.8 0 1 1 8 10.8 A 3.8 3.8 0 1 1 8 3.2 Z"/>
+  <path fill-rule="evenodd" d="M 8 2 A 2.2 5 0 1 0 8 12 A 2.2 5 0 1 0 8 2 Z M 8 3.2 A 1.1 3.8 0 1 1 8 10.8 A 1.1 3.8 0 1 1 8 3.2 Z"/>
+  <path d="M 1 10.2 C 1 11.9 4.1 13.2 8 13.2 C 9.3 13.2 10.5 13.05 11.5 12.8 L 11.5 14.6 L 14.6 12.1 L 11.5 9.6 L 11.5 11.55 C 10.5 11.82 9.3 12 8 12 C 4.6 12 2.2 10.9 2.2 10.2 C 2.2 10 2.4 9.75 2.8 9.5 L 2.1 8.5 C 1.4 8.95 1 9.55 1 10.2 Z"/>
+</svg>

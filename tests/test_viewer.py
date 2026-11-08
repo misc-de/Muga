@@ -125,7 +125,7 @@ def test_step_by_zero_is_the_current_item() -> None:
 # ---------------------------------------------------------------------------
 
 def _gesture_win(**extra):
-    defaults = dict(
+    defaults = dict(_panorama=None,
         zoom_scale=1.0, _zoom_committed=False, last_gesture_nav_at=0,
         _sensor_angle=0,
         previous=MagicMock(), next=MagicMock(),
@@ -136,6 +136,21 @@ def _gesture_win(**extra):
 
 def test_swipe_left_goes_forward() -> None:
     win = _gesture_win()
+    viewer.ViewerWindow._navigate_from_horizontal_motion(win, -200, 0)
+    win.next.assert_called_once()
+
+
+def test_a_drag_inside_a_sphere_looks_around() -> None:
+    """In a 360° photo the fingers turn the view; browsing must not jump."""
+    pano = SimpleNamespace(drag_started_at_edge=lambda: False, motion_active=lambda: True)
+    win = _gesture_win(_panorama=pano)
+    viewer.ViewerWindow._navigate_from_horizontal_motion(win, -200, 0)
+    win.next.assert_not_called()
+
+
+def test_a_drag_from_the_edge_of_a_sphere_turns_the_page() -> None:
+    pano = SimpleNamespace(drag_started_at_edge=lambda: True, motion_active=lambda: True)
+    win = _gesture_win(_panorama=pano)
     viewer.ViewerWindow._navigate_from_horizontal_motion(win, -200, 0)
     win.next.assert_called_once()
 
@@ -266,7 +281,7 @@ def test_rotated_swipe_still_needs_to_be_clearly_along_the_horizon() -> None:
 # ---------------------------------------------------------------------------
 
 def _zoom_win(**extra):
-    defaults = dict(zoom_scale=1.0, zoom_start_scale=1.0,
+    defaults = dict(_panorama=None, zoom_scale=1.0, zoom_start_scale=1.0,
                     zoom_view=None, zoom_scroller=None, _apply_zoom=MagicMock(),
                     _stop_zoom_animation=MagicMock())
     defaults.update(extra)
@@ -390,7 +405,7 @@ def _scroll_controller(ctrl: bool, touchpad: bool = False):
 
 
 def _wheel_win(**extra):
-    defaults = dict(_editor=None, _current_is_video=False, zoom_scale=1.0,
+    defaults = dict(_panorama=None, _editor=None, _current_is_video=False, zoom_scale=1.0,
                     _pointer_x=100.0, _pointer_y=50.0, _zoom_towards=MagicMock(),
                     _glide_zoom=MagicMock())
     defaults.update(extra)
@@ -612,7 +627,7 @@ def test_zoom_towards_without_a_mounted_scroller() -> None:
 # ---------------------------------------------------------------------------
 
 def _tap_win(**extra):
-    defaults = dict(
+    defaults = dict(_panorama=None,
         _zoom_committed=False, _click_press_x=100.0, _click_press_y=100.0,
         _chrome_visible=True, _current_is_video=False,
         _set_chrome_visible=MagicMock(), _reset_zoom=MagicMock(),
@@ -893,7 +908,7 @@ def test_exif_readout_of_a_non_image(tmp_path: Path) -> None:
 def _key_win(**extra):
     from gi.repository import Gdk
 
-    defaults = dict(
+    defaults = dict(_panorama=None,
         _editor=None, previous=MagicMock(), next=MagicMock(),
         _toggle_fullscreen=MagicMock(), close=MagicMock(),
         _exit_edit_mode=MagicMock(), _on_editor_undo=MagicMock(),
@@ -917,6 +932,23 @@ def test_key_goes_forward(key) -> None:
     win, Gdk = _key_win()
     assert viewer.ViewerWindow._on_key(win, None, getattr(Gdk, key), 0, 0) is True
     win.next.assert_called_once()
+
+
+def test_an_edge_swipe_on_a_sphere_ignores_the_sensor_rotation() -> None:
+    """A sphere that follows the phone is never turned by the viewer, so the
+    swipe is read in window space even with the phone held sideways."""
+    pano = SimpleNamespace(drag_started_at_edge=lambda: True, motion_active=lambda: True)
+    win = _gesture_win(_panorama=pano, _sensor_angle=90)
+    viewer.ViewerWindow._navigate_from_horizontal_motion(win, -200, 0)
+    win.next.assert_called_once()
+
+
+def test_ctrl_plus_zooms_a_sphere() -> None:
+    pano = MagicMock()
+    win, Gdk = _key_win(_panorama=pano)
+    assert viewer.ViewerWindow._on_key(win, None, Gdk.KEY_plus, 0, Gdk.ModifierType.CONTROL_MASK) is True
+    assert pano.zoom_by.call_args.args[0] > 1.0
+    win._glide_zoom.assert_not_called()
 
 
 def test_f11_toggles_fullscreen() -> None:

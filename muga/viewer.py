@@ -31,6 +31,7 @@ from .editor import EditorView, PILImage, _PIL_OK
 from .models import MediaItem, is_nc_path
 from .rotated_container import RotatedContainer
 from .gtk_util import idle_once, texture_from_pixbuf
+from .panorama import PanoramaInfo, PanoramaView, ambient_settings, read_panorama_info, set_as_background
 from .thumbnails import image_within_pixel_budget
 
 if TYPE_CHECKING:
@@ -211,6 +212,16 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._current_display_path: str | None = None
         self._current_is_video: bool = False
 
+        # 360° photos (see panorama.py): shown as a sphere, through which the
+        # phone looks like a window when it has the orientation sensor. The
+        # 360° button turns that off for this and the following photos.
+        self._panorama: PanoramaView | None = None
+        self._panorama_infos: dict[str, PanoramaInfo | None] = {}
+        self._panorama_flat: bool = False
+        self._panorama_failed: set[str] = set()
+        self._motion_available: bool | None = None
+        self._syncing_panorama_controls = False
+
         # Sensor-driven *display* rotation: when the phone is physically turned
         # but its orientation is locked (auto-rotate off), the window stays put,
         # so we rotate the picture ourselves to keep it upright for the user.
@@ -322,6 +333,21 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.share_button.set_visible(False)
         header.pack_end(self.share_button)
 
+        # Only for 360° photos: the sphere on or off, and the photo as the
+        # phone's moving background
+        self.panorama_button = Gtk.ToggleButton()
+        self.panorama_button.set_icon_name("muga-360-symbolic")
+        self.panorama_button.set_tooltip_text(parent._("360° View"))
+        self.panorama_button.connect("toggled", self._on_panorama_toggled)
+        self.panorama_button.set_visible(False)
+        header.pack_start(self.panorama_button)
+
+        self.background_button = Gtk.Button.new_from_icon_name("preferences-desktop-wallpaper-symbolic")
+        self.background_button.set_tooltip_text(parent._("Set as Background"))
+        self.background_button.connect("clicked", self._on_set_background)
+        self.background_button.set_visible(False)
+        header.pack_start(self.background_button)
+
         self._editor: EditorView | None = None
         self.toolbar.add_top_bar(header)
 
@@ -372,7 +398,9 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._content_overlay.set_child(self.stack)
         self._content_overlay.add_overlay(self.date_revealer)
         self._content_overlay.add_overlay(self.filename_revealer)
-        self.toolbar.set_content(self._content_overlay)
+        self._toasts = Adw.ToastOverlay()
+        self._toasts.set_child(self._content_overlay)
+        self.toolbar.set_content(self._toasts)
 
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -469,6 +497,10 @@ class ViewerWindow(Adw.ApplicationWindow):
         if angle == self._sensor_angle:
             return
         self._sensor_angle = angle
+        if self._sphere_follows_phone():
+            # The sphere keeps the horizon level by itself; turning the
+            # picture as well would jerk it by a quarter turn
+            return
         # A pinch-zoom anchored to the old orientation no longer maps cleanly
         # once the axes swap — reset to a clean fit before rotating.
         self._reset_zoom()
@@ -483,7 +515,7 @@ class ViewerWindow(Adw.ApplicationWindow):
         rotator.set_hexpand(True)
         rotator.set_vexpand(True)
         rotator.set_child(scroller)
-        rotator.set_rotation(self._sensor_angle)
+        rotator.set_rotation(self._view_angle())
         self._sensor_rotator = rotator
         self.stack.add_child(rotator)
 
@@ -507,6 +539,8 @@ class ViewerWindow(Adw.ApplicationWindow):
         self._rotation = 0
         self._current_display_path = None
         self._current_is_video = False
+        self._panorama = None
+        self._set_panorama_controls(None)
         # Reapply the user's last chrome choice — show_item() runs on every
         # swipe and on hard reloads (rotate save, edit exit, …); without
         # this the header + pills snap back into view on every navigation.
@@ -804,6 +838,8 @@ class ViewerWindow(Adw.ApplicationWindow):
 
     def _decode_image_worker(self, path: str, token: int) -> None:
         pixbuf = self._decode_display_pixbuf(path)
+        if pixbuf is not None and path not in self._panorama_infos:
+            self._panorama_infos[path] = read_panorama_info(path)
         GLib.idle_add(self._on_image_decoded, path, token, pixbuf)
 
     def _on_image_decoded(self, path: str, token: int, pixbuf) -> bool:
@@ -826,6 +862,11 @@ class ViewerWindow(Adw.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _mount_picture(self, pixbuf, path: str) -> None:
+        info = self._panorama_info_for(path) if pixbuf is not None else None
+        if info is not None and not self._panorama_flat and path not in self._panorama_failed:
+            self._mount_panorama(pixbuf, path, info)
+            return
+        self._set_panorama_controls(info)
         if pixbuf is not None:
             # Gtk.Picture.new_for_pixbuf is deprecated; wrapping the pixbuf in
             # a texture is what it does internally and is what gallery_grid
@@ -849,6 +890,93 @@ class ViewerWindow(Adw.ApplicationWindow):
         self.zoom_view = picture
         self.zoom_scroller = scroller
         self._mount_rotatable(scroller)
+
+    # -- 360° photos ----------------------------------------------------------
+
+    def _panorama_info_for(self, path: str) -> PanoramaInfo | None:
+        if path not in self._panorama_infos:
+            self._panorama_infos[path] = read_panorama_info(path)
+        return self._panorama_infos[path]
+
+    def _sphere_follows_phone(self) -> bool:
+        return self._panorama is not None and self._panorama.motion_active()
+
+    def _view_angle(self) -> int:
+        """How far the picture is turned against the window (see RotatedContainer)."""
+        return 0 if self._sphere_follows_phone() else self._sensor_angle
+
+    def _mount_panorama(self, pixbuf, path: str, info: PanoramaInfo) -> None:
+        view = PanoramaView(pixbuf, info, on_failed=lambda: self._on_panorama_failed(path), path=path)
+        self._panorama = view
+        self.zoom_view = None
+        self.zoom_scroller = None
+        self._set_panorama_controls(info)
+        # With the sensor the phone is the window: it turns, the view turns
+        if self._motion_available:
+            view.set_motion(True)
+        self._mount_rotatable(view)
+
+    def _on_panorama_failed(self, path: str) -> bool:
+        """No GL: show this photo flat, as before there was a sphere."""
+        self._panorama_failed.add(path)
+        if self._closing or self._current_display_path != path:
+            return GLib.SOURCE_REMOVE
+        self._remount_current()
+        self.panorama_button.set_visible(False)
+        return GLib.SOURCE_REMOVE
+
+    def _remount_current(self) -> None:
+        path = self._current_display_path
+        if path is None:
+            return
+        child = self.stack.get_first_child()
+        while child:
+            nxt = child.get_next_sibling()
+            self.stack.remove(child)
+            child = nxt
+        self._panorama = None
+        self._reset_zoom()
+        self._mount_picture(self._image_cache.get(path), path)
+
+    def _set_panorama_controls(self, info: PanoramaInfo | None) -> None:
+        """Header buttons and gestures for a 360° photo (*info*) or any other."""
+        is_pano = info is not None
+        sphere = self._panorama is not None
+        self.panorama_button.set_visible(is_pano and self._current_display_path not in self._panorama_failed)
+        if self._panorama is not None and self._motion_available is None:
+            self._motion_available = self._panorama.motion_available()
+        # Showing the state is not a click
+        self._syncing_panorama_controls = True
+        self.panorama_button.set_active(sphere)
+        self._syncing_panorama_controls = False
+        self.background_button.set_visible(is_pano and ambient_settings() is not None)
+        if is_pano:
+            # Turning or cropping the flat picture would break the sphere
+            self.rotate_button.set_visible(False)
+            self.edit_button.set_visible(False)
+        # The sphere zooms by itself; the viewer's pinch and wheel would
+        # zoom the (absent) flat picture
+        phase = Gtk.PropagationPhase.NONE if sphere else Gtk.PropagationPhase.CAPTURE
+        self.zoom_gesture.set_propagation_phase(phase)
+        self.scroll_controller.set_propagation_phase(phase)
+
+    def _on_panorama_toggled(self, button: Gtk.ToggleButton) -> None:
+        if self._syncing_panorama_controls:
+            return
+        self._panorama_flat = not button.get_active()
+        self._remount_current()
+
+    def _on_set_background(self, _button: Gtk.Button) -> None:
+        path = self._current_display_path
+        if path is None:
+            return
+        try:
+            set_as_background(path)
+        except (OSError, GLib.Error) as exc:
+            LOGGER.warning("could not set %s as background: %s", path, exc)
+            self._toasts.add_toast(Adw.Toast.new(self.parent_window._("Could not set the background")))
+            return
+        self._toasts.add_toast(Adw.Toast.new(self.parent_window._("Set as background")))
 
     def _preload_neighbours(self) -> None:
         """Warm the decode cache for the items on either side of the current
@@ -1276,6 +1404,16 @@ class ViewerWindow(Adw.ApplicationWindow):
                 self._on_editor_redo()
                 return True
             return False
+        if state & Gdk.ModifierType.CONTROL_MASK and self._panorama is not None:
+            if keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add, Gdk.KEY_ZoomIn):
+                self._panorama.zoom_by(_KEY_ZOOM_STEP)
+                return True
+            if keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract, Gdk.KEY_ZoomOut):
+                self._panorama.zoom_by(1 / _KEY_ZOOM_STEP)
+                return True
+            if keyval in (Gdk.KEY_0, Gdk.KEY_KP_0):
+                self._panorama.reset_view()
+                return True
         if state & Gdk.ModifierType.CONTROL_MASK and not self._current_is_video:
             # Ctrl +/- and Ctrl+0, the shortcuts every other viewer uses.
             # KEY_equal covers layouts where + sits behind Shift.
@@ -1318,8 +1456,14 @@ class ViewerWindow(Adw.ApplicationWindow):
     def _navigate_from_horizontal_motion(self, x: float, y: float) -> None:
         if self.zoom_scale > 1.05:
             return
+        # Inside a sphere a drag looks around; only one from the edge turns
+        # the page
+        if self._panorama is not None and not self._panorama.drag_started_at_edge():
+            return
         # Deltas arrive in window space; navigation follows the user's eyes.
-        x, y = _motion_in_view_space(x, y, self._sensor_angle)
+        # (A sphere that follows the phone is never turned, see _view_angle.)
+        follows = self._panorama is not None and self._panorama.motion_active()
+        x, y = _motion_in_view_space(x, y, 0 if follows else self._sensor_angle)
         # Don't navigate if a pinch-zoom gesture is the real intent
         if self._zoom_committed:
             return
@@ -1409,6 +1553,8 @@ class ViewerWindow(Adw.ApplicationWindow):
             # pill, header) — and the new state persists across swipe-to-
             # next via _chrome_visible so the next image stays uncluttered.
             self._set_chrome_visible(not self._chrome_visible)
+        elif self._panorama is not None and n_press == 2:
+            self._panorama.reset_view()
         elif not self._current_is_video and n_press == 2:
             self._reset_zoom()
 
