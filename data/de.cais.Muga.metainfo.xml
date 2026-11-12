@@ -68,6 +68,19 @@
   </screenshots>
   <content_rating type="oars-1.1" />
   <releases>
+    <release version="0.5.21" date="2026-11-12">
+      <description>
+        <p>360° photos open as a sphere you can look around in. Drag to
+        turn it, pinch to zoom, and on a phone the photo turns with the phone
+        itself. The 360° button in the header bar shows them flat instead.</p>
+        <p>The image library is updated to close a large number of security
+        holes in its decoders. Some of them could be triggered by a single
+        crafted photo, so this update is recommended for everyone.</p>
+        <p>The Flatpak is built on the GNOME 51 runtime. The first update
+        downloads it once; the old runtime can then be removed with
+        flatpak uninstall --unused.</p>
+      </description>
+    </release>
     <release version="0.5.20" date="2026-11-06">
       <description>
         <p>A photo no longer opens with the Delete button highlighted, and
