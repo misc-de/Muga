@@ -7,7 +7,7 @@ Muga runs on two quite different stacks, and the older one sets the floor.
 | Python      | 3.11    | `pyproject.toml` `requires-python`; Debian bookworm ships 3.11          |
 | GTK         | 4.8     | Debian bookworm — the base of Droidian and FuriOS                       |
 | libadwaita  | 1.2     | Same                                                                    |
-| Pillow      | 12.3    | First release clear of the 2026 decoder advisories (see `pyproject.toml`) |
+| Pillow      | 13.0    | First release clear of the autumn 2026 decoder advisories (see `pyproject.toml`) |
 | GStreamer   | 1.22    | Camera only; `gst-droid` on Halium devices                              |
 
 Desktops are far ahead of this (GTK 4.22 / libadwaita 1.9 at the time of

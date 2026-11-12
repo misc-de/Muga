@@ -26,7 +26,7 @@ jobs:
     name: ruff + mypy
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install GTK introspection data
         run: |
           sudo apt-get update
@@ -35,7 +35,7 @@ jobs:
         run: |
           python3 -m venv --system-site-packages .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install ruff mypy 'Pillow>=12.3' defusedxml
+          .venv/bin/pip install ruff mypy 'Pillow>=13.0' defusedxml
       - name: ruff
         run: .venv/bin/ruff check .
       - name: mypy
@@ -73,7 +73,7 @@ jobs:
         # little for the cost.
         python: ['3.12']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install GTK, GStreamer, gettext and Xvfb
         run: |
           sudo apt-get update
@@ -82,7 +82,7 @@ jobs:
         run: |
           python3 -m venv --system-site-packages .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install pytest pytest-cov 'Pillow>=12.3' defusedxml
+          .venv/bin/pip install pytest pytest-cov 'Pillow>=13.0' defusedxml
       - name: Compile translation catalogues
         # Exercises the .mo path in muga/i18n.py; without this the suite would
         # only ever see the po/*.po fallback.
