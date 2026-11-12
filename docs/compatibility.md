@@ -10,7 +10,7 @@ Muga runs on two quite different stacks, and the older one sets the floor.
 | Pillow      | 13.0    | First release clear of the autumn 2026 decoder advisories (see `pyproject.toml`) |
 | GStreamer   | 1.22    | Camera only; `gst-droid` on Halium devices                              |
 
-Desktops are far ahead of this (GTK 4.22 / libadwaita 1.9 at the time of
+Desktops are far ahead of this (GTK 4.24 / libadwaita 1.10 at the time of
 writing), so a deprecation warning on a desktop usually points at an API whose
 replacement does not exist on a phone yet.
 
