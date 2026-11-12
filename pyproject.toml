@@ -9,13 +9,16 @@
 # sdist via an NFC/NFD filename collision, 83.0.0). The last one is the reason
 # the floor moved rather than being left at a version nothing here downloads
 # with: this project *does* ship an sdist and *does* rely on MANIFEST.in to
-# decide what goes into it.
+# decide what goes into it. 84.1 adds GHSA-xmj3-9gf7-h52w (a path escape
+# through namespace_packages.txt in legacy wheel installs) — Windows only, so
+# not reachable here, but the floor follows the advisories rather than a
+# judgement of which ones matter, which is what keeps pip-audit quiet.
 #
 # Nothing is broken by asking for more than the environment has: the Flatpak
 # builds with --no-build-isolation, where pip does not resolve this list at all
 # (verified against org.gnome.Sdk//49, which carries 80.9.0). It binds an
 # isolated `pip install .`, which fetches the newest setuptools anyway.
-requires = ["setuptools>=83"]
+requires = ["setuptools>=84.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -26,12 +29,14 @@ requires-python = ">=3.11"
 dependencies = [
     # Pillow floor: every photo Muga opens is untrusted input (a scanned
     # folder, a Nextcloud server), so the decoders have to be current.
-    # 12.3 is the first release clear of the 2026 decoder advisories —
-    # OOB writes in Image.paste/crop, ImageCmsTransform.apply, RankFilter
-    # and the PSD/TGA/JPEG2000 paths, plus several decompression-bomb
-    # bypasses. 10.3 (the previous floor) carries 34 known advisories.
+    # 13.0 is the first release clear of the advisories published since
+    # 12.3 — 60 OSV entries, among them heap overflows in the JPEG, FlashPix
+    # and TIFF decoders, OOB reads in the tiled-TIFF and P;2L/P;4L paths,
+    # and decompression-bomb bypasses through multi-frame seek(). No 12.x
+    # release carries the fixes. 12.3 (the previous floor) was itself the
+    # fix for the spring 2026 decoder advisories.
     # Re-check with: pip-audit, or OSV for the pinned version.
-    "Pillow>=12.3",
+    "Pillow>=13.0",
     "pycairo>=1.25",
     "PyGObject>=3.46",
     # defusedxml hardens the PROPFIND parser against XML billion-laughs / DoS
